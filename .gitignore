@@ -1,0 +1,38 @@
+# Dependencies
+node_modules/
+.wrangler/
+
+# Build outputs
+web/dist/
+backend/dist/
+android/app/build/
+android/build/
+android/.gradle/
+ios/RocChat.xcodeproj/
+ios/build/
+
+# IDE
+.idea/
+*.xcworkspace/
+*.xcuserdata/
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.dev.vars
+
+# Shared build
+shared/dist/
+shared/*.js
+shared/*.d.ts
+shared/*.js.map
+
+# Android local
+android/local.properties
+
+# Xcode
+ios/DerivedData/

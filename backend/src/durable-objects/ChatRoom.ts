@@ -1,0 +1,221 @@
+/**
+ * RocChat — ChatRoom Durable Object
+ *
+ * One instance per conversation. Manages WebSocket connections for:
+ * - Real-time encrypted message relay
+ * - Typing indicators
+ * - Presence (online/offline)
+ * - WebRTC call signaling (offer, answer, ICE candidates, end)
+ */
+
+export interface Env {
+  DB: D1Database;
+  KV: KVNamespace;
+}
+
+interface ConnectedClient {
+  ws: WebSocket;
+  userId: string;
+  deviceId: string;
+}
+
+interface WsMessage {
+  type:
+    | 'message'
+    | 'typing'
+    | 'presence'
+    | 'call_offer'
+    | 'call_answer'
+    | 'call_ice'
+    | 'call_end'
+    | 'read_receipt';
+  payload: Record<string, unknown>;
+}
+
+export class ChatRoom implements DurableObject {
+  private clients: Map<string, ConnectedClient> = new Map();
+  private state: DurableObjectState;
+  private env: Env;
+
+  constructor(state: DurableObjectState, env: Env) {
+    this.state = state;
+    this.env = env;
+  }
+
+  async fetch(request: Request): Promise<Response> {
+    const url = new URL(request.url);
+
+    // WebSocket upgrade
+    if (request.headers.get('Upgrade') === 'websocket') {
+      return this.handleWebSocket(request, url);
+    }
+
+    // Internal broadcast from REST API (e.g., sendMessage calls this)
+    if (url.pathname === '/broadcast' && request.method === 'POST') {
+      const body = (await request.json()) as WsMessage & { excludeUserId?: string };
+      this.broadcast(body, body.excludeUserId);
+      return new Response('ok');
+    }
+
+    return new Response('Not found', { status: 404 });
+  }
+
+  private async handleWebSocket(request: Request, url: URL): Promise<Response> {
+    const userId = url.searchParams.get('userId');
+    const deviceId = url.searchParams.get('deviceId');
+    const sessionToken = url.searchParams.get('token');
+
+    if (!userId || !deviceId || !sessionToken) {
+      return new Response('Missing auth params', { status: 400 });
+    }
+
+    // Verify session token via KV
+    const sessionData = await this.env.KV.get(`session:${sessionToken}`);
+    if (!sessionData) {
+      return new Response('Invalid session', { status: 401 });
+    }
+
+    const session = JSON.parse(sessionData) as { userId: string; deviceId: string };
+    if (session.userId !== userId || session.deviceId !== deviceId) {
+      return new Response('Session mismatch', { status: 401 });
+    }
+
+    const pair = new WebSocketPair();
+    const [client, server] = [pair[0], pair[1]];
+
+    const clientKey = `${userId}:${deviceId}`;
+
+    // Close existing connection from same device
+    const existing = this.clients.get(clientKey);
+    if (existing) {
+      try { existing.ws.close(1000, 'Replaced by new connection'); } catch {}
+    }
+
+    this.state.acceptWebSocket(server);
+    this.clients.set(clientKey, { ws: server, userId, deviceId });
+
+    // Notify others that user is online
+    this.broadcast(
+      { type: 'presence', payload: { userId, status: 'online' } },
+      userId,
+    );
+
+    server.addEventListener('message', (event) => {
+      this.handleMessage(clientKey, event.data);
+    });
+
+    server.addEventListener('close', () => {
+      this.clients.delete(clientKey);
+      this.broadcast(
+        { type: 'presence', payload: { userId, status: 'offline' } },
+        userId,
+      );
+    });
+
+    server.addEventListener('error', () => {
+      this.clients.delete(clientKey);
+    });
+
+    return new Response(null, { status: 101, webSocket: client });
+  }
+
+  private handleMessage(senderKey: string, data: string | ArrayBuffer): void {
+    if (typeof data !== 'string') return;
+
+    let msg: WsMessage;
+    try {
+      msg = JSON.parse(data);
+    } catch {
+      return; // Ignore malformed
+    }
+
+    const sender = this.clients.get(senderKey);
+    if (!sender) return;
+
+    switch (msg.type) {
+      case 'typing':
+        // Relay typing indicator to all other members
+        this.broadcast(
+          {
+            type: 'typing',
+            payload: { userId: sender.userId, ...msg.payload },
+          },
+          sender.userId,
+        );
+        break;
+
+      case 'call_offer':
+      case 'call_answer':
+      case 'call_ice':
+      case 'call_end': {
+        // Relay call signaling — enforce sender identity
+        const targetUserId = msg.payload.targetUserId as string | undefined;
+        const signalPayload = { ...msg.payload, fromUserId: sender.userId };
+        if (targetUserId) {
+          this.sendToUser(targetUserId, {
+            type: msg.type,
+            payload: signalPayload,
+          });
+        } else {
+          this.broadcast(
+            {
+              type: msg.type,
+              payload: signalPayload,
+            },
+            sender.userId,
+          );
+        }
+        break;
+      }
+
+      case 'read_receipt':
+        this.broadcast(
+          {
+            type: 'read_receipt',
+            payload: { userId: sender.userId, ...msg.payload },
+          },
+          sender.userId,
+        );
+        break;
+
+      case 'message':
+        // Encrypted message relay — server never decrypts
+        // Enforce sender identity — prevent spoofing
+        this.broadcast(
+          {
+            type: 'message',
+            payload: { ...msg.payload, fromUserId: sender.userId },
+          },
+          sender.userId,
+        );
+        break;
+
+      default:
+        // Unknown message type — ignore silently
+        break;
+    }
+  }
+
+  private broadcast(msg: WsMessage & { excludeUserId?: string }, excludeUserId?: string): void {
+    const data = JSON.stringify(msg);
+    for (const [, client] of this.clients) {
+      if (excludeUserId && client.userId === excludeUserId) continue;
+      try {
+        client.ws.send(data);
+      } catch {
+        // Connection dead, will be cleaned up on close event
+      }
+    }
+  }
+
+  private sendToUser(userId: string, msg: WsMessage): void {
+    const data = JSON.stringify(msg);
+    for (const [, client] of this.clients) {
+      if (client.userId === userId) {
+        try {
+          client.ws.send(data);
+        } catch {}
+      }
+    }
+  }
+}

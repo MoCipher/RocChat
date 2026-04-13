@@ -1,0 +1,43 @@
+{
+  "name": "RocChat",
+  "short_name": "RocChat",
+  "description": "End-to-end encrypted messaging. Messages. Calls. Nothing else.",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "theme_color": "#D4AF37",
+  "background_color": "#0D1117",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ],
+  "categories": ["social", "communication"],
+  "lang": "en",
+  "dir": "ltr",
+  "scope": "/",
+  "id": "rocchat",
+  "prefer_related_applications": false,
+  "screenshots": [],
+  "shortcuts": [
+    {
+      "name": "New Message",
+      "short_name": "New",
+      "url": "/?action=new",
+      "icons": [{ "src": "/favicon.svg", "sizes": "any" }]
+    }
+  ],
+  "handle_links": "preferred",
+  "launch_handler": {
+    "client_mode": "focus-existing"
+  }
+}

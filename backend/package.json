@@ -1,0 +1,23 @@
+{
+  "name": "@rocchat/backend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "test": "vitest run",
+    "db:migrate": "wrangler d1 migrations apply rocchat-db --local",
+    "db:migrate:prod": "wrangler d1 migrations apply rocchat-db"
+  },
+  "dependencies": {
+    "@rocchat/shared": "*"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.14.3",
+    "@cloudflare/workers-types": "^4.20250410.0",
+    "typescript": "^5.7.0",
+    "vitest": "^4.1.4",
+    "wrangler": "^4.0.0"
+  }
+}

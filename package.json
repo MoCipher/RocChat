@@ -1,0 +1,5 @@
+{
+  "name": "rocchat",
+  "private": true,
+  "workspaces": ["backend", "shared", "web"]
+}

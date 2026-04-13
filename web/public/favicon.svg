@@ -1,0 +1,90 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0D1117"/><stop offset="40%" stop-color="#161B22"/><stop offset="100%" stop-color="#0D1117"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="50%" cy="40%" r="55%">
+      <stop offset="0%" stop-color="#D4AF37" stop-opacity="0.2"/><stop offset="100%" stop-color="transparent"/>
+    </radialGradient>
+    <linearGradient id="body" x1="30%" y1="0%" x2="70%" y2="100%">
+      <stop offset="0%" stop-color="#fef3c7"/><stop offset="40%" stop-color="#f59e0b"/><stop offset="100%" stop-color="#b45309"/>
+    </linearGradient>
+    <linearGradient id="wingL" x1="100%" y1="30%" x2="0%" y2="80%">
+      <stop offset="0%" stop-color="#fbbf24"/><stop offset="35%" stop-color="#d97706"/><stop offset="70%" stop-color="#92400e"/><stop offset="100%" stop-color="#451a03"/>
+    </linearGradient>
+    <linearGradient id="wingR" x1="0%" y1="30%" x2="100%" y2="80%">
+      <stop offset="0%" stop-color="#fbbf24"/><stop offset="35%" stop-color="#d97706"/><stop offset="70%" stop-color="#92400e"/><stop offset="100%" stop-color="#451a03"/>
+    </linearGradient>
+    <linearGradient id="tail" x1="50%" y1="0%" x2="50%" y2="100%">
+      <stop offset="0%" stop-color="#d97706"/><stop offset="100%" stop-color="#78350f"/>
+    </linearGradient>
+    <linearGradient id="head" x1="30%" y1="0%" x2="70%" y2="100%">
+      <stop offset="0%" stop-color="#fffbeb"/><stop offset="100%" stop-color="#fbbf24"/>
+    </linearGradient>
+    <linearGradient id="bubble" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#40E0D0" stop-opacity="0.35"/><stop offset="100%" stop-color="#40E0D0" stop-opacity="0.15"/>
+    </linearGradient>
+    <filter id="ds" x="-5%" y="-5%" width="110%" height="110%">
+      <feDropShadow dx="0" dy="2" stdDeviation="6" flood-color="#0D1117" flood-opacity="0.5"/>
+    </filter>
+  </defs>
+
+  <!-- Background -->
+  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+  <rect width="512" height="512" rx="112" fill="url(#glow)"/>
+  <rect x="4" y="4" width="504" height="504" rx="110" fill="none" stroke="rgba(212,175,55,0.15)" stroke-width="2"/>
+
+  <!-- Roc bird -->
+  <g transform="translate(256,250)" filter="url(#ds)">
+    <!-- LEFT WING -->
+    <path d="M-18,-15 C-50,-55 -95,-100 -155,-130 C-168,-135 -185,-132 -195,-125 C-180,-110 -160,-95 -140,-80 C-160,-90 -182,-95 -200,-92 C-185,-75 -165,-60 -140,-48 C-158,-55 -175,-55 -192,-50 C-170,-35 -148,-22 -120,-15 C-138,-18 -155,-18 -168,-12 C-145,-2 -118,5 -85,8 C-55,10 -30,2 -15,-5 Z" fill="url(#wingL)"/>
+    <path d="M-60,-60 C-90,-85 -125,-110 -155,-120" fill="none" stroke="#fbbf24" stroke-width="1.2" opacity="0.5"/>
+    <path d="M-50,-40 C-85,-60 -120,-75 -155,-78" fill="none" stroke="#f59e0b" stroke-width="1" opacity="0.4"/>
+    <path d="M-42,-22 C-75,-35 -110,-42 -145,-38" fill="none" stroke="#d97706" stroke-width="0.8" opacity="0.35"/>
+    <!-- RIGHT WING -->
+    <path d="M18,-15 C50,-55 95,-100 155,-130 C168,-135 185,-132 195,-125 C180,-110 160,-95 140,-80 C160,-90 182,-95 200,-92 C185,-75 165,-60 140,-48 C158,-55 175,-55 192,-50 C170,-35 148,-22 120,-15 C138,-18 155,-18 168,-12 C145,-2 118,5 85,8 C55,10 30,2 15,-5 Z" fill="url(#wingR)"/>
+    <path d="M60,-60 C90,-85 125,-110 155,-120" fill="none" stroke="#fbbf24" stroke-width="1.2" opacity="0.5"/>
+    <path d="M50,-40 C85,-60 120,-75 155,-78" fill="none" stroke="#f59e0b" stroke-width="1" opacity="0.4"/>
+    <path d="M42,-22 C75,-35 110,-42 145,-38" fill="none" stroke="#d97706" stroke-width="0.8" opacity="0.35"/>
+    <!-- BODY -->
+    <ellipse cx="0" cy="18" rx="26" ry="52" fill="url(#body)"/>
+    <ellipse cx="0" cy="5" rx="16" ry="28" fill="#fef3c7" opacity="0.4"/>
+    <!-- TAIL -->
+    <path d="M-10,65 C-18,90 -35,125 -52,150 C-38,140 -22,120 -12,95 C-15,115 -20,138 -28,155 C-14,145 -4,125 0,100 C4,125 14,145 28,155 C20,138 15,115 12,95 C22,120 38,140 52,150 C35,125 18,90 10,65 Z" fill="url(#tail)" opacity="0.9"/>
+    <path d="M0,70 C-8,95 -20,120 -32,140" fill="none" stroke="#92400e" stroke-width="0.8" opacity="0.5"/>
+    <path d="M0,70 C8,95 20,120 32,140" fill="none" stroke="#92400e" stroke-width="0.8" opacity="0.5"/>
+    <!-- HEAD -->
+    <ellipse cx="0" cy="-42" rx="19" ry="21" fill="url(#head)"/>
+    <path d="M-3,-62 C-6,-78 -2,-88 0,-92 C2,-88 6,-78 3,-62" fill="#d97706" opacity="0.8"/>
+    <path d="M-8,-60 C-15,-72 -14,-82 -10,-86 C-7,-80 -4,-72 -5,-60" fill="#b45309" opacity="0.6"/>
+    <path d="M8,-60 C15,-72 14,-82 10,-86 C7,-80 4,-72 5,-60" fill="#b45309" opacity="0.6"/>
+    <!-- EYES -->
+    <ellipse cx="-7" cy="-44" rx="4" ry="4.5" fill="#fffbeb"/>
+    <ellipse cx="7" cy="-44" rx="4" ry="4.5" fill="#fffbeb"/>
+    <ellipse cx="-7" cy="-44" rx="2.5" ry="3" fill="#78350f"/>
+    <ellipse cx="7" cy="-44" rx="2.5" ry="3" fill="#78350f"/>
+    <circle cx="-6.5" cy="-45" r="1" fill="white" opacity="0.8"/>
+    <circle cx="7.5" cy="-45" r="1" fill="white" opacity="0.8"/>
+    <!-- BEAK -->
+    <path d="M0,-36 L-4,-28 C-2,-24 2,-24 4,-28 L0,-36 Z" fill="#92400e"/>
+    <path d="M0,-36 L-2,-30 L0,-27 L2,-30 Z" fill="#78350f"/>
+    <!-- TALONS -->
+    <g transform="translate(-14,68)">
+      <path d="M0,0 C-3,8 -8,14 -12,18 M0,0 C-1,9 -4,16 -6,20 M0,0 C1,9 0,17 -1,22" fill="none" stroke="#78350f" stroke-width="2.2" stroke-linecap="round"/>
+    </g>
+    <g transform="translate(14,68)">
+      <path d="M0,0 C3,8 8,14 12,18 M0,0 C1,9 4,16 6,20 M0,0 C-1,9 0,17 1,22" fill="none" stroke="#78350f" stroke-width="2.2" stroke-linecap="round"/>
+    </g>
+    <path d="M-20,0 C-28,-5 -35,-8 -42,-8" fill="none" stroke="#d97706" stroke-width="1.5" opacity="0.3"/>
+    <path d="M20,0 C28,-5 35,-8 42,-8" fill="none" stroke="#d97706" stroke-width="1.5" opacity="0.3"/>
+  </g>
+
+  <!-- Chat speech bubble overlay (bottom-right, RocChat-specific) -->
+  <g transform="translate(355, 365)">
+    <path d="M0,0 C0,-22 18,-40 40,-40 L75,-40 C97,-40 115,-22 115,0 L115,28 C115,50 97,68 75,68 L35,68 L12,88 L18,68 L0,68 C-8,68 -15,62 -15,55 L-15,15 C-15,6 -8,0 0,0 Z" fill="url(#bubble)" stroke="#40E0D0" stroke-width="1.5" stroke-opacity="0.4"/>
+    <!-- Signal waves inside bubble -->
+    <path d="M42,8 C42,8 50,-2 58,8" fill="none" stroke="#40E0D0" stroke-width="2.5" stroke-linecap="round" opacity="0.7"/>
+    <path d="M35,14 C35,14 50,-4 65,14" fill="none" stroke="#40E0D0" stroke-width="2" stroke-linecap="round" opacity="0.5"/>
+    <path d="M28,20 C28,20 50,-6 72,20" fill="none" stroke="#40E0D0" stroke-width="1.5" stroke-linecap="round" opacity="0.35"/>
+  </g>
+</svg>

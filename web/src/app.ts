@@ -35,6 +35,9 @@ function init() {
   const savedTheme = localStorage.getItem('rocchat_theme') || 'auto';
   applyTheme(savedTheme);
 
+  // Initialize PWA install prompts (iOS explainer + Chromium deferred prompt).
+  import('./pwa-install.js').then((m) => m.initInstallPrompts()).catch(() => {});
+
   // Hide loading screen
   const loading = document.getElementById('loading-screen');
   if (loading) loading.remove();
@@ -149,29 +152,36 @@ async function checkPreKeyReplenishment() {
   } catch { /* silently fail — will retry on next app load */ }
 }
 
-// Web Push registration
-async function registerWebPush() {
+// Web Push registration (only call when user explicitly opts in via Settings).
+// Older builds auto-prompted on load — that's a hostile UX pattern and also
+// wastes a user's one-shot permission chance before they know what the app is.
+async function registerWebPush(options: { prompt?: boolean } = {}) {
   if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
   try {
     const reg = await navigator.serviceWorker.ready;
-    // Check existing subscription
     let sub = await reg.pushManager.getSubscription();
     if (!sub) {
-      // Request notification permission
-      const perm = await Notification.requestPermission();
-      if (perm !== 'granted') return;
-      // Subscribe with VAPID
+      // Only prompt when the caller explicitly asks (i.e. user clicked "Enable
+      // notifications" in Settings). Background init reuses existing subs only.
+      if (Notification.permission !== 'granted') {
+        if (!options.prompt) return;
+        const perm = await Notification.requestPermission();
+        if (perm !== 'granted') return;
+      }
       const vapidKey = localStorage.getItem('rocchat_vapid_public');
-      if (!vapidKey) return; // VAPID key not available
+      if (!vapidKey) return;
       sub = await reg.pushManager.subscribe({
         userVisibleOnly: true,
         applicationServerKey: urlBase64ToUint8Array(vapidKey) as BufferSource,
       });
     }
-    // Register with backend
     await registerPushToken(JSON.stringify(sub.toJSON()), 'web');
   } catch { /* push not available */ }
 }
+
+// Expose to settings for the "Enable notifications" button.
+(window as unknown as { __rocchatEnablePush?: () => Promise<void> }).__rocchatEnablePush =
+  () => registerWebPush({ prompt: true });
 
 function urlBase64ToUint8Array(base64String: string): Uint8Array {
   const padding = '='.repeat((4 - base64String.length % 4) % 4);

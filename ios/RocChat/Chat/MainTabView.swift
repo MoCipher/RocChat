@@ -653,6 +653,7 @@ struct ConversationView: View {
     @State private var inputText = ""
     @State private var isSending = false
     @State private var wsTask: URLSessionWebSocketTask?
+    @State private var wsReconnectAttempt: Int = 0
     @State private var disappearTimer: Int = 0
     @State private var showDisappearMenu = false
     @State private var showSafetyNumber = false
@@ -1272,6 +1273,11 @@ struct ConversationView: View {
         guard !text.isEmpty, !isSending else { return }
         #if canImport(UIKit)
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        // Dismiss the soft keyboard after tapping send — matches iMessage
+        // and keeps the timeline visible instead of half-occluded.
+        UIApplication.shared.sendAction(
+            #selector(UIResponder.resignFirstResponder),
+            to: nil, from: nil, for: nil)
         #endif
         let wasReplyingTo = replyingTo
         replyingTo = nil
@@ -1489,6 +1495,10 @@ struct ConversationView: View {
         let task = session.webSocketTask(with: url)
         wsTask = task
         task.resume()
+        // Successful resume does not mean the socket is open, but receive()
+        // failing is our only signal — so reset the attempt counter optimistically
+        // here and let the failure branch bump it back up.
+        wsReconnectAttempt = 0
         receiveMessages(task: task)
     }
 
@@ -1563,8 +1573,15 @@ struct ConversationView: View {
                 }
                 receiveMessages(task: task)
             case .failure:
-                // Auto-reconnect after 3 seconds
-                DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: DispatchWorkItem {
+                // Exponential backoff with jitter. Steps (seconds): 1,2,4,8,16,32,60.
+                // This avoids hammering the server when the network flaps or
+                // when we're caught in a TURN / auth loop.
+                let steps: [Double] = [1, 2, 4, 8, 16, 32, 60]
+                let idx = min(wsReconnectAttempt, steps.count - 1)
+                let base = steps[idx]
+                let jitter = Double.random(in: 0...0.5)
+                wsReconnectAttempt += 1
+                DispatchQueue.main.asyncAfter(deadline: .now() + base + jitter, execute: DispatchWorkItem {
                     connectWebSocket()
                     Task { await flushMessageQueue() }
                 })

@@ -124,6 +124,9 @@ function getStatusIcon(msgId: string, isMine: boolean): string {
 // ── Offline message queue (persisted in IndexedDB) ──
 const messageQueue: QueuedMessage[] = [];
 
+/** WebSocket reconnect attempts per conversation (for exponential backoff). */
+const wsReconnectAttempts = new Map<string, number>();
+
 const MQ_DB_NAME = 'rocchat_mq';
 const MQ_STORE = 'queue';
 
@@ -248,10 +251,16 @@ export async function renderChats(container: HTMLElement) {
         </div>
         <div class="folder-tabs" id="folder-tabs"></div>
       </div>
-      <div class="conversations-list" id="conversations-list">
-        <div class="empty-state" style="padding:var(--sp-8)">
-          <p style="font-size:var(--text-sm);color:var(--text-tertiary)">Loading conversations...</p>
-        </div>
+      <div class="conversations-list" id="conversations-list" aria-busy="true">
+        ${Array.from({ length: 5 }).map(() => `
+          <div class="conversation-skeleton" aria-hidden="true">
+            <div class="skel-avatar"></div>
+            <div class="skel-lines">
+              <div class="skel-line skel-line-title"></div>
+              <div class="skel-line skel-line-sub"></div>
+            </div>
+          </div>
+        `).join('')}
       </div>
     </div>
     <div class="chat-view" id="chat-view">
@@ -388,6 +397,7 @@ function renderFolderTabs(folders: api.ChatFolder[]) {
 function renderConversationsList(filter = '') {
   const list = document.getElementById('conversations-list');
   if (!list) return;
+  list.removeAttribute('aria-busy');
 
   const userId = localStorage.getItem('rocchat_user_id') || '';
   let filtered = state.conversations;
@@ -747,6 +757,10 @@ function renderMessages(messages: Message[]) {
     const div = document.createElement('div');
     div.className = `message-row ${isMine ? 'mine' : 'theirs'}`;
     div.dataset.msgId = msg.id;
+    // a11y: every message is a separate article so screen readers can navigate
+    // through them message-by-message. The aria-label is rebuilt after decrypt.
+    div.setAttribute('role', 'article');
+    div.setAttribute('aria-label', `${isMine ? 'You' : 'Message'} at ${formatTime(msg.created_at)}`);
 
     // Deleted messages show a placeholder
     if (msg.deleted_at) {
@@ -1034,6 +1048,8 @@ function connectWebSocket(conversationId: string) {
     state.ws = ws;
 
     ws.addEventListener('open', () => {
+      // Successful connect resets backoff.
+      wsReconnectAttempts.delete(conversationId);
       if (messageQueue.length > 0) flushMessageQueue();
     });
 
@@ -1276,19 +1292,19 @@ function connectWebSocket(conversationId: string) {
 
     ws.addEventListener('close', () => {
       state.ws = null;
-      // Auto-reconnect with exponential backoff if still viewing this conversation
-      const baseDelay = 2000;
-      const maxDelay = 30000;
-      let retryDelay = baseDelay;
-      const scheduleReconnect = () => {
-        setTimeout(() => {
-          if (state.activeConversationId === conversationId && !state.ws) {
-            connectWebSocket(conversationId);
-          }
-        }, Math.min(retryDelay, maxDelay));
-        retryDelay = Math.min(retryDelay * 1.5, maxDelay);
-      };
-      scheduleReconnect();
+      // Auto-reconnect with exponential backoff (1→2→4→8→16→32→60s) + jitter.
+      // Reset the attempt counter after a stable connection (handled in 'open').
+      const attempt = wsReconnectAttempts.get(conversationId) ?? 0;
+      const stepsSeconds = [1, 2, 4, 8, 16, 32, 60];
+      const base = stepsSeconds[Math.min(attempt, stepsSeconds.length - 1)] * 1000;
+      const jitter = Math.floor(Math.random() * 500);
+      const delay = base + jitter;
+      wsReconnectAttempts.set(conversationId, attempt + 1);
+      setTimeout(() => {
+        if (state.activeConversationId === conversationId && !state.ws) {
+          connectWebSocket(conversationId);
+        }
+      }, delay);
     });
 
     ws.addEventListener('error', () => {

@@ -6,8 +6,97 @@
  */
 
 import type { Env } from './index.js';
-import { jsonResponse, errorResponse, generateSessionToken } from './middleware.js';
+import { jsonResponse, errorResponse, apiError, generateSessionToken, logEvent } from './middleware.js';
 import { verifyPowSolution } from './pow.js';
+
+/** Minimum PBKDF2/scrypt iterations we will accept from clients. */
+const MIN_KDF_ITERATIONS = 100_000;
+const SESSION_TTL_SECONDS = 24 * 3600;         // access token: 24 hours
+const REFRESH_TTL_SECONDS = 30 * 24 * 3600;    // refresh token: 30 days
+
+/**
+ * Reject weak KDF parameters. The client sends `kdf_iterations` (preferred),
+ * or we fall back to parsing from a PHC-style `auth_hash` prefix like
+ * "pbkdf2-sha256$100000$...". Missing info → accept (legacy clients).
+ */
+export function validateKdfStrength(raw: Record<string, unknown>): { ok: boolean; iterations?: number } {
+  const explicit = (raw.kdf_iterations ?? raw.kdfIterations) as number | undefined;
+  if (typeof explicit === 'number' && explicit >= MIN_KDF_ITERATIONS) {
+    return { ok: true, iterations: explicit };
+  }
+  if (typeof explicit === 'number' && explicit < MIN_KDF_ITERATIONS) {
+    return { ok: false, iterations: explicit };
+  }
+  const hash = (raw.auth_hash ?? raw.authHash) as string | undefined;
+  if (typeof hash === 'string' && hash.includes('$')) {
+    const parts = hash.split('$');
+    // formats like "pbkdf2-sha256$100000$salt$hash"
+    const n = parseInt(parts[1] || '', 10);
+    if (!isNaN(n)) {
+      return { ok: n >= MIN_KDF_ITERATIONS, iterations: n };
+    }
+  }
+  // Legacy client without iteration metadata — allow for backwards compat.
+  return { ok: true };
+}
+
+/** Issue a paired access + refresh token and persist them in KV. */
+async function issueSession(
+  env: Env,
+  userId: string,
+  deviceId: string,
+): Promise<{ sessionToken: string; refreshToken: string; sessionExpiresAt: number; refreshExpiresAt: number }> {
+  const now = Math.floor(Date.now() / 1000);
+  const sessionToken = generateSessionToken();
+  const refreshToken = generateSessionToken();
+  const sessionExpiresAt = now + SESSION_TTL_SECONDS;
+  const refreshExpiresAt = now + REFRESH_TTL_SECONDS;
+  await env.KV.put(
+    `session:${sessionToken}`,
+    JSON.stringify({ userId, deviceId, expiresAt: sessionExpiresAt }),
+    { expirationTtl: SESSION_TTL_SECONDS },
+  );
+  await env.KV.put(
+    `refresh:${refreshToken}`,
+    JSON.stringify({ userId, deviceId, sessionToken, expiresAt: refreshExpiresAt }),
+    { expirationTtl: REFRESH_TTL_SECONDS },
+  );
+  return { sessionToken, refreshToken, sessionExpiresAt, refreshExpiresAt };
+}
+
+/**
+ * Exchange a refresh_token for a fresh (session_token, refresh_token) pair.
+ * Rotates the refresh token on every use so that stolen refresh tokens are
+ * limited to a single use window.
+ */
+export async function handleRefresh(request: Request, env: Env): Promise<Response> {
+  const raw = (await request.json().catch(() => ({}))) as Record<string, unknown>;
+  const token = (raw.refresh_token ?? raw.refreshToken) as string | undefined;
+  if (!token) return apiError('BAD_REQUEST', 'Missing refresh_token');
+
+  const stored = await env.KV.get(`refresh:${token}`, 'json') as
+    | { userId: string; deviceId: string; sessionToken: string; expiresAt: number }
+    | null;
+  if (!stored) return apiError('UNAUTHORIZED', 'Refresh token invalid or expired');
+
+  // Single-use: delete old refresh immediately (and best-effort old access token).
+  await env.KV.delete(`refresh:${token}`);
+  if (stored.sessionToken) {
+    await env.KV.delete(`session:${stored.sessionToken}`);
+  }
+
+  const { sessionToken, refreshToken, sessionExpiresAt, refreshExpiresAt } = await issueSession(
+    env,
+    stored.userId,
+    stored.deviceId,
+  );
+  return jsonResponse({
+    session_token: sessionToken,
+    refresh_token: refreshToken,
+    expires_at: sessionExpiresAt,
+    refresh_expires_at: refreshExpiresAt,
+  });
+}
 
 export async function handleAuth(
   request: Request,
@@ -63,6 +152,13 @@ async function handleRegister(request: Request, env: Env): Promise<Response> {
     return errorResponse('Missing required fields', 400);
   }
 
+  // Reject weak KDF parameters
+  const kdf = validateKdfStrength(raw);
+  if (!kdf.ok) {
+    logEvent('warn', 'weak_kdf_rejected', { iterations: kdf.iterations, action: 'register' });
+    return apiError('WEAK_KDF', `Auth hash iteration count below minimum (${MIN_KDF_ITERATIONS})`);
+  }
+
   // Validate username format: 3-32 chars, alphanumeric + underscore
   const usernameRegex = /^[a-zA-Z][a-zA-Z0-9_]{2,31}$/;
   if (!usernameRegex.test(username)) {
@@ -108,8 +204,9 @@ async function handleRegister(request: Request, env: Env): Promise<Response> {
   const deviceId = crypto.randomUUID();
   const now = Math.floor(Date.now() / 1000);
 
-  // Insert user
-  await env.DB.batch([
+  // Batch ALL registration writes (user + device + SPK + OPKs) into a single
+  // D1 round-trip so a crashed worker can't leave partial state.
+  const regStatements: D1PreparedStatement[] = [
     env.DB.prepare(
       `INSERT INTO users (id, username, display_name, auth_hash, salt, encrypted_keys, identity_key, identity_dh_key, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -124,43 +221,32 @@ async function handleRegister(request: Request, env: Env): Promise<Response> {
       identityDHKey || identityKey,
       now,
     ),
-
-    // Insert signed pre-key
     env.DB.prepare(
       `INSERT INTO signed_pre_keys (id, user_id, public_key, signature, created_at)
        VALUES (?, ?, ?, ?, ?)`,
     ).bind(spkId, userId, spkPublic, spkSignature || '', now),
-
-    // Insert device
     env.DB.prepare(
       `INSERT INTO devices (id, user_id, device_name, platform, created_at, last_active)
        VALUES (?, ?, ?, ?, ?, ?)`,
-    ).bind(deviceId, userId, 'First device', 'web', now, now),
-  ]);
+    ).bind(deviceId, userId, 'First device', (raw.platform as string) || 'web', now, now),
+    ...otpKeys.map((opk) =>
+      env.DB.prepare(
+        `INSERT INTO one_time_pre_keys (id, user_id, public_key) VALUES (?, ?, ?)`,
+      ).bind(opk.id, userId, opk.publicKey),
+    ),
+  ];
+  await env.DB.batch(regStatements);
 
-  // Insert one-time pre-keys
-  const opkStatements = otpKeys.map((opk) =>
-    env.DB.prepare(
-      `INSERT INTO one_time_pre_keys (id, user_id, public_key) VALUES (?, ?, ?)`,
-    ).bind(opk.id, userId, opk.publicKey),
-  );
-  if (opkStatements.length > 0) {
-    await env.DB.batch(opkStatements);
-  }
-
-  // Create session
-  const sessionToken = generateSessionToken();
-  const sessionExpiry = now + 30 * 24 * 3600; // 30 days
-  await env.KV.put(
-    `session:${sessionToken}`,
-    JSON.stringify({ userId, deviceId, expiresAt: sessionExpiry }),
-    { expirationTtl: 30 * 24 * 3600 },
-  );
+  // Create session + refresh token
+  const { sessionToken, refreshToken, sessionExpiresAt, refreshExpiresAt } = await issueSession(env, userId, deviceId);
 
   return jsonResponse(
     {
       user_id: userId,
       session_token: sessionToken,
+      refresh_token: refreshToken,
+      expires_at: sessionExpiresAt,
+      refresh_expires_at: refreshExpiresAt,
       device_id: deviceId,
     },
     201,
@@ -179,6 +265,13 @@ async function handleLogin(request: Request, env: Env): Promise<Response> {
 
   if (!username || !authHash) {
     return errorResponse('Missing username or passphrase', 400);
+  }
+
+  // Reject weak KDF parameters (soft: legacy clients without metadata still OK)
+  const kdf = validateKdfStrength(raw);
+  if (!kdf.ok) {
+    logEvent('warn', 'weak_kdf_rejected', { iterations: kdf.iterations, action: 'login' });
+    return apiError('WEAK_KDF', `Auth hash iteration count below minimum (${MIN_KDF_ITERATIONS})`);
   }
 
   const difficulty = parseInt(env.POW_DIFFICULTY || '0', 10) || 0;
@@ -226,14 +319,8 @@ async function handleLogin(request: Request, env: Env): Promise<Response> {
     now,
   ).run();
 
-  // Create session
-  const sessionToken = generateSessionToken();
-  const sessionExpiry = now + 30 * 24 * 3600;
-  await env.KV.put(
-    `session:${sessionToken}`,
-    JSON.stringify({ userId: user.id, deviceId, expiresAt: sessionExpiry }),
-    { expirationTtl: 30 * 24 * 3600 },
-  );
+  // Create session + refresh token
+  const { sessionToken, refreshToken, sessionExpiresAt, refreshExpiresAt } = await issueSession(env, user.id, deviceId);
 
   // Fetch signed pre-key public for client-side caching
   const spk = await env.DB.prepare(
@@ -243,6 +330,9 @@ async function handleLogin(request: Request, env: Env): Promise<Response> {
   return jsonResponse({
     user_id: user.id,
     session_token: sessionToken,
+    refresh_token: refreshToken,
+    expires_at: sessionExpiresAt,
+    refresh_expires_at: refreshExpiresAt,
     device_id: deviceId,
     encrypted_keys: user.encrypted_keys,
     identity_key: user.identity_key,

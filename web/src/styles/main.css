@@ -480,6 +480,38 @@ a:hover { text-decoration: underline; }
   will-change: transform;
 }
 
+/* ── Skeleton loaders (conversation list + messages) ── */
+@keyframes rocchat-skeleton-shimmer {
+  0%   { background-position: -200px 0; }
+  100% { background-position: calc(200px + 100%) 0; }
+}
+.conversation-skeleton {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-3);
+  margin: 2px 4px;
+}
+.skel-avatar,
+.skel-line {
+  background: linear-gradient(90deg,
+    var(--border-weak) 0%,
+    var(--border-norm) 50%,
+    var(--border-weak) 100%);
+  background-size: 200px 100%;
+  background-repeat: no-repeat;
+  animation: rocchat-skeleton-shimmer 1.4s infinite linear;
+  border-radius: var(--radius);
+}
+.skel-avatar { width: 40px; height: 40px; border-radius: 50%; flex-shrink: 0; }
+.skel-lines { flex: 1; display: flex; flex-direction: column; gap: 6px; }
+.skel-line { height: 10px; }
+.skel-line-title { width: 60%; }
+.skel-line-sub   { width: 80%; opacity: 0.6; }
+@media (prefers-reduced-motion: reduce) {
+  .skel-avatar, .skel-line { animation: none; }
+}
+
 .conversation-item {
   display: flex;
   align-items: center;
@@ -2735,3 +2767,49 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
   0% { background: rgba(108,92,231,0.3); }
   100% { background: transparent; }
 }
+
+/* ── iOS PWA install banner ── */
+#rc-ios-install-banner {
+  position: fixed;
+  left: 12px;
+  right: 12px;
+  bottom: calc(12px + env(safe-area-inset-bottom, 0));
+  background: var(--surface-elevated, var(--bg-card));
+  color: var(--text-primary);
+  border: 1px solid var(--border-strong);
+  border-radius: 14px;
+  box-shadow: var(--shadow-modal);
+  z-index: 9999;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  animation: rc-ios-banner-in 0.25s ease-out both;
+}
+@keyframes rc-ios-banner-in {
+  from { transform: translateY(20px); opacity: 0; }
+  to   { transform: translateY(0);    opacity: 1; }
+}
+.rc-ios-install-inner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+}
+.rc-ios-install-text {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: var(--text-sm);
+}
+.rc-ios-install-text strong { color: var(--roc-gold, #D4AF37); }
+.rc-ios-install-text em { font-style: normal; color: var(--roc-gold, #D4AF37); }
+.rc-ios-install-close {
+  background: transparent;
+  border: 0;
+  color: var(--text-secondary);
+  font-size: 22px;
+  line-height: 1;
+  padding: 4px 8px;
+  cursor: pointer;
+}
+.rc-ios-install-close:hover { color: var(--text-primary); }

@@ -30,7 +30,8 @@ export async function handleMessages(
 
   // GET /api/messages/conversations — list user's conversations
   if ((path === '/api/messages/conversations' || path === '/api/messages/conversations/list') && request.method === 'GET') {
-    return listConversations(env, session);
+    const includeArchived = url.searchParams.get('include_archived') === '1';
+    return listConversations(env, session, includeArchived);
   }
 
   // DELETE /api/messages/conversations/:id — leave/delete a conversation
@@ -240,10 +241,11 @@ export async function handleMessages(
 }
 
 async function sendMessage(request: Request, env: Env, session: Session): Promise<Response> {
-  // Limit payload size to 256KB
+  // Hard cap: 10 MB total ciphertext payload.
+  const MAX_PAYLOAD = 10 * 1024 * 1024;
   const contentLength = parseInt(request.headers.get('Content-Length') || '0', 10);
-  if (contentLength > 256 * 1024) {
-    return errorResponse('Message payload too large', 413);
+  if (contentLength > MAX_PAYLOAD) {
+    return errorResponse('Message payload too large (max 10MB)', 413);
   }
 
   const raw = await request.json() as Record<string, unknown>;
@@ -282,8 +284,8 @@ async function sendMessage(request: Request, env: Env, session: Session): Promis
   if (encrypted.ratchet_header && encrypted.ratchet_header.length > 2048) {
     return errorResponse('Ratchet header too large', 400);
   }
-  if (encrypted.ciphertext.length > 256 * 1024) {
-    return errorResponse('Ciphertext too large', 400);
+  if (encrypted.ciphertext.length > 10 * 1024 * 1024) {
+    return errorResponse('Ciphertext too large', 413);
   }
   if (encrypted.iv && encrypted.iv.length > 64) {
     return errorResponse('IV too large', 400);
@@ -480,7 +482,8 @@ async function createConversation(
   return jsonResponse({ conversation_id: conversationId }, 201);
 }
 
-async function listConversations(env: Env, session: Session): Promise<Response> {
+async function listConversations(env: Env, session: Session, includeArchived: boolean = false): Promise<Response> {
+  const archivedFilter = includeArchived ? '' : 'AND cm.archived_at IS NULL';
   const result = await env.DB.prepare(
     `SELECT c.id, c.type, c.encrypted_meta, c.created_at,
             cm.muted_at, cm.archived_at, cm.chat_theme,
@@ -498,6 +501,7 @@ async function listConversations(env: Env, session: Session): Promise<Response> 
             (SELECT MAX(m.server_timestamp) FROM messages m WHERE m.conversation_id = c.id) as last_message_at
      FROM conversations c
      JOIN conversation_members cm ON cm.conversation_id = c.id AND cm.user_id = ?
+     WHERE 1=1 ${archivedFilter}
      ORDER BY last_message_at DESC NULLS LAST`,
   )
     .bind(session.userId)

@@ -739,6 +739,7 @@ export function renderSettings(container: HTMLElement) {
   document.getElementById('logout-btn')?.addEventListener('click', async () => {
     try { await api.logout(); } catch { /* continue with local cleanup */ }
     api.setToken(null);
+    api.setRefreshToken(null);
     localStorage.removeItem('rocchat_user_id');
     localStorage.removeItem('rocchat_keys');
     localStorage.removeItem('rocchat_identity_pub');

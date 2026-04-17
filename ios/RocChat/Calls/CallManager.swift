@@ -405,12 +405,22 @@ class CallManager: ObservableObject {
     }
 
     private func stopAudioStreaming() {
+        // Tear down in strict reverse order: stop player → remove tap → detach
+        // nodes → stop engine → deactivate session. Skipping any of these has
+        // caused the engine to keep the mic LED on / the session to linger.
         playerNode?.stop()
-        audioEngine?.inputNode.removeTap(onBus: 0)
-        audioEngine?.stop()
+        if let engine = audioEngine {
+            engine.inputNode.removeTap(onBus: 0)
+            if let player = playerNode { engine.detach(player) }
+            engine.stop()
+            engine.reset()
+        }
         audioEngine = nil
         playerNode = nil
         audioSeq = 0
+        // Best-effort: release the shared audio session so Bluetooth / Now
+        // Playing / Silent switch return to their prior state.
+        try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
     }
 
     private func sendAudioFrame(data: Data) {

@@ -207,6 +207,7 @@ export function renderAuth(container: HTMLElement, onSuccess: () => void) {
       }
 
       api.setToken(res.data.session_token);
+      if (res.data.refresh_token) api.setRefreshToken(res.data.refresh_token);
       localStorage.setItem('rocchat_user_id', res.data.user_id);
       if (res.data.device_id) localStorage.setItem('rocchat_device_id', res.data.device_id);
 
@@ -320,9 +321,10 @@ export function renderAuth(container: HTMLElement, onSuccess: () => void) {
       });
 
       // Store session
-      const resData = res.data as { session_token?: string; user_id?: string; device_id?: string };
+      const resData = res.data as { session_token?: string; refresh_token?: string; user_id?: string; device_id?: string };
       if (resData.session_token) {
         api.setToken(resData.session_token);
+        if (resData.refresh_token) api.setRefreshToken(resData.refresh_token);
         localStorage.setItem('rocchat_user_id', resData.user_id || '');
         if (resData.device_id) localStorage.setItem('rocchat_device_id', resData.device_id);
       }

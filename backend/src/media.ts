@@ -68,6 +68,17 @@ async function uploadMedia(request: Request, env: Env, session: Session): Promis
   const encryptedFileName = request.headers.get('x-encrypted-filename') || '';
   const encryptedMimeType = request.headers.get('x-encrypted-mimetype') || '';
 
+  // Reject NUL bytes or CR/LF in opaque metadata headers (header-splitting / R2
+  // customMetadata corruption defense). These headers are ciphertext but must
+  // still be safe ASCII after base64.
+  const UNSAFE_RE = /[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/;
+  if (UNSAFE_RE.test(encryptedFileName) || UNSAFE_RE.test(encryptedMimeType)) {
+    return errorResponse('Invalid metadata headers', 400);
+  }
+  if (encryptedFileName.length > 4096 || encryptedMimeType.length > 512) {
+    return errorResponse('Metadata headers too long', 400);
+  }
+
   if (!conversationId) {
     return errorResponse('Missing x-conversation-id header', 400);
   }

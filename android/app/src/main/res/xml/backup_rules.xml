@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Defense-in-depth backup rules. The manifest already sets
+  `android:allowBackup="false"`, but if that is ever flipped on we still
+  want to exclude encryption keys, the local message database, and the
+  secure shared-prefs blob from any full-backup / auto-backup export.
+-->
+<full-backup-content>
+    <exclude domain="sharedpref" path="secure_prefs.xml" />
+    <exclude domain="sharedpref" path="rocchat_secure.xml" />
+    <exclude domain="database" path="rocchat.db" />
+    <exclude domain="database" path="rocchat-wal" />
+    <exclude domain="database" path="rocchat-shm" />
+    <exclude domain="file" path="keys/" />
+</full-backup-content>

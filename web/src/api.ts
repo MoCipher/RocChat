@@ -2,11 +2,13 @@
  * RocChat Web — API Client
  *
  * Handles all HTTP calls to the Worker backend.
+ * Supports access-token + refresh-token rotation and typed error codes.
  */
 
 const BASE = '/api';
 
 let sessionToken: string | null = localStorage.getItem('rocchat_token');
+let refreshToken: string | null = localStorage.getItem('rocchat_refresh_token');
 
 export function setToken(token: string | null) {
   sessionToken = token;
@@ -14,27 +16,93 @@ export function setToken(token: string | null) {
   else localStorage.removeItem('rocchat_token');
 }
 
+export function setRefreshToken(token: string | null) {
+  refreshToken = token;
+  if (token) localStorage.setItem('rocchat_refresh_token', token);
+  else localStorage.removeItem('rocchat_refresh_token');
+}
+
 export function getToken(): string | null {
   return sessionToken;
+}
+
+export function getRefreshToken(): string | null {
+  return refreshToken;
+}
+
+/** Structured error codes returned by the backend. */
+export type ApiErrorCode =
+  | 'BAD_REQUEST' | 'UNAUTHORIZED' | 'FORBIDDEN' | 'CSRF_BLOCKED'
+  | 'NOT_FOUND' | 'CONFLICT' | 'PAYLOAD_TOO_LARGE' | 'UNSUPPORTED_MEDIA'
+  | 'RATE_LIMITED' | 'BANNED' | 'POW_REQUIRED' | 'POW_INVALID'
+  | 'WEAK_KDF' | 'INTERNAL' | 'NETWORK';
+
+export interface ApiResult<T> {
+  ok: boolean;
+  status: number;
+  code?: ApiErrorCode;
+  data: T;
+}
+
+/** Exchange the stored refresh token for a new access token. Single-flight. */
+let refreshInFlight: Promise<boolean> | null = null;
+async function tryRefresh(): Promise<boolean> {
+  if (!refreshToken) return false;
+  if (refreshInFlight) return refreshInFlight;
+  refreshInFlight = (async () => {
+    try {
+      const res = await fetch(`${BASE}/auth/refresh`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refresh_token: refreshToken }),
+      });
+      if (!res.ok) {
+        setToken(null);
+        setRefreshToken(null);
+        return false;
+      }
+      const body = await res.json() as { session_token?: string; refresh_token?: string };
+      if (body.session_token) setToken(body.session_token);
+      if (body.refresh_token) setRefreshToken(body.refresh_token);
+      return !!body.session_token;
+    } catch {
+      return false;
+    } finally {
+      refreshInFlight = null;
+    }
+  })();
+  return refreshInFlight;
 }
 
 async function req<T = unknown>(
   path: string,
   opts: RequestInit = {},
-): Promise<{ ok: boolean; status: number; data: T }> {
+  _retry = true,
+): Promise<ApiResult<T>> {
   const headers: Record<string, string> = {
     ...(opts.headers as Record<string, string> || {}),
   };
-
   if (sessionToken) headers['Authorization'] = `Bearer ${sessionToken}`;
   if (opts.body && typeof opts.body === 'string') headers['Content-Type'] = 'application/json';
 
-  const res = await fetch(`${BASE}${path}`, { ...opts, headers });
-  const data = res.headers.get('content-type')?.includes('json')
-    ? await res.json()
-    : await res.text();
+  let res: Response;
+  try {
+    res = await fetch(`${BASE}${path}`, { ...opts, headers });
+  } catch {
+    return { ok: false, status: 0, code: 'NETWORK', data: { error: 'network' } as unknown as T };
+  }
 
-  return { ok: res.ok, status: res.status, data: data as T };
+  const isJson = res.headers.get('content-type')?.includes('json');
+  const data = isJson ? await res.json() : await res.text();
+
+  // Auto-refresh on 401 with valid refresh token
+  if (res.status === 401 && _retry && refreshToken) {
+    const ok = await tryRefresh();
+    if (ok) return req<T>(path, opts, false);
+  }
+
+  const code = (isJson && (data as { code?: string }).code) as ApiErrorCode | undefined;
+  return { ok: res.ok, status: res.status, code, data: data as T };
 }
 
 // ── Auth ──
@@ -72,6 +140,9 @@ export function register(body: {
 export function login(body: { username: string; auth_hash: string; pow_token?: string; pow_nonce?: string }) {
   return req<{
     session_token: string;
+    refresh_token?: string;
+    expires_at?: number;
+    refresh_expires_at?: number;
     user_id: string;
     device_id: string;
     encrypted_keys: string;

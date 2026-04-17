@@ -6,6 +6,7 @@
  */
 
 import { handleAuth } from './auth.js';
+import { handleRefresh } from './auth.js';
 import { handleMessages } from './messages.js';
 import { handleKeys } from './keys.js';
 import { handleContacts } from './contacts.js';
@@ -16,7 +17,7 @@ import { handleBusiness } from './business.js';
 import { handleFeatures } from './features.js';
 import { createPowChallenge } from './pow.js';
 import { ChatRoom } from './durable-objects/ChatRoom.js';
-import { verifySession, rateLimit, jsonResponse, errorResponse } from './middleware.js';
+import { verifySession, rateLimit, jsonResponse, errorResponse, isOriginAllowed, apiError, logEvent } from './middleware.js';
 import type { Session } from './middleware.js';
 
 export { ChatRoom };
@@ -54,6 +55,13 @@ export default {
       });
     }
 
+    // CSRF defense-in-depth: reject state-changing requests from unknown origins.
+    // GET/HEAD/OPTIONS pass through; native mobile apps (no Origin/Referer) also pass.
+    if (!isOriginAllowed(request)) {
+      logEvent('warn', 'csrf_blocked', { path, origin: request.headers.get('Origin') || null });
+      return withCors(apiError('CSRF_BLOCKED', 'Cross-origin request blocked'));
+    }
+
     try {
       // ── Public routes (no auth) ──
       if (path === '/api/auth/register' && request.method === 'POST') {
@@ -65,6 +73,13 @@ export default {
         const loginRl = await rateLimit(env, `ip:${loginIp}`, '/api/auth/login');
         if (!loginRl.ok) return withCors(errorResponse('Too many login attempts', 429));
         return withCors(await handleAuth(request, env, 'login'));
+      }
+      if (path === '/api/auth/refresh' && request.method === 'POST') {
+        // Rate limit refresh by IP to blunt refresh-token guessing
+        const refIp = request.headers.get('CF-Connecting-IP') || 'unknown';
+        const refRl = await rateLimit(env, `ip:${refIp}`, '/api/auth/refresh');
+        if (!refRl.ok) return withCors(errorResponse('Too many refresh attempts', 429));
+        return withCors(await handleRefresh(request, env));
       }
       if (path === '/api/health') {
         try {
@@ -210,11 +225,18 @@ export default {
           { urls: 'stun:stun.nextcloud.com:3478' },
         ];
         if (env.TURN_SECRET && env.TURN_SERVER) {
-          // Generate time-limited TURN credentials (RFC 5766 TURN REST API)
+          // Generate time-limited TURN credentials (RFC 5766 TURN REST API,
+          // coturn supports SHA-256 when configured with `hmac-algorithm=sha256`).
           const ttl = 86400; // 24 hours
           const expiry = Math.floor(Date.now() / 1000) + ttl;
           const username = `${expiry}:${session.userId}`;
-          const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(env.TURN_SECRET), { name: 'HMAC', hash: 'SHA-1' }, false, ['sign']);
+          const key = await crypto.subtle.importKey(
+            'raw',
+            new TextEncoder().encode(env.TURN_SECRET),
+            { name: 'HMAC', hash: 'SHA-256' },
+            false,
+            ['sign'],
+          );
           const mac = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(username));
           const credential = btoa(String.fromCharCode(...new Uint8Array(mac)));
           servers.push(
@@ -491,7 +513,11 @@ export default {
 
       return withCors(errorResponse('Not found', 404));
     } catch (err) {
-      console.error('Request error:', err);
+      logEvent('error', 'request_error', {
+        path,
+        method: request.method,
+        message: err instanceof Error ? err.message : String(err),
+      });
       return withCors(errorResponse('Internal server error', 500));
     }
   },

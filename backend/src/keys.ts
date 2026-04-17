@@ -64,20 +64,27 @@ async function getBundle(env: Env, targetUserId: string): Promise<Response> {
     return errorResponse('No signed pre-key available', 404);
   }
 
-  // Get and consume one one-time pre-key (atomic)
-  const oneTimePreKey = await env.DB.prepare(
-    'SELECT id, public_key FROM one_time_pre_keys WHERE user_id = ? AND used = 0 ORDER BY id ASC LIMIT 1',
-  )
-    .bind(targetUserId)
-    .first<{ id: number; public_key: string }>();
-
-  if (oneTimePreKey) {
-    // Mark as used
-    await env.DB.prepare(
-      'UPDATE one_time_pre_keys SET used = 1 WHERE user_id = ? AND id = ?',
+  // Atomically claim one unused one-time pre-key. RETURNING ensures we only
+  // observe the key we actually marked used; two concurrent requests cannot
+  // both claim the same row.
+  let oneTimePreKey: { id: number; public_key: string } | null = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const candidate = await env.DB.prepare(
+      'SELECT id, public_key FROM one_time_pre_keys WHERE user_id = ? AND used = 0 ORDER BY id ASC LIMIT 1',
     )
-      .bind(targetUserId, oneTimePreKey.id)
+      .bind(targetUserId)
+      .first<{ id: number; public_key: string }>();
+    if (!candidate) break;
+    const claim = await env.DB.prepare(
+      'UPDATE one_time_pre_keys SET used = 1 WHERE user_id = ? AND id = ? AND used = 0',
+    )
+      .bind(targetUserId, candidate.id)
       .run();
+    if (claim.meta.changes && claim.meta.changes > 0) {
+      oneTimePreKey = candidate;
+      break;
+    }
+    // Another request claimed it first — retry.
   }
 
   return jsonResponse({

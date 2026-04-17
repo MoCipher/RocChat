@@ -37,6 +37,13 @@ object PushManager {
             ).apply {
                 description = "New message notifications"
                 enableVibration(true)
+                // Distinctive haptic pattern — lets users recognise RocChat
+                // notifications by feel without looking at the screen.
+                // Pattern: wait 0ms, vibrate 200ms, pause 100ms, vibrate 200ms.
+                vibrationPattern = longArrayOf(0L, 200L, 100L, 200L)
+                enableLights(true)
+                lightColor = 0xFFD4AF37.toInt() // Roc gold
+                setShowBadge(true)
             }
             val mgr = context.getSystemService(NotificationManager::class.java)
             mgr.createNotificationChannel(channel)

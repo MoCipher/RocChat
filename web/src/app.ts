@@ -73,6 +73,7 @@ function init() {
   checkPreKeyReplenishment();
   cacheUserProfile();
   registerWebPush();
+  showOnboardingIfNeeded();
 }
 
 function showLanding() {
@@ -323,6 +324,49 @@ async function showSupportersWall() {
   } catch {
     document.getElementById('supporters-content')!.innerHTML = '<div style="border:1px solid var(--border-primary,#333);border-radius:12px;padding:20px;background:var(--bg-secondary,#1a1a2e);color:#ef4444">Failed to load supporters wall.</div>';
   }
+}
+
+function showOnboardingIfNeeded() {
+  if (localStorage.getItem('rocchat_onboarded')) return;
+  const overlay = document.createElement('div');
+  overlay.className = 'rc-dialog-overlay';
+  overlay.innerHTML = `
+    <div class="rc-dialog" style="max-width:440px">
+      <div style="text-align:center;padding:var(--sp-6)">
+        <div style="font-size:56px;margin-bottom:var(--sp-4)">🔒</div>
+        <h2 style="margin:0 0 var(--sp-2);font-size:var(--text-xl);color:var(--roc-gold,#D4AF37)">Welcome to RocChat</h2>
+        <p style="color:var(--text-secondary);font-size:var(--text-sm);line-height:1.6;margin:0 0 var(--sp-4)">
+          Every message is <strong>end-to-end encrypted</strong> using the Double Ratchet protocol.
+          Nobody — not even RocChat — can read your messages.
+        </p>
+        <div style="text-align:left;background:var(--surface-primary);border-radius:12px;padding:var(--sp-4);margin-bottom:var(--sp-4)">
+          <div style="margin-bottom:var(--sp-3);font-size:var(--text-sm)">
+            <strong style="color:var(--turquoise,#40E0D0)">🔑 Safety Numbers</strong><br/>
+            <span style="color:var(--text-tertiary)">Verify your contact's identity to prevent impersonation.</span>
+          </div>
+          <div style="margin-bottom:var(--sp-3);font-size:var(--text-sm)">
+            <strong style="color:var(--turquoise,#40E0D0)">💨 Disappearing Messages</strong><br/>
+            <span style="color:var(--text-tertiary)">Set timers so messages auto-delete after reading.</span>
+          </div>
+          <div style="font-size:var(--text-sm)">
+            <strong style="color:var(--turquoise,#40E0D0)">📱 Multi-Device</strong><br/>
+            <span style="color:var(--text-tertiary)">Scan QR codes to link devices securely.</span>
+          </div>
+        </div>
+        <button class="btn btn-primary" style="width:100%" id="onboard-dismiss">Get Started</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('#onboard-dismiss')?.addEventListener('click', () => {
+    localStorage.setItem('rocchat_onboarded', '1');
+    overlay.remove();
+  });
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) {
+      localStorage.setItem('rocchat_onboarded', '1');
+      overlay.remove();
+    }
+  });
 }
 
 // Boot

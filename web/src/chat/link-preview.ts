@@ -45,7 +45,7 @@ export function renderPreviewCard(preview: api.LinkPreview): string {
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
   }[c] || c));
   const img = preview.image
-    ? `<img class="lp-image" src="${esc(preview.image)}" alt="" loading="lazy" referrerpolicy="no-referrer" />`
+    ? `<img class="lp-image" src="${esc(preview.image)}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer" />`
     : '';
   return `
     <a class="link-preview" href="${esc(preview.url)}" target="_blank" rel="noopener noreferrer nofollow">

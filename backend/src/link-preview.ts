@@ -12,6 +12,14 @@
  * - Strips private / loopback / link-local / metadata IPs (SSRF defense).
  * - Drops cookies / auth headers.
  * - Rate-limited by caller via wrapping route.
+ *
+ * RESIDUAL RISK (documented per security audit):
+ * DNS rebinding: a public hostname can resolve to a private IP between our
+ * allowlist check and the actual fetch(). Cloudflare Workers' `fetch()` does
+ * not expose the resolved IP, so we cannot post-validate. Mitigation:
+ * 1. We reject responses larger than MAX_BYTES to limit data exfil scope.
+ * 2. All internal services should require authentication independent of source IP.
+ * 3. A future enhancement could route through a trusted proxy that pins DNS.
  */
 
 import type { Env } from './index.js';

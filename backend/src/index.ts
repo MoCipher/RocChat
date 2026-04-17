@@ -291,7 +291,10 @@ export default {
 
       // Link-preview unfurler (Open Graph) — KV-cached for 24h.
       if (path === '/api/link-preview') {
-        return withCors(await handleLinkPreview(request, env, url));
+        const lpRes = await handleLinkPreview(request, env, url);
+        const lpHeaders = new Headers(lpRes.headers);
+        lpHeaders.set('Cache-Control', 'private, max-age=300');
+        return withCors(new Response(lpRes.body, { status: lpRes.status, headers: lpHeaders }));
       }
 
       // Crypto Donation — the only payment method. No Stripe. No Apple. No Google.
@@ -584,9 +587,12 @@ export default {
 function corsHeaders(request?: Request): HeadersInit {
   const origin = request?.headers.get('Origin') || '';
   const allowed = ['https://chat.mocipher.com', 'https://rocchat-8x7.pages.dev', 'http://localhost:5173'];
-  const allowOrigin = allowed.includes(origin) ? origin : 'https://chat.mocipher.com';
+  // Only return CORS headers for known origins — unknown origins get no Access-Control-Allow-Origin
+  if (!allowed.includes(origin)) {
+    return { 'Vary': 'Origin' };
+  }
   return {
-    'Access-Control-Allow-Origin': allowOrigin,
+    'Access-Control-Allow-Origin': origin,
     'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type, Authorization',
     'Access-Control-Max-Age': '86400',

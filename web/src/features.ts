@@ -90,11 +90,33 @@ export function openPerMessageTimerMenu(anchor: HTMLElement): void {
         : 'Timer cleared', 'info');
     });
   });
+  // Add role="menuitem" to each button
+  menu.querySelectorAll('.pmt-item').forEach((btn) => {
+    btn.setAttribute('role', 'menuitem');
+    btn.setAttribute('tabindex', '0');
+  });
+  // Focus first menu item
+  requestAnimationFrame(() => {
+    const first = menu.querySelector<HTMLElement>('.pmt-item');
+    if (first) first.focus();
+  });
   setTimeout(() => {
     const dismiss = (ev: MouseEvent) => {
-      if (!menu.contains(ev.target as Node)) { menu.remove(); document.removeEventListener('click', dismiss, true); }
+      if (!menu.contains(ev.target as Node)) { menu.remove(); document.removeEventListener('click', dismiss, true); document.removeEventListener('keydown', onKey, true); }
+    };
+    const onKey = (ev: KeyboardEvent) => {
+      if (ev.key === 'Escape') { menu.remove(); document.removeEventListener('click', dismiss, true); document.removeEventListener('keydown', onKey, true); }
+      // Arrow key navigation
+      if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') {
+        ev.preventDefault();
+        const items = Array.from(menu.querySelectorAll<HTMLElement>('.pmt-item'));
+        const idx = items.indexOf(document.activeElement as HTMLElement);
+        const next = ev.key === 'ArrowDown' ? (idx + 1) % items.length : (idx - 1 + items.length) % items.length;
+        items[next]?.focus();
+      }
     };
     document.addEventListener('click', dismiss, true);
+    document.addEventListener('keydown', onKey, true);
   }, 0);
 }
 
@@ -165,6 +187,7 @@ export function openForwardDialog(messageId: string, plaintext: string): void {
       </div>
     </div>`;
   document.body.appendChild(dialog);
+  setupDialog(dialog);
   const list = dialog.querySelector('.rc-forward-list') as HTMLElement;
   const search = dialog.querySelector('.rc-dialog-search') as HTMLInputElement;
 
@@ -259,6 +282,7 @@ export function openGlobalSearch(): void {
       </div>
     </div>`;
   document.body.appendChild(dialog);
+  setupDialog(dialog);
   const input = dialog.querySelector('.rc-dialog-search') as HTMLInputElement;
   const results = dialog.querySelector('.rc-search-results') as HTMLElement;
   input.addEventListener('input', () => {
@@ -284,6 +308,16 @@ export function openGlobalSearch(): void {
   });
   dialog.querySelector('.rc-dialog-close')?.addEventListener('click', () => dialog.remove());
   dialog.addEventListener('click', (e) => { if (e.target === dialog) dialog.remove(); });
+  // Arrow-key navigation in search results
+  input.addEventListener('keydown', (e) => {
+    const hits = Array.from(results.querySelectorAll<HTMLElement>('.rc-search-hit'));
+    if (!hits.length) return;
+    const active = results.querySelector('.rc-search-hit:focus') as HTMLElement | null;
+    const idx = active ? hits.indexOf(active) : -1;
+    if (e.key === 'ArrowDown') { e.preventDefault(); hits[Math.min(idx + 1, hits.length - 1)]?.focus(); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); if (idx <= 0) input.focus(); else hits[idx - 1]?.focus(); }
+    else if (e.key === 'Enter' && idx === -1 && hits.length) { e.preventDefault(); hits[0]?.click(); }
+  });
   input.focus();
 }
 
@@ -362,6 +396,7 @@ export async function openScheduledMessagesDialog(): Promise<void> {
       </div>
     </div>`;
   document.body.appendChild(dialog);
+  setupDialog(dialog);
   dialog.querySelector('.rc-dialog-close')?.addEventListener('click', () => dialog.remove());
   dialog.addEventListener('click', (e) => { if (e.target === dialog) dialog.remove(); });
   const list = dialog.querySelector('.rc-scheduled-list') as HTMLElement;
@@ -569,6 +604,7 @@ export function openBackupDialog(): void {
       </div>
     </div>`;
   document.body.appendChild(dialog);
+  setupDialog(dialog);
   const pass = dialog.querySelector('.rc-backup-pass') as HTMLInputElement;
   dialog.querySelector('.rc-backup-export')?.addEventListener('click', () => exportEncryptedBackup(pass.value));
   dialog.querySelector('.rc-backup-file')?.addEventListener('change', (e) => {
@@ -665,6 +701,7 @@ export function openDecoyManager(): void {
       </div>
     </div>`;
   document.body.appendChild(dialog);
+  setupDialog(dialog);
   dialog.querySelector('.rc-dialog-close')?.addEventListener('click', () => dialog.remove());
   dialog.addEventListener('click', (e) => { if (e.target === dialog) dialog.remove(); });
   dialog.querySelectorAll('.rc-decoy-delete').forEach((b) => {
@@ -781,6 +818,7 @@ export function openCustomEmojiManager(): void {
       </div>
     </div>`;
   document.body.appendChild(dialog);
+  setupDialog(dialog);
   dialog.querySelector('.rc-dialog-close')?.addEventListener('click', () => dialog.remove());
   dialog.addEventListener('click', (e) => { if (e.target === dialog) dialog.remove(); });
   dialog.querySelector('.rc-emoji-file')?.addEventListener('change', async (e) => {
@@ -818,6 +856,7 @@ export async function openGroupAdminDialog(conversationId: string): Promise<void
       </div>
     </div>`;
   document.body.appendChild(dialog);
+  setupDialog(dialog);
   dialog.querySelector('.rc-dialog-close')?.addEventListener('click', () => dialog.remove());
   dialog.addEventListener('click', (e) => { if (e.target === dialog) dialog.remove(); });
   const box = dialog.querySelector('.rc-group-members') as HTMLElement;
@@ -877,6 +916,52 @@ function canModerate(actor: api.GroupMember['role'], target: api.GroupMember['ro
 // Shared dialog helper
 // =============================================================================
 
+let _previousFocus: HTMLElement | null = null;
+
 function closeAnyDialog(): void {
   document.querySelectorAll('.rc-dialog-overlay').forEach((el) => el.remove());
+  if (_previousFocus && document.contains(_previousFocus)) {
+    try { _previousFocus.focus(); } catch {}
+  }
+  _previousFocus = null;
+}
+
+/** Wire focus-trap, Esc-to-close, first-focus-on-open, focus-restore on a dialog overlay */
+function setupDialog(overlay: HTMLElement): void {
+  _previousFocus = document.activeElement as HTMLElement | null;
+
+  // Esc to close
+  const onKey = (e: KeyboardEvent) => {
+    if (e.key === 'Escape') { e.stopPropagation(); overlay.remove(); restoreFocus(); }
+    // Focus trap — Tab / Shift+Tab
+    if (e.key === 'Tab') {
+      const focusable = overlay.querySelectorAll<HTMLElement>(
+        'a[href],button:not([disabled]),input:not([disabled]),textarea:not([disabled]),select:not([disabled]),[tabindex]:not([tabindex="-1"])',
+      );
+      if (!focusable.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    }
+  };
+  overlay.addEventListener('keydown', onKey);
+
+  // First focus: find autofocus input, or first focusable, or the dialog itself
+  requestAnimationFrame(() => {
+    const af = overlay.querySelector<HTMLElement>('[autofocus]');
+    if (af) { af.focus(); return; }
+    const first = overlay.querySelector<HTMLElement>(
+      'input:not([disabled]),button:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])',
+    );
+    if (first) first.focus();
+    else { const dlg = overlay.querySelector<HTMLElement>('.rc-dialog'); if (dlg) { dlg.tabIndex = -1; dlg.focus(); } }
+  });
+
+  function restoreFocus() {
+    if (_previousFocus && document.contains(_previousFocus)) {
+      try { _previousFocus.focus(); } catch {}
+    }
+    _previousFocus = null;
+  }
 }

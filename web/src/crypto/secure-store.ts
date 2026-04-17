@@ -100,13 +100,13 @@ interface Wrapped {
 async function wrap(plain: Uint8Array): Promise<Wrapped> {
   const key = await getOrCreateWrapKey();
   const iv = crypto.getRandomValues(new Uint8Array(12));
-  const ctBuf = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, plain.slice().buffer);
+  const ctBuf = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, plain.slice().buffer as ArrayBuffer);
   return { iv, ct: new Uint8Array(ctBuf) };
 }
 
 async function unwrap(w: Wrapped): Promise<Uint8Array> {
   const key = await getOrCreateWrapKey();
-  const plainBuf = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: new Uint8Array(w.iv) }, key, w.ct.slice().buffer);
+  const plainBuf = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: new Uint8Array(w.iv) }, key, w.ct.slice().buffer as ArrayBuffer);
   return new Uint8Array(plainBuf);
 }
 

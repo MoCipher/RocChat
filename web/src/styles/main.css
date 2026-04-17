@@ -188,7 +188,10 @@
   *, *::before, *::after {
     animation-duration: 0.01ms !important;
     transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
+  .rc-fade-in { opacity: 1 !important; }
+  .rc-pulse { animation: none !important; }
 }
 
 /* ── Base ── */
@@ -633,6 +636,7 @@ a:hover { text-decoration: underline; }
   align-items: center;
   gap: var(--sp-3);
   padding: var(--sp-3) var(--sp-4);
+  padding-top: max(var(--sp-3), env(safe-area-inset-top));
   border-bottom: 1px solid var(--border-weak);
   background: var(--bg-elevated);
   backdrop-filter: blur(12px);
@@ -833,6 +837,7 @@ a:hover { text-decoration: underline; }
   align-items: flex-end;
   gap: var(--sp-2);
   padding: var(--sp-3) var(--sp-4);
+  padding-bottom: max(var(--sp-3), env(safe-area-inset-bottom));
   border-top: 1px solid var(--border-weak);
   background: var(--bg-elevated);
 }

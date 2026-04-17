@@ -830,7 +830,7 @@ function renderMessages(messages: Message[]) {
     div.innerHTML = `
       <div class="message-bubble${gifContent ? ' gif-bubble' : ''}">
         ${gifContent
-          ? `<img src="${escapeHtml(gifContent.preview || gifContent.url)}" alt="GIF" class="gif-message" loading="lazy" style="max-width:240px;max-height:200px;border-radius:12px;cursor:pointer" />`
+          ? `<img src="${escapeHtml(gifContent.preview || gifContent.url)}" alt="GIF" class="gif-message" loading="lazy" decoding="async" style="max-width:240px;max-height:200px;border-radius:12px;cursor:pointer" />`
           : `<div class="message-text">${escapeHtml(displayText)}</div>`
         }
         <div class="message-reactions-row" id="reactions-${msg.id}"></div>
@@ -865,6 +865,7 @@ function renderMessages(messages: Message[]) {
             img.src = gif.preview || gif.url;
             img.alt = 'GIF';
             img.className = 'gif-message';
+            img.decoding = 'async';
             img.style.cssText = 'max-width:240px;max-height:200px;border-radius:12px;cursor:pointer';
             textEl.replaceWith(img);
           }
@@ -905,6 +906,9 @@ function renderMessages(messages: Message[]) {
       decryptPromise
         .then((plaintext) => {
           cachePlaintext(msg.id, plaintext);
+          // Update aria-label after successful decryption
+          const snippet = plaintext.length > 80 ? plaintext.slice(0, 80) + '…' : plaintext;
+          div.setAttribute('aria-label', `${isMine ? 'You' : 'Message'} at ${formatTime(msg.created_at)}: ${snippet}`);
           const gif = tryParseGif(plaintext);
           const fileMsg = tryParseFileMessage(plaintext);
           const bubble = div.querySelector('.message-bubble');
@@ -916,6 +920,7 @@ function renderMessages(messages: Message[]) {
               img.src = gif.preview || gif.url;
               img.alt = 'GIF';
               img.className = 'gif-message';
+              img.decoding = 'async';
               img.style.cssText = 'max-width:240px;max-height:200px;border-radius:12px;cursor:pointer';
               textEl.replaceWith(img);
             }
@@ -2397,7 +2402,7 @@ function renderFileMessage(bubble: Element, fileMsg: ParsedFileMessage, conversa
         modal.innerHTML = `
           <div class="view-once-modal-content">
             ${isImg
-              ? `<img src="${url}" style="max-width:90vw;max-height:80vh;border-radius:12px" />`
+              ? `<img src="${url}" decoding="async" style="max-width:90vw;max-height:80vh;border-radius:12px" />`
               : `<video src="${url}" autoplay controls style="max-width:90vw;max-height:80vh;border-radius:12px"></video>`
             }
             <div class="view-once-timer">This media will disappear when closed</div>

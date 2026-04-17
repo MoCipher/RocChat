@@ -1,4 +1,4 @@
-const CACHE_NAME = 'rocchat-v3';
+const CACHE_NAME = 'rocchat-v4';
 const SHELL_ASSETS = [
   '/',
   '/index.html',
@@ -114,4 +114,42 @@ self.addEventListener('fetch', (event) => {
       return cached || fetched;
     })
   );
+});
+
+// Background Sync — retry queued messages when connectivity returns
+self.addEventListener('sync', (event) => {
+  if (event.tag === 'message-queue') {
+    event.waitUntil(
+      (async () => {
+        try {
+          const db = await new Promise((resolve, reject) => {
+            const req = indexedDB.open('rocchat-outbox', 1);
+            req.onupgradeneeded = () => req.result.createObjectStore('pending', { keyPath: 'id' });
+            req.onsuccess = () => resolve(req.result);
+            req.onerror = () => reject(req.error);
+          });
+          const tx = db.transaction('pending', 'readonly');
+          const store = tx.objectStore('pending');
+          const items = await new Promise((resolve, reject) => {
+            const req = store.getAll();
+            req.onsuccess = () => resolve(req.result);
+            req.onerror = () => reject(req.error);
+          });
+          for (const item of items) {
+            const res = await fetch(item.url, {
+              method: 'POST',
+              headers: item.headers,
+              body: item.body,
+            });
+            if (res.ok) {
+              const dtx = db.transaction('pending', 'readwrite');
+              dtx.objectStore('pending').delete(item.id);
+              await new Promise((r) => { dtx.oncomplete = r; });
+            }
+          }
+          db.close();
+        } catch { /* will retry on next sync */ }
+      })()
+    );
+  }
 });

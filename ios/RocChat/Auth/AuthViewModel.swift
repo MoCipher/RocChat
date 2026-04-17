@@ -159,6 +159,9 @@ class AuthViewModel: ObservableObject {
                 ])
                 let encryptedKeys = try RocCrypto.aesGcmEncrypt(key: vaultKey, plaintext: privateKeysPayload)
                 
+                // Encrypt SPK private key with vault key before sending to server
+                let spkPrivateEncrypted = try RocCrypto.aesGcmEncrypt(key: vaultKey, plaintext: signedPreKey.rawRepresentation)
+                
                 let result = try await api.register(
                     username: cleanUsername,
                     displayName: displayName,
@@ -168,7 +171,7 @@ class AuthViewModel: ObservableObject {
                     identityDHKey: identityDHKey.publicKey.rawRepresentation.base64EncodedString(),
                     identityPrivateEncrypted: encryptedKeys.base64EncodedString(),
                     signedPreKeyPublic: signedPreKey.publicKey.rawRepresentation.base64EncodedString(),
-                    signedPreKeyPrivateEncrypted: signedPreKey.rawRepresentation.base64EncodedString(),
+                    signedPreKeyPrivateEncrypted: spkPrivateEncrypted.base64EncodedString(),
                     signedPreKeySignature: signature.base64EncodedString(),
                     oneTimePreKeys: oneTimePreKeyPairs.map { $0.pub.base64EncodedString() }
                 )

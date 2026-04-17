@@ -151,6 +151,7 @@ object APIClient {
         ratchetHeader: String,
         messageType: String = "text",
         expiresIn: Int = 0,
+        replyTo: String? = null,
     ): JSONObject {
         val body = JSONObject().apply {
             put("conversation_id", conversationId)
@@ -159,6 +160,7 @@ object APIClient {
             put("ratchet_header", ratchetHeader)
             put("message_type", messageType)
             if (expiresIn > 0) put("expires_in", expiresIn)
+            if (!replyTo.isNullOrEmpty()) put("reply_to", replyTo)
         }
         return post("/messages/send", body)
     }

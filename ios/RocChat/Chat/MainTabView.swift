@@ -1283,7 +1283,6 @@ struct ConversationView: View {
         replyingTo = nil
         inputText = ""
         isSending = true
-        _ = wasReplyingTo // hook for future: include reply_to_message_id in outgoing envelope
 
         // Handle edit mode
         if let editId = editingMessageId {
@@ -1315,6 +1314,9 @@ struct ConversationView: View {
                     "conversation_id": conversation.id,
                     "message_type": "text",
                 ]
+                if let replyMsg = wasReplyingTo {
+                    body["reply_to"] = replyMsg.id
+                }
                 if !recipientId.isEmpty {
                     let envelope = try await SessionManager.shared.encryptMessage(
                         conversationId: conversation.id,
@@ -1473,14 +1475,27 @@ struct ConversationView: View {
     }
 
     private func notifyScreenshot() async {
-        // Send a system message notifying the other user took a screenshot
-        let body: [String: Any] = [
+        // Encrypt the screenshot alert through the Double Ratchet session
+        let recipientId = conversation.members.first(where: { $0.userId != userId })?.userId ?? ""
+        var body: [String: Any] = [
             "conversation_id": conversation.id,
-            "ciphertext": "📸 Screenshot taken",
-            "iv": "",
-            "ratchet_header": "",
             "message_type": "screenshot_alert",
         ]
+        if !recipientId.isEmpty {
+            if let envelope = try? await SessionManager.shared.encryptMessage(
+                conversationId: conversation.id,
+                recipientUserId: recipientId,
+                plaintext: "📸 Screenshot taken"
+            ) {
+                body["ciphertext"] = envelope.ciphertext
+                body["iv"] = envelope.iv
+                body["ratchet_header"] = envelope.ratchetHeader
+            } else {
+                return // Don't send unencrypted
+            }
+        } else {
+            return
+        }
         _ = try? await APIClient.shared.postRaw("/messages/send", body: body)
     }
 

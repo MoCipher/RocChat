@@ -1175,10 +1175,28 @@ async function connectWebSocket(conversationId: string) {
     if (ticketRes.ok && ticketRes.data?.ticket) {
       wsUrl = `${proto}//${wsHost}/api/ws/${conversationId}?userId=${userId}&deviceId=${deviceId}&ticket=${ticketRes.data.ticket}`;
     } else {
-      wsUrl = `${proto}//${wsHost}/api/ws/${conversationId}?userId=${userId}&deviceId=${deviceId}&token=${token}`;
+      // Retry once before falling back
+      const retry = await api.getWsTicket();
+      if (retry.ok && retry.data?.ticket) {
+        wsUrl = `${proto}//${wsHost}/api/ws/${conversationId}?userId=${userId}&deviceId=${deviceId}&ticket=${retry.data.ticket}`;
+      } else {
+        console.warn('WS ticket unavailable, skipping connection');
+        return;
+      }
     }
   } catch {
-    wsUrl = `${proto}//${wsHost}/api/ws/${conversationId}?userId=${userId}&deviceId=${deviceId}&token=${token}`;
+    try {
+      const retry = await api.getWsTicket();
+      if (retry.ok && retry.data?.ticket) {
+        wsUrl = `${proto}//${wsHost}/api/ws/${conversationId}?userId=${userId}&deviceId=${deviceId}&ticket=${retry.data.ticket}`;
+      } else {
+        console.warn('WS ticket unavailable, skipping connection');
+        return;
+      }
+    } catch {
+      console.warn('WS ticket fetch failed, skipping connection');
+      return;
+    }
   }
 
   try {

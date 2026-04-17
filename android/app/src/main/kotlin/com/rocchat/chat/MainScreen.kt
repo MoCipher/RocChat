@@ -700,58 +700,95 @@ fun ConversationScreen(conversationId: String, conversationName: String, recipie
         }
     }
 
-    // WebSocket connection
+    // WebSocket connection with automatic reconnection
     DisposableEffect(conversationId) {
         val token = APIClient.sessionToken ?: return@DisposableEffect onDispose {}
         // Connect directly to Worker backend — Pages proxy cannot handle WebSocket upgrades
         val wsUrl = "wss://rocchat-api.spoass.workers.dev/api/ws/$conversationId?userId=$userId&deviceId=android&token=$token"
+        var reconnectAttempt = 0
+        var reconnectJob: kotlinx.coroutines.Job? = null
 
-        val listener = object : NativeWebSocket.Listener {
-            override fun onMessage(ws: NativeWebSocket, text: String) {
-                try {
-                    val data = JSONObject(text)
-                    when (data.optString("type")) {
-                        "message" -> {
-                            val payload = data.getJSONObject("payload")
-                            val ct = payload.optString("ciphertext", "")
-                            val ivStr = payload.optString("iv", "")
-                            val rh = payload.optString("ratchet_header", "")
-                            val displayText = if (rh.isNotEmpty() && ivStr.isNotEmpty()) {
-                                try { SessionManager.decryptMessage(context, conversationId, ct, ivStr, rh) } catch (_: Exception) { ct }
-                            } else ct
-                            val newMsg = APIClient.ChatMessage(
-                                id = payload.optString("id", "ws-${System.currentTimeMillis()}"),
-                                conversationId = conversationId,
-                                senderId = payload.optString("fromUserId", payload.optString("sender_id", "")),
-                                ciphertext = displayText,
-                                iv = "",
-                                ratchetHeader = "",
-                                messageType = payload.optString("message_type", "text"),
-                                createdAt = payload.optString("created_at", Date().toString()),
-                            )
-                            messages = messages + newMsg
+        fun connectWs() {
+            val listener = object : NativeWebSocket.Listener {
+                override fun onOpen(ws: NativeWebSocket) {
+                    reconnectAttempt = 0
+                }
+                override fun onMessage(ws: NativeWebSocket, text: String) {
+                    try {
+                        val data = JSONObject(text)
+                        when (data.optString("type")) {
+                            "message" -> {
+                                val payload = data.getJSONObject("payload")
+                                val ct = payload.optString("ciphertext", "")
+                                val ivStr = payload.optString("iv", "")
+                                val rh = payload.optString("ratchet_header", "")
+                                val displayText = if (rh.isNotEmpty() && ivStr.isNotEmpty()) {
+                                    try { SessionManager.decryptMessage(context, conversationId, ct, ivStr, rh) } catch (_: Exception) { ct }
+                                } else ct
+                                val newMsg = APIClient.ChatMessage(
+                                    id = payload.optString("id", "ws-${System.currentTimeMillis()}"),
+                                    conversationId = conversationId,
+                                    senderId = payload.optString("fromUserId", payload.optString("sender_id", "")),
+                                    ciphertext = displayText,
+                                    iv = "",
+                                    ratchetHeader = "",
+                                    messageType = payload.optString("message_type", "text"),
+                                    createdAt = payload.optString("created_at", Date().toString()),
+                                )
+                                messages = messages + newMsg
+                            }
+                            "call_offer" -> {
+                                val payload = data.getJSONObject("payload")
+                                CallManager.handleIncomingOffer(payload, conversationId, ws)
+                            }
+                            "call_answer" -> CallManager.handleCallAnswer(data.getJSONObject("payload"))
+                            "call_ice" -> CallManager.handleIceCandidate(data.getJSONObject("payload"))
+                            "call_end" -> CallManager.handleCallEnd(data.getJSONObject("payload"))
+                            "call_audio" -> CallManager.handleCallAudio(data.getJSONObject("payload"))
+                            "call_p2p_candidate" -> CallManager.handleP2PCandidate(data.getJSONObject("payload"))
                         }
-                        "call_offer" -> {
-                            val payload = data.getJSONObject("payload")
-                            CallManager.handleIncomingOffer(payload, conversationId, ws)
+                    } catch (_: Exception) {}
+                }
+                override fun onClosed(ws: NativeWebSocket, code: Int, reason: String) {
+                    if (code != 1000) {
+                        // Reconnect with exponential backoff + jitter
+                        reconnectJob = scope.launch {
+                            val delay = minOf(30000L, (1000L shl minOf(reconnectAttempt, 5)) + (0..500).random())
+                            reconnectAttempt++
+                            kotlinx.coroutines.delay(delay)
+                            try { connectWs() } catch (_: Exception) {}
                         }
-                        "call_answer" -> CallManager.handleCallAnswer(data.getJSONObject("payload"))
-                        "call_ice" -> CallManager.handleIceCandidate(data.getJSONObject("payload"))
-                        "call_end" -> CallManager.handleCallEnd(data.getJSONObject("payload"))
-                        "call_audio" -> CallManager.handleCallAudio(data.getJSONObject("payload"))
-                        "call_p2p_candidate" -> CallManager.handleP2PCandidate(data.getJSONObject("payload"))
                     }
-                } catch (_: Exception) {}
+                }
+                override fun onFailure(ws: NativeWebSocket, error: Throwable) {
+                    reconnectJob = scope.launch {
+                        val delay = minOf(30000L, (1000L shl minOf(reconnectAttempt, 5)) + (0..500).random())
+                        reconnectAttempt++
+                        kotlinx.coroutines.delay(delay)
+                        try { connectWs() } catch (_: Exception) {}
+                    }
+                }
+            }
+            try {
+                ws = NativeWebSocket.connect(wsUrl, listener)
+            } catch (_: Exception) {
+                reconnectJob = scope.launch {
+                    val delay = minOf(30000L, (1000L shl minOf(reconnectAttempt, 5)) + (0..500).random())
+                    reconnectAttempt++
+                    kotlinx.coroutines.delay(delay)
+                    try { connectWs() } catch (_: Exception) {}
+                }
             }
         }
 
-        ws = NativeWebSocket.connect(wsUrl, listener)
+        connectWs()
         // Flush any queued offline messages
         scope.launch {
             val flushed = flushMessageQueue(context)
             if (flushed) isOffline = false
         }
         onDispose {
+            reconnectJob?.cancel()
             ws?.close(1000, "bye")
             ws = null
         }
@@ -764,13 +801,18 @@ fun ConversationScreen(conversationId: String, conversationName: String, recipie
             val callback = android.app.Activity.ScreenCaptureCallback {
                 scope.launch {
                     try {
-                        APIClient.post("/messages/send", org.json.JSONObject().apply {
-                            put("conversation_id", conversationId)
-                            put("ciphertext", "📸 Screenshot taken")
-                            put("iv", "")
-                            put("ratchet_header", "")
-                            put("message_type", "screenshot_alert")
-                        })
+                        // Encrypt the screenshot alert through the Double Ratchet session
+                        if (recipientUserId.isNotEmpty()) {
+                            val envelope = SessionManager.encryptMessage(context, conversationId, recipientUserId, "📸 Screenshot taken")
+                            val body = org.json.JSONObject().apply {
+                                put("conversation_id", conversationId)
+                                put("ciphertext", envelope.ciphertext)
+                                put("iv", envelope.iv)
+                                put("ratchet_header", envelope.ratchetHeader)
+                                put("message_type", "screenshot_alert")
+                            }
+                            APIClient.post("/messages/send", body)
+                        }
                     } catch (_: Exception) {}
                 }
             }
@@ -983,6 +1025,8 @@ fun ConversationScreen(conversationId: String, conversationName: String, recipie
                                 val text = inputText.trim()
                                 inputText = ""
                                 isSending = true
+                                val replyToId = replyingTo?.id
+                                replyingTo = null
                                 val localId = "queued-${System.currentTimeMillis()}"
                                 scope.launch {
                                     // Edit mode
@@ -999,9 +1043,9 @@ fun ConversationScreen(conversationId: String, conversationName: String, recipie
                                     try {
                                         if (recipientUserId.isNotEmpty()) {
                                             val envelope = SessionManager.encryptMessage(context, conversationId, recipientUserId, text)
-                                            APIClient.sendMessage(conversationId, envelope.ciphertext, envelope.iv, envelope.ratchetHeader, "text", disappearTimer)
+                                            APIClient.sendMessage(conversationId, envelope.ciphertext, envelope.iv, envelope.ratchetHeader, "text", disappearTimer, replyTo = replyToId)
                                         } else {
-                                            APIClient.sendMessage(conversationId, text, "", "", "text", disappearTimer)
+                                            APIClient.sendMessage(conversationId, text, "", "", "text", disappearTimer, replyTo = replyToId)
                                         }
                                         messages = messages + APIClient.ChatMessage(
                                             id = "local-${System.currentTimeMillis()}",
@@ -1045,15 +1089,16 @@ fun ConversationScreen(conversationId: String, conversationName: String, recipie
                             val text = inputText.trim()
                             inputText = ""
                             isSending = true
+                            val replyToId = replyingTo?.id
                             replyingTo = null
                             val localId = "queued-${System.currentTimeMillis()}"
                             scope.launch {
                                 try {
                                     if (recipientUserId.isNotEmpty()) {
                                         val envelope = SessionManager.encryptMessage(context, conversationId, recipientUserId, text)
-                                        APIClient.sendMessage(conversationId, envelope.ciphertext, envelope.iv, envelope.ratchetHeader, "text", disappearTimer)
+                                        APIClient.sendMessage(conversationId, envelope.ciphertext, envelope.iv, envelope.ratchetHeader, "text", disappearTimer, replyTo = replyToId)
                                     } else {
-                                        APIClient.sendMessage(conversationId, text, "", "", "text", disappearTimer)
+                                        APIClient.sendMessage(conversationId, text, "", "", "text", disappearTimer, replyTo = replyToId)
                                     }
                                     messages = messages + APIClient.ChatMessage(
                                         id = "local-${System.currentTimeMillis()}",

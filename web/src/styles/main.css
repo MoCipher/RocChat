@@ -108,6 +108,15 @@
 
   --text-xs: 0.6875rem; --text-sm: 0.8125rem; --text-base: 0.9375rem;
   --text-lg: 1.0625rem; --text-xl: 1.25rem; --text-2xl: 1.5rem; --text-3xl: 1.875rem;
+
+  /* ── Aliases for undefined vars used across components ── */
+  --gold: var(--roc-gold);
+  --dark-base: var(--midnight-azure);
+  --bg-subtle: var(--bg-card);
+  --bg-secondary: var(--bg-card);
+  --text-muted: var(--text-tertiary);
+  --border: var(--border-norm);
+  --accent: var(--roc-gold);
 }
 
 /* ── Light Theme (opt-in only: add .light class on <html>) ── */
@@ -1143,6 +1152,7 @@ a:hover { text-decoration: underline; }
 @keyframes messageSlide {
   from { opacity: 0; transform: translateY(8px); }
   to { opacity: 1; transform: translateY(0); }
+}
 
 /* ── Conversation hover shine ── */
 .conversation-item::before {

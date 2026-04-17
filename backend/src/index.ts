@@ -159,12 +159,14 @@ export default {
         if (!userId) return withCors(errorResponse('Missing uid param', 400));
         const obj = await env.MEDIA.get(`avatars/${userId}/${avatarId}`);
         if (!obj) return withCors(errorResponse('Avatar not found', 404));
-        return new Response(obj.body, {
+        return withCors(new Response(obj.body, {
           headers: {
             'content-type': obj.httpMetadata?.contentType || 'image/jpeg',
             'cache-control': 'public, max-age=86400',
+            'x-content-type-options': 'nosniff',
+            'x-frame-options': 'DENY',
           },
-        });
+        }));
       }
 
       // WebSocket upgrade — BEFORE general auth check because browsers
@@ -177,16 +179,29 @@ export default {
         }
 
         const wsToken = url.searchParams.get('token');
+        const wsTicket = url.searchParams.get('ticket');
         const wsUserId = url.searchParams.get('userId');
-        if (!wsToken || !wsUserId) {
-          return withCors(errorResponse('Missing auth params', 400));
+
+        let wsSessionUserId: string | null = null;
+
+        if (wsTicket) {
+          // Preferred: short-lived ticket (30s TTL, single-use)
+          const ticketData = await env.KV.get(`ws-ticket:${wsTicket}`, 'json') as { userId: string; deviceId: string } | null;
+          if (ticketData) {
+            wsSessionUserId = ticketData.userId;
+            await env.KV.delete(`ws-ticket:${wsTicket}`); // single-use
+          }
+        } else if (wsToken && wsUserId) {
+          // Legacy fallback: session token in query string
+          const wsSession = await env.KV.get(`session:${wsToken}`, 'json') as {
+            userId: string; deviceId: string; expiresAt: number;
+          } | null;
+          if (wsSession && wsSession.userId === wsUserId && Date.now() / 1000 <= wsSession.expiresAt) {
+            wsSessionUserId = wsSession.userId;
+          }
         }
 
-        // Verify session from query params
-        const wsSession = await env.KV.get(`session:${wsToken}`, 'json') as {
-          userId: string; deviceId: string; expiresAt: number;
-        } | null;
-        if (!wsSession || wsSession.userId !== wsUserId || Date.now() / 1000 > wsSession.expiresAt) {
+        if (!wsSessionUserId) {
           return withCors(errorResponse('Invalid session', 401));
         }
 
@@ -194,7 +209,7 @@ export default {
         const wsMembership = await env.DB.prepare(
           'SELECT 1 FROM conversation_members WHERE conversation_id = ? AND user_id = ?',
         )
-          .bind(conversationId, wsSession.userId)
+          .bind(conversationId, wsSessionUserId)
           .first();
 
         if (!wsMembership) {
@@ -211,6 +226,16 @@ export default {
       const session = await verifySession(request, env);
       if (!session) {
         return withCors(errorResponse('Unauthorized', 401));
+      }
+
+      // Issue short-lived WebSocket ticket (30s TTL)
+      if (path === '/api/ws/ticket' && request.method === 'POST') {
+        const ticket = crypto.randomUUID();
+        await env.KV.put(`ws-ticket:${ticket}`, JSON.stringify({
+          userId: session.userId,
+          deviceId: session.deviceId,
+        }), { expirationTtl: 30 });
+        return withCors(jsonResponse({ ticket }));
       }
 
       // Logout (authenticated)

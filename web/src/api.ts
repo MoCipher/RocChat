@@ -366,6 +366,10 @@ export function getPreKeyBundle(userId: string) {
   return req(`/keys/bundle/${userId}`);
 }
 
+export function getWsTicket() {
+  return req<{ ticket: string }>('/ws/ticket', { method: 'POST' });
+}
+
 // ── Profile ──
 
 export function getMe() {

@@ -117,7 +117,7 @@ function renderApp() {
   app.innerHTML = `
     <div class="app-layout">
       <div id="sidebar-container"></div>
-      <div id="main-content" style="display:flex;flex:1;min-width:0"></div>
+      <div id="main-content" tabindex="-1" style="display:flex;flex:1;min-width:0;outline:none"></div>
     </div>
   `;
 
@@ -144,6 +144,13 @@ function renderApp() {
       renderSettings(main);
       break;
   }
+
+  // Focus management: move focus to main content after route change
+  requestAnimationFrame(() => {
+    const heading = main.querySelector('h1, h2, h3, [tabindex="-1"]') as HTMLElement;
+    if (heading) { heading.setAttribute('tabindex', '-1'); heading.focus({ preventScroll: true }); }
+    else main.focus({ preventScroll: true });
+  });
 }
 
 const PRE_KEY_THRESHOLD = 5;

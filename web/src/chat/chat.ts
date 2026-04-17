@@ -469,12 +469,12 @@ function renderConversationsList(filter = '') {
       return `
         <div class="swipe-container" data-conv-id="${c.id}">
           <div class="swipe-actions-right">
-            <button class="swipe-action swipe-pin" title="${c.pinned ? 'Unpin' : 'Pin'}">📌</button>
+            <button class="swipe-action swipe-pin" title="${c.pinned ? 'Unpin' : 'Pin'}" aria-label="${c.pinned ? 'Unpin conversation' : 'Pin conversation'}">📌</button>
             <button class="swipe-action swipe-mute" title="Mute"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18.8 5.2a1 1 0 0 0-1.4 0l-12 12a1 1 0 1 0 1.4 1.4l12-12a1 1 0 0 0 0-1.4z"/><path d="M2 1 1 2"/><path d="m7 7-3.8 3.8a2 2 0 0 0 0 2.8L8 18.4a2 2 0 0 0 2.8 0L14.7 14.7"/><path d="m10 10 4-4a2 2 0 0 1 2.8 0l2.4 2.4a2 2 0 0 1 0 2.8L15.3 15.3"/></svg></button>
             <button class="swipe-action swipe-archive" title="Archive"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></svg></button>
             <button class="swipe-action swipe-delete" title="Delete"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg></button>
           </div>
-          <div class="conversation-item swipeable ${isActive ? 'active' : ''}" data-id="${c.id}" role="button" tabindex="0" aria-label="Chat with ${escapeHtml(name)}">
+          <div class="conversation-item swipeable ${isActive ? 'active' : ''}" data-id="${c.id}" role="button" tabindex="0" aria-label="Chat with ${escapeHtml(name)}" ${isActive ? 'aria-current="true"' : ''}>
             ${renderAvatar(name, other?.avatar_url, other?.user_id, 50, 18, other?.account_tier)}
             <div class="conversation-info">
               <div class="conversation-name">${escapeHtml(name)}</div>
@@ -1118,6 +1118,8 @@ async function sendMessageHandler() {
       const queueItem: QueuedMessage = { payload, localId, conversationId: state.activeConversationId };
       messageQueue.push(queueItem);
       persistQueueItem(queueItem);
+      // Register background sync so SW retries when connectivity returns
+      navigator.serviceWorker?.ready?.then(reg => (reg as any).sync?.register?.('message-queue')).catch(() => {});
       showToast('Message queued — will send when online', 'error');
     }
   } catch {
@@ -1164,7 +1166,7 @@ async function sendGifMessage(conversationId: string, gifUrl: string, previewUrl
   }
 }
 
-function connectWebSocket(conversationId: string) {
+async function connectWebSocket(conversationId: string) {
   // Close existing WS
   if (state.ws) {
     state.ws.close();
@@ -1180,7 +1182,19 @@ function connectWebSocket(conversationId: string) {
   // cannot handle WebSocket upgrade requests (fetch() strips Upgrade header).
   const wsHost = location.hostname === 'localhost' ? location.host : 'rocchat-api.spoass.workers.dev';
   const deviceId = localStorage.getItem('rocchat_device_id') || 'web';
-  const wsUrl = `${proto}//${wsHost}/api/ws/${conversationId}?userId=${userId}&deviceId=${deviceId}&token=${token}`;
+
+  // Get a short-lived WS ticket to avoid putting session token in the URL
+  let wsUrl: string;
+  try {
+    const ticketRes = await api.getWsTicket();
+    if (ticketRes.ok && ticketRes.data?.ticket) {
+      wsUrl = `${proto}//${wsHost}/api/ws/${conversationId}?userId=${userId}&deviceId=${deviceId}&ticket=${ticketRes.data.ticket}`;
+    } else {
+      wsUrl = `${proto}//${wsHost}/api/ws/${conversationId}?userId=${userId}&deviceId=${deviceId}&token=${token}`;
+    }
+  } catch {
+    wsUrl = `${proto}//${wsHost}/api/ws/${conversationId}?userId=${userId}&deviceId=${deviceId}&token=${token}`;
+  }
 
   try {
     const ws = new WebSocket(wsUrl);
@@ -1520,6 +1534,7 @@ function showNewChatDialog(container: HTMLElement) {
   `;
 
   document.body.appendChild(overlay);
+  trapFocusInOverlay(overlay);
 
   let isGroup = false;
   const selectedMembers: { userId: string; displayName: string; username: string }[] = [];
@@ -1781,6 +1796,7 @@ function showScheduleDialog(conversationId: string, input: HTMLTextAreaElement) 
   });
 
   document.body.appendChild(overlay);
+  trapFocusInOverlay(overlay);
 }
 
 function initSwipeActions(listEl: HTMLElement) {
@@ -1881,6 +1897,7 @@ function initSwipeActions(listEl: HTMLElement) {
         </div>
       `;
       document.body.appendChild(overlay);
+      trapFocusInOverlay(overlay);
       overlay.querySelector('#notif-cancel')?.addEventListener('click', () => overlay.remove());
       overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
       overlay.querySelectorAll('.notif-mode-btn').forEach(btn => {
@@ -1955,6 +1972,7 @@ function showDisappearingMenu(conversationId: string) {
   `;
 
   document.body.appendChild(overlay);
+  trapFocusInOverlay(overlay);
 
   overlay.querySelector('#close-disappear')?.addEventListener('click', () => overlay.remove());
   overlay.addEventListener('click', (e) => {
@@ -2025,6 +2043,7 @@ function showConversationThemePicker(conversationId: string) {
   `;
 
   document.body.appendChild(overlay);
+  trapFocusInOverlay(overlay);
   overlay.querySelector('#close-theme')?.addEventListener('click', () => overlay.remove());
   overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
 
@@ -2098,6 +2117,7 @@ async function showSafetyNumber(conv: Conversation) {
   `;
 
   document.body.appendChild(overlay);
+  trapFocusInOverlay(overlay);
 
   if (typeof (window as any).lucide !== 'undefined') {
     (window as any).lucide.createIcons({ attrs: {}, nameAttr: 'data-lucide' });
@@ -2134,6 +2154,25 @@ function updateSafetyBadge(conv: Conversation) {
 }
 
 // ── Helpers ──
+
+/** Add focus trap + Esc-to-close to an overlay dialog */
+function trapFocusInOverlay(overlay: HTMLElement) {
+  const prev = document.activeElement as HTMLElement | null;
+  const focusable = 'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
+  overlay.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') { overlay.remove(); prev?.focus(); return; }
+    if (e.key !== 'Tab') return;
+    const els = Array.from(overlay.querySelectorAll<HTMLElement>(focusable));
+    if (!els.length) return;
+    const first = els[0], last = els[els.length - 1];
+    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+  });
+  requestAnimationFrame(() => {
+    const first = overlay.querySelector<HTMLElement>(focusable);
+    first?.focus();
+  });
+}
 
 function getConversationName(conv: Conversation, userId: string): string {
   if (conv.name) return conv.name;
@@ -2223,6 +2262,7 @@ function beginRecording(kind: 'audio' | 'video', conversationId: string, stream:
 
   const overlay = buildRecordingOverlay(kind);
   document.body.appendChild(overlay);
+  trapFocusInOverlay(overlay);
 
   const rec: RecordingState = {
     kind, conversationId, stream, recorder, chunks: [],
@@ -3049,6 +3089,7 @@ export function showVaultComposer() {
     </div>
   </div>`;
   document.body.appendChild(overlay);
+  trapFocusInOverlay(overlay);
 
   const fieldsDiv = overlay.querySelector('#vault-fields')!;
   const typeSelect = overlay.querySelector('#vault-type') as HTMLSelectElement;

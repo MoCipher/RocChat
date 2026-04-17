@@ -25,7 +25,7 @@ import {
 import { encode, decode, fromBase64, toBase64, generateX25519KeyPair } from '@rocchat/shared';
 import * as api from '../api.js';
 import { decryptPrivateKeys, deriveVaultKey } from './client-crypto.js';
-import { getSecretString } from './secure-store.js';
+import { getSecretString, putSecretString } from './secure-store.js';
 
 // ── IndexedDB for ratchet state persistence ──
 
@@ -153,21 +153,26 @@ let cachedIdentityDHKeyPair: X25519KeyPair | null = null;
 async function getIdentityDHKeyPair(): Promise<X25519KeyPair> {
   if (cachedIdentityDHKeyPair) return cachedIdentityDHKeyPair;
 
-  const stored = localStorage.getItem('rocchat_identity_dh');
+  // Try secure-store first, then fall back to localStorage for migration
+  const storedSecure = await getSecretString('rocchat_identity_dh');
+  const stored = storedSecure || localStorage.getItem('rocchat_identity_dh');
   if (stored) {
     const parsed = JSON.parse(stored);
     cachedIdentityDHKeyPair = {
       publicKey: fromBase64(parsed.pub),
       privateKey: fromBase64(parsed.priv),
     };
+    // Migrate from localStorage to secure-store
+    if (!storedSecure) {
+      await putSecretString('rocchat_identity_dh', stored);
+      localStorage.removeItem('rocchat_identity_dh');
+    }
     return cachedIdentityDHKeyPair;
   }
 
   const kp = await generateX25519KeyPair();
-  localStorage.setItem(
-    'rocchat_identity_dh',
-    JSON.stringify({ pub: toBase64(kp.publicKey), priv: toBase64(kp.privateKey) }),
-  );
+  const serialized = JSON.stringify({ pub: toBase64(kp.publicKey), priv: toBase64(kp.privateKey) });
+  await putSecretString('rocchat_identity_dh', serialized);
   cachedIdentityDHKeyPair = kp;
   return kp;
 }

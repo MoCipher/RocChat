@@ -1,7 +1,8 @@
-const CACHE_NAME = 'rocchat-v4';
+const CACHE_NAME = 'rocchat-v5';
 const SHELL_ASSETS = [
   '/',
   '/index.html',
+  '/offline.html',
   '/favicon.svg',
   '/manifest.json',
 ];
@@ -35,7 +36,12 @@ self.addEventListener('push', (event) => {
         icon: '/favicon.svg',
         badge: '/favicon.svg',
         tag: data.tag || 'message',
+        renotify: !!data.tag,
         data: data.url ? { url: data.url } : undefined,
+        actions: [
+          { action: 'open', title: 'Open' },
+          { action: 'dismiss', title: 'Dismiss' },
+        ],
       })
     );
   } catch { /* ignore malformed push */ }
@@ -79,7 +85,7 @@ self.addEventListener('fetch', (event) => {
           caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
           return response;
         })
-        .catch(() => caches.match('/index.html'))
+        .catch(() => caches.match('/index.html').then(r => r || caches.match('/offline.html')))
     );
     return;
   }

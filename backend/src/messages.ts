@@ -142,6 +142,10 @@ export async function handleMessages(
   // DELETE /api/messages/:msgId/react — remove reaction
   if (request.method === 'DELETE' && path.match(/^\/api\/messages\/[^/]+\/react$/)) {
     const msgId = path.split('/')[3];
+    const msg = await env.DB.prepare('SELECT conversation_id FROM messages WHERE id = ?').bind(msgId).first<{ conversation_id: string }>();
+    if (!msg) return errorResponse('Message not found', 404);
+    const member = await env.DB.prepare('SELECT 1 FROM conversation_members WHERE conversation_id = ? AND user_id = ?').bind(msg.conversation_id, session.userId).first();
+    if (!member) return errorResponse('Not a member', 403);
     await env.DB.prepare('DELETE FROM message_reactions WHERE message_id = ? AND user_id = ?')
       .bind(msgId, session.userId).run();
     return jsonResponse({ ok: true });
@@ -150,6 +154,10 @@ export async function handleMessages(
   // GET /api/messages/:msgId/reactions — get reactions for a message
   if (request.method === 'GET' && path.match(/^\/api\/messages\/[^/]+\/reactions$/)) {
     const msgId = path.split('/')[3];
+    const msg = await env.DB.prepare('SELECT conversation_id FROM messages WHERE id = ?').bind(msgId).first<{ conversation_id: string }>();
+    if (!msg) return errorResponse('Message not found', 404);
+    const member = await env.DB.prepare('SELECT 1 FROM conversation_members WHERE conversation_id = ? AND user_id = ?').bind(msg.conversation_id, session.userId).first();
+    if (!member) return errorResponse('Not a member', 403);
     const reactions = await env.DB.prepare(
       'SELECT id, user_id, encrypted_reaction, created_at FROM message_reactions WHERE message_id = ? ORDER BY created_at'
     ).bind(msgId).all();
@@ -229,6 +237,8 @@ export async function handleMessages(
     const parts = path.split('/');
     const convId = parts[4];
     const msgId = parts[6];
+    const member = await env.DB.prepare('SELECT 1 FROM conversation_members WHERE conversation_id = ? AND user_id = ?').bind(convId, session.userId).first();
+    if (!member) return errorResponse('Not a member', 403);
     await env.DB.prepare('DELETE FROM pinned_messages WHERE conversation_id = ? AND message_id = ?')
       .bind(convId, msgId).run();
     return jsonResponse({ ok: true });

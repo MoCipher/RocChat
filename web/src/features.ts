@@ -806,8 +806,8 @@ export function renderCustomEmoji(text: string, escape = true): string {
   const byShort = new Map(list.map((e) => [e.shortcode, e.data_url]));
   const out = (escape ? escapeHtml(text) : text).replace(/:([a-z0-9_]{2,32}):/gi, (m, code) => {
     const url = byShort.get(code.toLowerCase());
-    if (!url || !/^data:image\//.test(url)) return m;
-    return `<img class="custom-emoji" src="${url}" alt=":${code}:" title=":${code}:" style="width:1.3em;height:1.3em;vertical-align:-0.2em" />`;
+    if (!url || !/^data:image\/(png|jpeg|gif|webp|svg\+xml);base64,[A-Za-z0-9+/=]+$/.test(url)) return m;
+    return `<img class="custom-emoji" src="${escapeHtml(url)}" alt=":${code}:" title=":${code}:" style="width:1.3em;height:1.3em;vertical-align:-0.2em" />`;
   });
   return out;
 }

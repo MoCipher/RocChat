@@ -20,6 +20,7 @@
 
 import * as api from './api.js';
 import { chatState } from './chat/chat.js';
+import { escapeHtml } from './utils.js';
 import { aesGcmEncrypt, aesGcmDecrypt, pbkdf2 } from '@rocchat/shared';
 import { argon2id } from 'hash-wasm';
 import { getSecretString, putSecretString } from './crypto/secure-store.js';
@@ -35,10 +36,6 @@ function toast(message: string, type: 'success' | 'error' | 'info' = 'info') {
   el.style.cssText = 'position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:var(--surface-elevated,#1c1814);color:var(--text-primary,#fff);padding:10px 18px;border:1px solid var(--border-strong,rgba(212,175,55,.3));border-radius:10px;z-index:10000;box-shadow:var(--shadow-modal,0 10px 40px rgba(0,0,0,.4));font-size:14px';
   document.body.appendChild(el);
   setTimeout(() => el.remove(), 2600);
-}
-
-function escapeHtml(s: string): string {
-  return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] || c));
 }
 
 // =============================================================================

@@ -64,10 +64,15 @@ export async function rateLimit(
   }
   else { limit = 120; window = 60; bucket = path.split('/').slice(0, 4).join('/'); }
   const key = `rl:${userId}:${bucket}`;
-  const currentStr = await env.KV.get(key);
-  const current = currentStr ? parseInt(currentStr, 10) : 0;
-  if (current >= limit) return { ok: false };
-  await env.KV.put(key, String(current + 1), { expirationTtl: window });
+  const now = Date.now();
+  const windowMs = window * 1000;
+  const raw = await env.KV.get(key);
+  const timestamps: number[] = raw ? JSON.parse(raw) : [];
+  // Prune entries outside the window
+  const valid = timestamps.filter(t => now - t < windowMs);
+  if (valid.length >= limit) return { ok: false };
+  valid.push(now);
+  await env.KV.put(key, JSON.stringify(valid), { expirationTtl: window });
   return { ok: true };
 }
 

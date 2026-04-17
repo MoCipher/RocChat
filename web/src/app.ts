@@ -401,7 +401,4 @@ function showOnboardingIfNeeded() {
 }
 
 // Boot
-window.addEventListener('DOMContentLoaded', () => {
-  // Small delay to show loading animation
-  setTimeout(init, 600);
-});
+window.addEventListener('DOMContentLoaded', init);

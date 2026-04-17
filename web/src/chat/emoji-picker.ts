@@ -199,6 +199,7 @@ export function initEmojiPicker(
     e.stopPropagation();
     visible = !visible;
     container.style.display = visible ? 'block' : 'none';
+    toggleBtn.setAttribute('aria-expanded', String(visible));
     if (visible) render();
   });
 
@@ -207,6 +208,7 @@ export function initEmojiPicker(
     if (visible && !container.contains(e.target as Node) && e.target !== toggleBtn) {
       visible = false;
       container.style.display = 'none';
+      toggleBtn.setAttribute('aria-expanded', 'false');
     }
   });
 }

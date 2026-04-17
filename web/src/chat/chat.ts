@@ -6,6 +6,7 @@
 
 import * as api from '../api.js';
 import type { Conversation, Message } from '../api.js';
+import { escapeHtml } from '../utils.js';
 import { encryptMessage, decryptMessage, getOrCreateSession } from '../crypto/session-manager.js';
 import { groupEncrypt, groupDecrypt, isGroupEncrypted, handleSenderKeyDistribution } from '../crypto/group-session-manager.js';
 import { maybeRotateSignedPreKey } from '../crypto/client-crypto.js';
@@ -589,7 +590,7 @@ async function openConversation(conversationId: string) {
       <button class="icon-btn" id="vault-btn" title="Share vault item" aria-label="Share vault item">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
       </button>
-      <button class="icon-btn" id="emoji-btn" title="Emoji" aria-label="Emoji">
+      <button class="icon-btn" id="emoji-btn" title="Emoji" aria-label="Emoji" aria-expanded="false" aria-controls="emoji-picker">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" x2="9.01" y1="9" y2="9"/><line x1="15" x2="15.01" y1="9" y2="9"/></svg>
       </button>
       <button class="icon-btn" id="voice-btn" title="Dictate (voice-to-text)" aria-label="Dictate">
@@ -599,7 +600,7 @@ async function openConversation(conversationId: string) {
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2 2"/><path d="M9 2h6"/></svg>
       </button>
       <span id="one-shot-badge" style="display:none;font-size:11px;color:var(--gold,#d4af37);align-self:center;margin:0 4px"></span>
-      <button class="icon-btn" id="gif-btn" title="GIF" aria-label="Send GIF">
+      <button class="icon-btn" id="gif-btn" title="GIF" aria-label="Send GIF" aria-expanded="false" aria-controls="gif-picker">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><text x="12" y="15" text-anchor="middle" font-size="8" font-weight="bold" fill="currentColor" stroke="none">GIF</text></svg>
       </button>
       <textarea class="composer-input" id="message-input" placeholder="Type a message..."
@@ -2191,12 +2192,6 @@ function formatTime(iso: string): string {
   if (diff < 86400_000) return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   if (diff < 604800_000) return d.toLocaleDateString([], { weekday: 'short' });
   return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
-}
-
-function escapeHtml(text: string): string {
-  const div = document.createElement('div');
-  div.textContent = text;
-  return div.innerHTML;
 }
 
 function tryParseGif(text: string): { type: string; url: string; preview?: string; width?: number; height?: number } | null {

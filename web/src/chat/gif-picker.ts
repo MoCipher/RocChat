@@ -191,6 +191,7 @@ export function initGifPicker(
     visible = true;
     container.style.display = 'flex';
     container.classList.add('gif-picker-active');
+    toggleBtn.setAttribute('aria-expanded', 'true');
     render();
   }
 
@@ -198,6 +199,7 @@ export function initGifPicker(
     visible = false;
     container.style.display = 'none';
     container.classList.remove('gif-picker-active');
+    toggleBtn.setAttribute('aria-expanded', 'false');
   }
 
   toggleBtn.addEventListener('click', (e) => {

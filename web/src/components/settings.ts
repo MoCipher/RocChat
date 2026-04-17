@@ -436,6 +436,38 @@ export function renderSettings(container: HTMLElement) {
         </div>
 
         <div class="settings-section">
+          <h3>Power-user features</h3>
+          <div class="setting-row">
+            <div>
+              <div class="setting-label">Scheduled messages</div>
+              <div class="setting-desc">View and cancel messages queued for later delivery.</div>
+            </div>
+            <button class="btn-secondary" id="btn-scheduled-mgr">Open</button>
+          </div>
+          <div class="setting-row">
+            <div>
+              <div class="setting-label">Encrypted backup</div>
+              <div class="setting-desc">Export or import your keys, messages, and settings, encrypted with a passphrase.</div>
+            </div>
+            <button class="btn-secondary" id="btn-backup-mgr">Open</button>
+          </div>
+          <div class="setting-row">
+            <div>
+              <div class="setting-label">Decoy conversations</div>
+              <div class="setting-desc">Local-only fake chats for plausible deniability.</div>
+            </div>
+            <button class="btn-secondary" id="btn-decoy-mgr">Open</button>
+          </div>
+          <div class="setting-row">
+            <div>
+              <div class="setting-label">Custom emoji</div>
+              <div class="setting-desc">Upload images and reference them as <code>:shortcode:</code> in messages.</div>
+            </div>
+            <button class="btn-secondary" id="btn-emoji-mgr">Open</button>
+          </div>
+        </div>
+
+        <div class="settings-section">
           <h3>About</h3>
           <div class="setting-row">
             <div>
@@ -811,6 +843,14 @@ export function renderSettings(container: HTMLElement) {
 
   // ── Scheduled Messages ──
   document.getElementById('view-scheduled-btn')?.addEventListener('click', () => showScheduledMessages());
+
+  // ── Power-user features ──
+  import('../features.js').then((features) => {
+    document.getElementById('btn-scheduled-mgr')?.addEventListener('click', () => features.openScheduledMessagesDialog());
+    document.getElementById('btn-backup-mgr')?.addEventListener('click', () => features.openBackupDialog());
+    document.getElementById('btn-decoy-mgr')?.addEventListener('click', () => features.openDecoyManager());
+    document.getElementById('btn-emoji-mgr')?.addEventListener('click', () => features.openCustomEmojiManager());
+  });
 
   // ── Chat Folders ──
   document.getElementById('manage-folders-btn')?.addEventListener('click', () => showFoldersManager());

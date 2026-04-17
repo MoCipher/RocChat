@@ -305,6 +305,18 @@ async function sendMessage(request: Request, env: Env, session: Session): Promis
     return errorResponse('Not a member of this conversation', 403);
   }
 
+  // Mute enforcement — a group moderator may have silenced this user via
+  // /api/groups/:id/mute. If the muted_until column does not exist yet we
+  // treat it as "not muted" (the groups handler adds it lazily on first use).
+  try {
+    const row = await env.DB.prepare(
+      'SELECT muted_until FROM conversation_members WHERE conversation_id = ? AND user_id = ?'
+    ).bind(conversationId, session.userId).first<{ muted_until: number | null }>();
+    if (row && row.muted_until && row.muted_until > Math.floor(Date.now() / 1000)) {
+      return errorResponse('You are muted in this conversation', 403);
+    }
+  } catch { /* column missing — treat as not muted */ }
+
   const messageId = crypto.randomUUID();
   const now = Math.floor(Date.now() / 1000);
   const expiresAt = expiresIn ? now + expiresIn : null;

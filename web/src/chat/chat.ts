@@ -13,6 +13,16 @@ import type { EncryptedMessage } from '@rocchat/shared';
 import { generateSafetyNumber, fromBase64, toBase64, randomBytes, sha256 as cryptoSha256 } from '@rocchat/shared';
 import { initEmojiPicker } from './emoji-picker.js';
 import { initGifPicker } from './gif-picker.js';
+import { attachPreviewIfAny } from './link-preview.js';
+import {
+  consumeOneShotExpiry,
+  openPerMessageTimerMenu,
+  toggleVoiceTranscription,
+  openForwardDialog,
+  openGlobalSearch,
+  openGroupAdminDialog,
+  renderCustomEmoji,
+} from '../features.js';
 
 // ── Lightweight AES-GCM for metadata signals (typing, presence, read receipts) ──
 // Uses a per-conversation key derived from HKDF(identityKey + conversationId)
@@ -241,6 +251,9 @@ export async function renderChats(container: HTMLElement) {
       <div class="panel-header">
         <div class="panel-header-top">
           <h2>Chats</h2>
+          <button class="icon-btn" id="global-search-btn" title="Search (⌘/Ctrl+K)" aria-label="Search">
+            <i data-lucide="search" style="width:18px;height:18px"></i>
+          </button>
           <button class="icon-btn" id="new-chat-btn" title="New conversation">
             <i data-lucide="edit" style="width:18px;height:18px"></i>
           </button>
@@ -300,6 +313,19 @@ export async function renderChats(container: HTMLElement) {
   container.querySelector('#new-chat-btn')?.addEventListener('click', () => {
     showNewChatDialog(container);
   });
+
+  // Global search button
+  container.querySelector('#global-search-btn')?.addEventListener('click', () => openGlobalSearch());
+  // Keyboard shortcut Cmd/Ctrl+K
+  if (!(window as any).__rcSearchShortcut) {
+    (window as any).__rcSearchShortcut = true;
+    document.addEventListener('keydown', (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        openGlobalSearch();
+      }
+    });
+  }
 
   // Search filter (debounced)
   let searchTimeout: ReturnType<typeof setTimeout>;
@@ -538,6 +564,10 @@ async function openConversation(conversationId: string) {
         <button class="icon-btn" title="Info" id="btn-chat-info" aria-label="Conversation info">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
         </button>
+        ${conv.type === 'group' ? `
+        <button class="icon-btn" title="Manage members" id="btn-group-admin" aria-label="Manage members">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+        </button>` : ''}
       </div>
     </div>
 
@@ -560,6 +590,13 @@ async function openConversation(conversationId: string) {
       <button class="icon-btn" id="emoji-btn" title="Emoji" aria-label="Emoji">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" x2="9.01" y1="9" y2="9"/><line x1="15" x2="15.01" y1="9" y2="9"/></svg>
       </button>
+      <button class="icon-btn" id="voice-btn" title="Dictate (voice-to-text)" aria-label="Dictate">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/></svg>
+      </button>
+      <button class="icon-btn" id="msg-timer-btn" title="Per-message timer" aria-label="Per-message timer">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2 2"/><path d="M9 2h6"/></svg>
+      </button>
+      <span id="one-shot-badge" style="display:none;font-size:11px;color:var(--gold,#d4af37);align-self:center;margin:0 4px"></span>
       <button class="icon-btn" id="gif-btn" title="GIF" aria-label="Send GIF">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><text x="12" y="15" text-anchor="middle" font-size="8" font-weight="bold" fill="currentColor" stroke="none">GIF</text></svg>
       </button>
@@ -713,6 +750,20 @@ async function openConversation(conversationId: string) {
     showScheduleDialog(conversationId, input);
   });
 
+  // Voice-to-text dictation
+  const voiceBtn = chatView.querySelector('#voice-btn') as HTMLElement | null;
+  if (voiceBtn && input) {
+    voiceBtn.addEventListener('click', () => toggleVoiceTranscription(input, voiceBtn));
+  }
+  // Per-message disappear timer
+  chatView.querySelector('#msg-timer-btn')?.addEventListener('click', (e) => {
+    openPerMessageTimerMenu(e.currentTarget as HTMLElement);
+  });
+  // Group moderation (group conversations only)
+  chatView.querySelector('#btn-group-admin')?.addEventListener('click', () => {
+    if (state.activeConversationId) openGroupAdminDialog(state.activeConversationId);
+  });
+
   if (typeof (window as any).lucide !== 'undefined') {
     (window as any).lucide.createIcons();
   }
@@ -826,7 +877,11 @@ function renderMessages(messages: Message[]) {
           } catch { if (bubble) { const t = bubble.querySelector('.message-text'); if (t) t.textContent = cached; } }
         } else {
           const textEl = div.querySelector('.message-text');
-          if (textEl) textEl.textContent = cached;
+          if (textEl) {
+            (textEl as HTMLElement).innerHTML = renderCustomEmoji(cached, true);
+            const bubbleEl = div.querySelector('.message-bubble') as HTMLElement | null;
+            if (bubbleEl) attachPreviewIfAny(bubbleEl, cached);
+          }
         }
         return;
       }
@@ -873,7 +928,11 @@ function renderMessages(messages: Message[]) {
             } catch { if (bubble) { const t = bubble.querySelector('.message-text'); if (t) t.textContent = plaintext; } }
           } else {
             const textEl = div.querySelector('.message-text');
-            if (textEl) textEl.textContent = plaintext;
+            if (textEl) {
+              (textEl as HTMLElement).innerHTML = renderCustomEmoji(plaintext, true);
+              const bubbleEl = div.querySelector('.message-bubble') as HTMLElement | null;
+              if (bubbleEl) attachPreviewIfAny(bubbleEl, plaintext);
+            }
           }
         })
         .catch(() => {
@@ -914,7 +973,7 @@ async function sendMessageHandler() {
   const localId = `queued-${Date.now()}`;
 
   try {
-    const expiresIn = disappearTimers.get(state.activeConversationId) || undefined;
+    const expiresIn = consumeOneShotExpiry() ?? (disappearTimers.get(state.activeConversationId) || undefined);
     let payload: Parameters<typeof api.sendMessage>[0];
 
     if (recipientUserId) {
@@ -2987,6 +3046,17 @@ function showMessageContextMenu(e: MouseEvent, msgId: string, isMine: boolean, c
         if (textEl) navigator.clipboard.writeText(textEl.textContent || '');
         showToast('Copied', 'info');
         menu.remove();
+      },
+    },
+    {
+      label: 'Forward',
+      icon: '↪',
+      action: () => {
+        menu.remove();
+        const plaintext = plaintextCache.get(msgId)
+          ?? (document.querySelector(`[data-msg-id="${msgId}"] .message-text`) as HTMLElement | null)?.textContent
+          ?? '';
+        openForwardDialog(msgId, plaintext);
       },
     },
     {

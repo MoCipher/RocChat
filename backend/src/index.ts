@@ -15,6 +15,8 @@ import { handleQrAuth } from './qr-auth.js';
 import { handlePush } from './push.js';
 import { handleBusiness } from './business.js';
 import { handleFeatures } from './features.js';
+import { handleLinkPreview } from './link-preview.js';
+import { handleGroups } from './groups.js';
 import { createPowChallenge } from './pow.js';
 import { ChatRoom } from './durable-objects/ChatRoom.js';
 import { verifySession, rateLimit, jsonResponse, errorResponse, isOriginAllowed, apiError, logEvent } from './middleware.js';
@@ -280,6 +282,16 @@ export default {
       // Premium features (free — scheduled msgs, folders, contacts)
       if (path.startsWith('/api/features')) {
         return withCors(await handleFeatures(request, env, session, url));
+      }
+
+      // Group moderation (promote, kick, mute)
+      if (path.startsWith('/api/groups/')) {
+        return withCors(await handleGroups(request, env, session, url));
+      }
+
+      // Link-preview unfurler (Open Graph) — KV-cached for 24h.
+      if (path === '/api/link-preview') {
+        return withCors(await handleLinkPreview(request, env, url));
       }
 
       // Crypto Donation — the only payment method. No Stripe. No Apple. No Google.

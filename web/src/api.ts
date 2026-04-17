@@ -732,3 +732,52 @@ export function createWebhook(orgId: string, url: string, events?: string[]) {
 export function deleteWebhook(orgId: string, hookId: string) {
   return req<{ ok: boolean }>(`/business/org/${orgId}/webhooks/${hookId}`, { method: 'DELETE' });
 }
+
+// ── Link Previews ──
+
+export interface LinkPreview {
+  url: string;
+  title: string;
+  description: string;
+  image: string;
+  site_name: string;
+}
+
+export function getLinkPreview(url: string) {
+  return req<LinkPreview>(`/link-preview?url=${encodeURIComponent(url)}`);
+}
+
+// ── Group Moderation ──
+
+export interface GroupMember {
+  user_id: string;
+  username: string;
+  role: 'owner' | 'admin' | 'moderator' | 'member';
+  muted_until: number | null;
+  joined_at: number;
+}
+
+export function getGroupMembers(conversationId: string) {
+  return req<{ members: GroupMember[] }>(`/groups/${conversationId}/members`);
+}
+
+export function promoteGroupMember(conversationId: string, userId: string, role: GroupMember['role']) {
+  return req<{ ok: true }>(`/groups/${conversationId}/promote`, {
+    method: 'POST',
+    body: JSON.stringify({ user_id: userId, role }),
+  });
+}
+
+export function kickGroupMember(conversationId: string, userId: string) {
+  return req<{ ok: true }>(`/groups/${conversationId}/kick`, {
+    method: 'POST',
+    body: JSON.stringify({ user_id: userId }),
+  });
+}
+
+export function muteGroupMember(conversationId: string, userId: string, until: number) {
+  return req<{ ok: true; muted_until: number | null }>(`/groups/${conversationId}/mute`, {
+    method: 'POST',
+    body: JSON.stringify({ user_id: userId, until }),
+  });
+}

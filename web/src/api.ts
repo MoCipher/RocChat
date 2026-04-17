@@ -172,6 +172,7 @@ export function sendMessage(body: {
   conversation_id: string;
   ciphertext: string;
   iv: string;
+  tag?: string;
   ratchet_header: string;
   message_type?: string;
   expires_in?: number;
@@ -486,6 +487,7 @@ export interface Message {
   sender_id: string;
   ciphertext: string;
   iv: string;
+  tag?: string;
   ratchet_header: string;
   message_type: string;
   created_at: string;

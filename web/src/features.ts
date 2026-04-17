@@ -213,11 +213,12 @@ async function forwardTo(targetConversationId: string, plaintext: string, _origi
       const { encryptMessage } = await import('./crypto/session-manager.js');
       const enc = await encryptMessage(targetConversationId, recipientId, body);
       const encAny = enc as unknown as Record<string, unknown>;
-      const header = encAny.x3dh ? { ...(enc.header as object), x3dh: encAny.x3dh } : enc.header;
+      const header = { ...(enc.header as object), tag: enc.tag, ...(encAny.x3dh ? { x3dh: encAny.x3dh } : {}) };
       await api.sendMessage({
         conversation_id: targetConversationId,
         ciphertext: enc.ciphertext,
         iv: enc.iv,
+        tag: enc.tag,
         ratchet_header: JSON.stringify(header),
         message_type: 'text',
       });

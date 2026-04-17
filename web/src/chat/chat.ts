@@ -977,7 +977,7 @@ function renderMessages(messages: Message[]) {
             header,
             ciphertext: msg.ciphertext,
             iv: msg.iv,
-            tag: '',
+            tag: msg.tag || header.tag || '',
           } as EncryptedMessage);
 
       decryptPromise
@@ -1037,15 +1037,18 @@ async function sendMessageHandler() {
     if (recipientUserId) {
       // Encrypt with Double Ratchet
       const encrypted = await encryptMessage(state.activeConversationId, recipientUserId, text);
-      // Include X3DH header in ratchet_header if this is the first message
+      // Include X3DH header and tag in ratchet_header so iOS can decode it
       const enc = encrypted as unknown as Record<string, unknown>;
-      const headerObj = enc.x3dh
-        ? { ...encrypted.header, x3dh: enc.x3dh }
-        : encrypted.header;
+      const headerObj = {
+        ...encrypted.header,
+        tag: encrypted.tag,
+        ...(enc.x3dh ? { x3dh: enc.x3dh } : {}),
+      };
       payload = {
         conversation_id: state.activeConversationId,
         ciphertext: encrypted.ciphertext,
         iv: encrypted.iv,
+        tag: encrypted.tag,
         ratchet_header: JSON.stringify(headerObj),
         message_type: 'text',
         expires_in: expiresIn,
@@ -1232,7 +1235,7 @@ async function connectWebSocket(conversationId: string) {
                     header,
                     ciphertext: payload.ciphertext,
                     iv: payload.iv,
-                    tag: payload.tag || '',
+                    tag: payload.tag || header.tag || '',
                   };
                   displayText = await decryptMessage(conversationId, encrypted);
                 }
@@ -2789,7 +2792,8 @@ function showFileUpload(conversationId: string) {
             conversation_id: conversationId,
             ciphertext: encryptedMsg.ciphertext,
             iv: encryptedMsg.iv,
-            ratchet_header: JSON.stringify(encryptedMsg.header),
+            tag: encryptedMsg.tag,
+            ratchet_header: JSON.stringify({ ...encryptedMsg.header, tag: encryptedMsg.tag }),
             message_type: msgType,
           });
         } else if (conv?.type === 'group' && conv.members.length > 2) {
@@ -3123,11 +3127,12 @@ export function showVaultComposer() {
       const { encryptMessage: enc, getOrCreateSession: getSession } = await import('../crypto/session-manager.js');
       await getSession(convId, recipientId);
       const encrypted = await enc(convId, recipientId, vaultMsg);
-      const headerObj = (encrypted as any).x3dh ? { ...encrypted.header, x3dh: (encrypted as any).x3dh } : encrypted.header;
+      const headerObj = (encrypted as any).x3dh ? { ...encrypted.header, tag: encrypted.tag, x3dh: (encrypted as any).x3dh } : { ...encrypted.header, tag: encrypted.tag };
       await api.sendMessage({
         conversation_id: convId,
         ciphertext: encrypted.ciphertext,
         iv: encrypted.iv,
+        tag: encrypted.tag,
         ratchet_header: JSON.stringify(headerObj),
         message_type: 'vault_item',
       });

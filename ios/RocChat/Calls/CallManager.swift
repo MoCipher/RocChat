@@ -253,7 +253,7 @@ class CallManager: ObservableObject {
     // MARK: - Private
 
     private func sendSignal(type: String, extra: [String: String]) {
-        var payload = extra
+        let payload = extra
         let message: [String: Any] = ["type": type, "payload": payload]
         guard let data = try? JSONSerialization.data(withJSONObject: message),
               let str = String(data: data, encoding: .utf8) else { return }
@@ -322,7 +322,7 @@ class CallManager: ObservableObject {
     }
 
     private func configureAudioSession() {
-        try? audioSession.setCategory(.playAndRecord, mode: .voiceChat, options: [.defaultToSpeaker, .allowBluetooth])
+        try? audioSession.setCategory(.playAndRecord, mode: .voiceChat, options: [.defaultToSpeaker, .allowBluetoothA2DP])
         try? audioSession.setActive(true)
     }
 

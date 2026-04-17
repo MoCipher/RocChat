@@ -119,7 +119,7 @@ class GroupSessionManager {
                 )
 
                 // Send as sender_key_distribution message
-                try await APIClient.shared.postRaw("/messages/send", body: [
+                _ = try await APIClient.shared.postRaw("/messages/send", body: [
                     "conversation_id": groupId,
                     "ciphertext": envelope.ciphertext,
                     "iv": envelope.iv,

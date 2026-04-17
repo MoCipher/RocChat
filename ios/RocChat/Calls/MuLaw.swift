@@ -61,7 +61,7 @@ enum MuLaw {
 
     @inline(__always)
     private static func decodeSample(_ byte: UInt8) -> Int16 {
-        var b = Int32(~byte)
+        let b = Int32(~byte)
         let sign = b & 0x80
         let exponent = (b >> 4) & 0x07
         let mantissa = b & 0x0F
@@ -71,7 +71,6 @@ enum MuLaw {
         // Clamp to Int16 range
         if sample > Int32(Int16.max) { sample = Int32(Int16.max) }
         if sample < Int32(Int16.min) { sample = Int32(Int16.min) }
-        _ = b
         return Int16(sample)
     }
 }

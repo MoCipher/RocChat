@@ -460,6 +460,7 @@ async function getMessages(
       sender_id: row.sender_id,
       ciphertext: parsed.ciphertext || '',
       iv: parsed.iv || '',
+      tag: parsed.tag || '',
       ratchet_header: parsed.ratchet_header || (parsed.header ? JSON.stringify(parsed.header) : ''),
       message_type: parsed.message_type || 'text',
       created_at: new Date((row.server_timestamp as number) * 1000).toISOString(),

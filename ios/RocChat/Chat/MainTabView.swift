@@ -586,7 +586,7 @@ struct NewChatView: View {
                     .autocapitalization(.none)
                     .disableAutocorrection(true)
                     .padding()
-                    .onChange(of: searchQuery) { newVal in
+                    .onChange(of: searchQuery) { _, newVal in
                         guard newVal.count >= 3 else { return }
                         Task { await search(newVal) }
                     }
@@ -726,7 +726,7 @@ struct ConversationView: View {
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
                 }
-                .onChange(of: messages.count) { _ in
+                .onChange(of: messages.count) { _, _ in
                     if let last = messages.last {
                         #if canImport(UIKit)
                         UIImpactFeedbackGenerator(style: .soft).impactOccurred()
@@ -938,7 +938,7 @@ struct ConversationView: View {
             }
         }
         .onDisappear { wsTask?.cancel(with: .goingAway, reason: nil); wsTask = nil }
-        .onChange(of: disappearTimer) { newValue in
+        .onChange(of: disappearTimer) { _, newValue in
             UserDefaults.standard.set(newValue, forKey: "disappear_\(conversation.id)")
         }
         .confirmationDialog("Disappearing Messages", isPresented: $showDisappearMenu) {
@@ -1137,7 +1137,7 @@ struct ConversationView: View {
             plaintext: msgStr
         ) else { return }
 
-        try? await APIClient.shared.postRaw("/messages/send", body: [
+        _ = try? await APIClient.shared.postRaw("/messages/send", body: [
             "conversation_id": conversation.id,
             "ciphertext": envelope.ciphertext,
             "iv": envelope.iv,
@@ -1206,7 +1206,7 @@ struct ConversationView: View {
             plaintext: msgStr
         ) else { return }
 
-        try? await APIClient.shared.postRaw("/messages/send", body: [
+        _ = try? await APIClient.shared.postRaw("/messages/send", body: [
             "conversation_id": conversation.id,
             "ciphertext": envelope.ciphertext,
             "iv": envelope.iv,
@@ -1414,7 +1414,7 @@ struct ConversationView: View {
     }
 
     private func flushMessageQueue() async {
-        var queue = loadQueue()
+        let queue = loadQueue()
         var remaining: [[String: String]] = []
         for item in queue {
             guard let convId = item["conversationId"],
@@ -1488,7 +1488,9 @@ struct ConversationView: View {
         guard let token = UserDefaults.standard.string(forKey: "session_token"),
               !userId.isEmpty else { return }
 
-        let urlStr = "wss://chat.mocipher.com/api/ws/\(conversation.id)?userId=\(userId)&deviceId=ios&token=\(token)"
+        // Connect directly to the Worker backend — Pages proxy cannot handle WebSocket upgrades
+        let wsHost = "rocchat-api.spoass.workers.dev"
+        let urlStr = "wss://\(wsHost)/api/ws/\(conversation.id)?userId=\(userId)&deviceId=ios&token=\(token)"
         guard let url = URL(string: urlStr) else { return }
 
         let session = URLSession(configuration: .default)
@@ -1987,7 +1989,7 @@ struct SettingsView: View {
                                 .foregroundColor(.textSecondary)
                         }
                     }
-                    .onChange(of: ghostMode) { val in
+                    .onChange(of: ghostMode) { _, val in
                         Task {
                             if val {
                                 let body: [String: Any] = ["show_read_receipts": 0, "show_typing_indicator": 0, "show_online_to": "nobody", "default_disappear_timer": 86400]
@@ -2001,21 +2003,21 @@ struct SettingsView: View {
                         }
                     }
                     Toggle("Discoverable by username", isOn: $discoverable)
-                        .onChange(of: discoverable) { val in
+                        .onChange(of: discoverable) { _, val in
                             Task {
                                 let body: [String: Any] = ["discoverable": val ? 1 : 0]
                                 _ = try? await APIClient.shared.postRaw("/me/settings", body: body, method: "PATCH")
                             }
                         }
                     Toggle("Read receipts", isOn: $readReceipts)
-                        .onChange(of: readReceipts) { val in
+                        .onChange(of: readReceipts) { _, val in
                             Task {
                                 let body: [String: Any] = ["show_read_receipts": val ? 1 : 0]
                                 _ = try? await APIClient.shared.postRaw("/me/settings", body: body, method: "PATCH")
                             }
                         }
                     Toggle("Typing indicators", isOn: $typingIndicators)
-                        .onChange(of: typingIndicators) { val in
+                        .onChange(of: typingIndicators) { _, val in
                             Task {
                                 let body: [String: Any] = ["show_typing_indicator": val ? 1 : 0]
                                 _ = try? await APIClient.shared.postRaw("/me/settings", body: body, method: "PATCH")
@@ -2026,7 +2028,7 @@ struct SettingsView: View {
                         Text("Contacts only").tag("contacts")
                         Text("Nobody").tag("nobody")
                     }
-                    .onChange(of: onlineVisibility) { val in
+                    .onChange(of: onlineVisibility) { _, val in
                         Task {
                             let body: [String: Any] = ["show_online_to": val]
                             _ = try? await APIClient.shared.postRaw("/me/settings", body: body, method: "PATCH")
@@ -2036,7 +2038,7 @@ struct SettingsView: View {
                         Text("Everyone").tag("everyone")
                         Text("Nobody").tag("nobody")
                     }
-                    .onChange(of: whoCanAdd) { val in
+                    .onChange(of: whoCanAdd) { _, val in
                         Task {
                             let body: [String: Any] = ["who_can_add": val]
                             _ = try? await APIClient.shared.postRaw("/me/settings", body: body, method: "PATCH")
@@ -2047,7 +2049,7 @@ struct SettingsView: View {
 
                 Section("Quiet Hours") {
                     Toggle("Enable Quiet Hours", isOn: $quietHoursEnabled)
-                        .onChange(of: quietHoursEnabled) { val in
+                        .onChange(of: quietHoursEnabled) { _, val in
                             Task {
                                 if val {
                                     let formatter = DateFormatter()
@@ -2065,10 +2067,10 @@ struct SettingsView: View {
                     if quietHoursEnabled {
                         DatePicker("From", selection: $quietStart, displayedComponents: .hourAndMinute)
                             .tint(.rocGold)
-                            .onChange(of: quietStart) { _ in saveQuietHours() }
+                            .onChange(of: quietStart) { _, _ in saveQuietHours() }
                         DatePicker("To", selection: $quietEnd, displayedComponents: .hourAndMinute)
                             .tint(.rocGold)
-                            .onChange(of: quietEnd) { _ in saveQuietHours() }
+                            .onChange(of: quietEnd) { _, _ in saveQuietHours() }
                     }
                     VStack(alignment: .leading, spacing: 4) {
                         Text("During quiet hours, notifications are silenced.")

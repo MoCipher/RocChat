@@ -703,7 +703,8 @@ fun ConversationScreen(conversationId: String, conversationName: String, recipie
     // WebSocket connection
     DisposableEffect(conversationId) {
         val token = APIClient.sessionToken ?: return@DisposableEffect onDispose {}
-        val wsUrl = "wss://chat.mocipher.com/api/ws/$conversationId?userId=$userId&deviceId=android&token=$token"
+        // Connect directly to Worker backend — Pages proxy cannot handle WebSocket upgrades
+        val wsUrl = "wss://rocchat-api.spoass.workers.dev/api/ws/$conversationId?userId=$userId&deviceId=android&token=$token"
 
         val listener = object : NativeWebSocket.Listener {
             override fun onMessage(ws: NativeWebSocket, text: String) {

@@ -12,29 +12,29 @@
 }
 
 :root {
-  /* ── Surfaces ── */
-  --bg-app:          #F5F3ED;
-  --bg-sidebar:      #FEFCF6;
-  --bg-card:         #FEFCF6;
-  --bg-card-hover:   #FAF7EF;
-  --bg-elevated:     #FFFFFF;
-  --bg-input:        #FEFCF6;
+  /* ── Surfaces (DARK is the default — app is designed dark-first) ── */
+  --bg-app:          #151210;
+  --bg-sidebar:      #110E0C;
+  --bg-card:         #1C1814;
+  --bg-card-hover:   #252018;
+  --bg-elevated:     #1C1814;
+  --bg-input:        rgba(212, 175, 55, 0.06);
 
   /* Chat bubbles */
-  --bg-bubble-mine:       rgba(212, 175, 55, 0.12);
-  --bg-bubble-theirs:     #FEFCF6;
-  --bg-bubble-mine-hover: rgba(212, 175, 55, 0.18);
+  --bg-bubble-mine:       rgba(212, 175, 55, 0.15);
+  --bg-bubble-theirs:     #1C1814;
+  --bg-bubble-mine-hover: rgba(212, 175, 55, 0.22);
 
   /* ── Text ── */
-  --text-primary:   #1A1A2E;
-  --text-secondary: #5C5A6E;
-  --text-tertiary:  #706D7B;
-  --text-inverse:   #FFFFFF;
+  --text-primary:   #E8E2D4;
+  --text-secondary: #A09888;
+  --text-tertiary:  #706860;
+  --text-inverse:   #1A1A2E;
 
   /* ── Borders ── */
-  --border-weak:   #E8E2D4;
-  --border-norm:   #D6CEBC;
-  --border-strong: #C4BAA6;
+  --border-weak:   rgba(139, 115, 85, 0.12);
+  --border-norm:   rgba(139, 115, 85, 0.18);
+  --border-strong: rgba(139, 115, 85, 0.32);
 
   /* ── Semantic ── */
   --success: #1EA672;
@@ -61,26 +61,26 @@
   --primary-glow-md: 0 4px 16px rgba(212, 175, 55, 0.3);
 
   /* ── Surface composites ── */
-  --surface-primary:   rgba(255, 253, 245, 0.95);
-  --surface-secondary: rgba(255, 253, 245, 0.8);
-  --surface-elevated:  rgba(255, 253, 245, 0.92);
-  --surface-solid:     #FFFDF5;
+  --surface-primary:   rgba(21, 18, 16, 0.95);
+  --surface-secondary: rgba(21, 18, 16, 0.8);
+  --surface-elevated:  rgba(28, 24, 20, 0.92);
+  --surface-solid:     #1C1814;
 
   /* ── Sidebar ── */
-  --sidebar-bg:     #0D1117;
-  --sidebar-hover:  rgba(212, 175, 55, 0.12);
-  --sidebar-active: rgba(212, 175, 55, 0.2);
+  --sidebar-bg:     #110E0C;
+  --sidebar-hover:  rgba(212, 175, 55, 0.1);
+  --sidebar-active: rgba(212, 175, 55, 0.18);
   --sidebar-border: rgba(212, 175, 55, 0.1);
 
-  /* ── Shadows (golden warm per spec) ── */
-  --shadow-xs:    0 1px 2px rgba(139, 115, 85, 0.06);
-  --shadow-sm:    0 1px 3px rgba(139, 115, 85, 0.08), 0 1px 2px rgba(139, 115, 85, 0.04);
-  --shadow-md:    0 4px 12px rgba(139, 115, 85, 0.1);
-  --shadow-lg:    0 8px 24px rgba(139, 115, 85, 0.12);
-  --shadow-xl:    0 16px 48px rgba(139, 115, 85, 0.14);
-  --shadow-focus: 0 0 0 3px rgba(212, 175, 55, 0.2);
-  --shadow-card:  0 2px 8px rgba(139, 115, 85, 0.08);
-  --shadow-modal: 0 25px 60px rgba(0, 0, 0, 0.12), 0 10px 30px rgba(212, 175, 55, 0.05);
+  /* ── Shadows ── */
+  --shadow-xs:    0 1px 2px rgba(0, 0, 0, 0.2);
+  --shadow-sm:    0 1px 3px rgba(0, 0, 0, 0.25), 0 1px 2px rgba(0, 0, 0, 0.15);
+  --shadow-md:    0 4px 12px rgba(0, 0, 0, 0.3);
+  --shadow-lg:    0 8px 24px rgba(0, 0, 0, 0.35);
+  --shadow-xl:    0 16px 48px rgba(0, 0, 0, 0.4);
+  --shadow-focus: 0 0 0 3px rgba(212, 175, 55, 0.35);
+  --shadow-card:  0 8px 30px rgba(0, 0, 0, 0.3);
+  --shadow-modal: 0 25px 60px rgba(0, 0, 0, 0.5), 0 10px 30px rgba(212, 175, 55, 0.05);
 
   /* ── Transitions (spring + ease per spec) ── */
   --ease-out:           cubic-bezier(0.16, 1, 0.3, 1);
@@ -110,7 +110,47 @@
   --text-lg: 1.0625rem; --text-xl: 1.25rem; --text-2xl: 1.5rem; --text-3xl: 1.875rem;
 }
 
-/* ── Dark Theme ── */
+/* ── Light Theme (opt-in only: add .light class on <html>) ── */
+:root.light {
+  --bg-app:          #F5F3ED;
+  --bg-sidebar:      #0D1117;
+  --bg-card:         #FEFCF6;
+  --bg-card-hover:   #FAF7EF;
+  --bg-elevated:     #FFFFFF;
+  --bg-input:        #FEFCF6;
+
+  --bg-bubble-mine:       rgba(212, 175, 55, 0.12);
+  --bg-bubble-theirs:     #FEFCF6;
+  --bg-bubble-mine-hover: rgba(212, 175, 55, 0.18);
+
+  --text-primary:   #1A1A2E;
+  --text-secondary: #5C5A6E;
+  --text-tertiary:  #706D7B;
+  --text-inverse:   #FFFFFF;
+
+  --border-weak:   #E8E2D4;
+  --border-norm:   #D6CEBC;
+  --border-strong: #C4BAA6;
+
+  --surface-primary:   rgba(255, 253, 245, 0.95);
+  --surface-secondary: rgba(255, 253, 245, 0.8);
+  --surface-elevated:  rgba(255, 253, 245, 0.92);
+  --surface-solid:     #FFFDF5;
+
+  --sidebar-hover:  rgba(212, 175, 55, 0.12);
+  --sidebar-active: rgba(212, 175, 55, 0.2);
+
+  --shadow-xs:    0 1px 2px rgba(139, 115, 85, 0.06);
+  --shadow-sm:    0 1px 3px rgba(139, 115, 85, 0.08), 0 1px 2px rgba(139, 115, 85, 0.04);
+  --shadow-md:    0 4px 12px rgba(139, 115, 85, 0.1);
+  --shadow-lg:    0 8px 24px rgba(139, 115, 85, 0.12);
+  --shadow-xl:    0 16px 48px rgba(139, 115, 85, 0.14);
+  --shadow-focus: 0 0 0 3px rgba(212, 175, 55, 0.2);
+  --shadow-card:  0 2px 8px rgba(139, 115, 85, 0.08);
+  --shadow-modal: 0 25px 60px rgba(0, 0, 0, 0.12), 0 10px 30px rgba(212, 175, 55, 0.05);
+}
+
+/* Legacy .dark class — still supported, already matches :root defaults */
 .dark {
   --bg-app:        #151210;
   --bg-sidebar:    #110E0C;
@@ -142,35 +182,6 @@
 
   --shadow-card:  0 8px 30px rgba(0, 0, 0, 0.3);
   --shadow-modal: 0 25px 60px rgba(0, 0, 0, 0.5), 0 10px 30px rgba(212, 175, 55, 0.05);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root:not(.light) {
-    --bg-app:        #151210;
-    --bg-sidebar:    #110E0C;
-    --bg-card:       #1C1814;
-    --bg-card-hover: #252018;
-    --bg-elevated:   #1C1814;
-    --bg-input:      rgba(212, 175, 55, 0.06);
-    --bg-bubble-mine:   rgba(212, 175, 55, 0.15);
-    --bg-bubble-theirs: #1C1814;
-    --text-primary:   #E8E2D4;
-    --text-secondary: #A09888;
-    --text-tertiary:  #706860;
-    --text-inverse:   #1A1A2E;
-    --border-weak:   rgba(139, 115, 85, 0.12);
-    --border-norm:   rgba(139, 115, 85, 0.18);
-    --border-strong: rgba(139, 115, 85, 0.32);
-    --surface-primary:   rgba(21, 18, 16, 0.95);
-    --surface-secondary: rgba(21, 18, 16, 0.8);
-    --surface-elevated:  rgba(28, 24, 20, 0.92);
-    --surface-solid:     #1C1814;
-    --sidebar-bg:     #110E0C;
-    --sidebar-hover:  rgba(212, 175, 55, 0.1);
-    --sidebar-active: rgba(212, 175, 55, 0.18);
-    --shadow-card:  0 8px 30px rgba(0, 0, 0, 0.3);
-    --shadow-modal: 0 25px 60px rgba(0, 0, 0, 0.5), 0 10px 30px rgba(212, 175, 55, 0.05);
-  }
 }
 
 @media (prefers-reduced-motion: reduce) {

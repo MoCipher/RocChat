@@ -27,10 +27,14 @@ import { renderChats } from './chat/chat.js';
 import { renderCalls } from './calls/calls.js';
 import { renderSettings, applyTheme } from './components/settings.js';
 import { getToken, getPreKeyCount, uploadPreKeys, getMe, registerPushToken, getTransparencyReports, getSupportersWall } from './api.js';
+import { migrateLegacySecrets } from './crypto/secure-store.js';
 
 let currentTab: Tab = 'chats';
 
 function init() {
+  // Migrate any legacy secrets from localStorage to encrypted IDB
+  migrateLegacySecrets().catch(() => {});
+
   // Apply saved theme
   const savedTheme = localStorage.getItem('rocchat_theme') || 'auto';
   applyTheme(savedTheme);

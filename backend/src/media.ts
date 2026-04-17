@@ -97,6 +97,14 @@ async function uploadMedia(request: Request, env: Env, session: Session): Promis
   const mediaId = crypto.randomUUID();
   const r2Key = `${conversationId}/${mediaId}`;
 
+  // Per-user media quota: track upload count in KV (500 files max)
+  const quotaKey = `media_count:${session.userId}`;
+  const countStr = await env.KV.get(quotaKey);
+  const mediaCount = countStr ? parseInt(countStr, 10) : 0;
+  if (mediaCount >= 500) {
+    return errorResponse('Media storage quota exceeded', 413);
+  }
+
   const body = request.body;
   if (!body) return errorResponse('Empty body', 400);
 
@@ -110,6 +118,8 @@ async function uploadMedia(request: Request, env: Env, session: Session): Promis
       uploadedAt: new Date().toISOString(),
     },
   });
+
+  await env.KV.put(quotaKey, String(mediaCount + 1));
 
   return jsonResponse({ mediaId, key: r2Key }, 201);
 }

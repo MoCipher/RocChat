@@ -21,6 +21,7 @@
 import * as api from './api.js';
 import { chatState } from './chat/chat.js';
 import { aesGcmEncrypt, aesGcmDecrypt, pbkdf2 } from '@rocchat/shared';
+import { getSecretString, putSecretString } from './crypto/secure-store.js';
 
 // =============================================================================
 // Toast helper (re-implemented here to avoid a circular import on chat.ts)
@@ -418,7 +419,8 @@ async function snapshotLocalState(): Promise<Record<string, unknown>> {
   ];
   const ls: Record<string, string> = {};
   for (const k of LS_KEYS) {
-    const v = localStorage.getItem(k);
+    // Secret keys live in the encrypted IDB store; fall back to LS for legacy
+    const v = (await getSecretString(k)) ?? localStorage.getItem(k);
     if (v !== null) ls[k] = v;
   }
   snapshot.localStorage = ls;
@@ -513,7 +515,22 @@ export async function importEncryptedBackup(file: File, passphrase: string): Pro
       localStorage: Record<string, string>;
       indexedDB: { ratchet: unknown[]; senderKeys: unknown[]; messageQueue: unknown[] };
     };
-    for (const [k, v] of Object.entries(snapshot.localStorage)) localStorage.setItem(k, v);
+    // Audit #8: Only restore whitelisted keys; route secrets through secure-store
+    const SECRET_KEYS = new Set(['rocchat_identity_priv', 'rocchat_keys', 'rocchat_spk_priv']);
+    const ALLOWED_KEYS = new Set([
+      'rocchat_identity_pub', 'rocchat_identity_priv', 'rocchat_keys', 'rocchat_spk_priv',
+      'rocchat_user_id', 'rocchat_device_id', 'rocchat_plaintext_v1',
+      'rocchat_disappear_timers', 'rocchat_recent_emoji',
+      'rocchat_custom_emoji_v1', 'rocchat_decoy_convs_v1',
+    ]);
+    for (const [k, v] of Object.entries(snapshot.localStorage)) {
+      if (!ALLOWED_KEYS.has(k)) continue;
+      if (SECRET_KEYS.has(k)) {
+        await putSecretString(k, v);
+      } else {
+        localStorage.setItem(k, v);
+      }
+    }
     await restoreObjectStore('rocchat_sessions', 'ratchet_sessions', snapshot.indexedDB.ratchet);
     await restoreObjectStore('rocchat_group_keys', 'sender_keys', snapshot.indexedDB.senderKeys);
     await restoreObjectStore('rocchat_message_queue', 'queue', snapshot.indexedDB.messageQueue);
@@ -705,6 +722,9 @@ export async function addCustomEmoji(shortcode: string, file: File): Promise<voi
     fr.onerror = () => rej(fr.error);
     fr.readAsDataURL(file);
   });
+  if (!/^data:image\/(png|jpeg|gif|webp|svg\+xml);base64,/.test(data_url)) {
+    toast('Invalid image format', 'error'); return;
+  }
   const list = listCustomEmoji().filter((e) => e.shortcode !== s);
   list.push({ shortcode: s, data_url });
   while (list.length > MAX_EMOJI) list.shift();
@@ -722,7 +742,7 @@ export function renderCustomEmoji(text: string, escape = true): string {
   const byShort = new Map(list.map((e) => [e.shortcode, e.data_url]));
   const out = (escape ? escapeHtml(text) : text).replace(/:([a-z0-9_]{2,32}):/gi, (m, code) => {
     const url = byShort.get(code.toLowerCase());
-    if (!url) return m;
+    if (!url || !/^data:image\//.test(url)) return m;
     return `<img class="custom-emoji" src="${url}" alt=":${code}:" title=":${code}:" style="width:1.3em;height:1.3em;vertical-align:-0.2em" />`;
   });
   return out;

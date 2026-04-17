@@ -25,6 +25,7 @@ import {
 import { encode, decode, fromBase64, toBase64, generateX25519KeyPair } from '@rocchat/shared';
 import * as api from '../api.js';
 import { decryptPrivateKeys, deriveVaultKey } from './client-crypto.js';
+import { getSecretString } from './secure-store.js';
 
 // ── IndexedDB for ratchet state persistence ──
 
@@ -175,15 +176,17 @@ async function getIdentityDHKeyPair(): Promise<X25519KeyPair> {
  * Get our Ed25519 identity key pair from local storage.
  * These are stored encrypted; we need the vault key to decrypt.
  */
-function getLocalIdentityKeyPair(): { publicKey: Uint8Array; privateKey: Uint8Array } | null {
-  const pubB64 = localStorage.getItem('rocchat_identity_pub');
-  const encKeys = localStorage.getItem('rocchat_keys');
-  const privB64 = localStorage.getItem('rocchat_identity_priv');
-
-  if (pubB64 && privB64) {
-    return { publicKey: fromBase64(pubB64), privateKey: fromBase64(privB64) };
-  }
-  return null;
+function getLocalIdentityKeyPair(): Promise<{ publicKey: Uint8Array; privateKey: Uint8Array } | null> {
+  return (async () => {
+    const pubB64 = localStorage.getItem('rocchat_identity_pub');
+    const privB64 =
+      (await getSecretString('rocchat_identity_priv')) ||
+      localStorage.getItem('rocchat_identity_priv');
+    if (pubB64 && privB64) {
+      return { publicKey: fromBase64(pubB64), privateKey: fromBase64(privB64) };
+    }
+    return null;
+  })();
 }
 
 // ── Public API ──
@@ -246,7 +249,7 @@ async function performX3DH(conversationId: string, recipientUserId: string): Pro
   };
 
   // Get our identity keys
-  const identityKeyPair = getLocalIdentityKeyPair();
+  const identityKeyPair = await getLocalIdentityKeyPair();
   if (!identityKeyPair) throw new Error('No local identity keys');
 
   const identityDHKeyPair = await getIdentityDHKeyPair();

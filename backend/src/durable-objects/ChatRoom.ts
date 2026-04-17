@@ -17,6 +17,8 @@ interface ConnectedClient {
   ws: WebSocket;
   userId: string;
   deviceId: string;
+  token: string;
+  lastAuthCheck: number;
 }
 
 interface WsMessage {
@@ -104,7 +106,11 @@ export class ChatRoom implements DurableObject {
     }
 
     this.state.acceptWebSocket(server);
-    this.clients.set(clientKey, { ws: server, userId, deviceId });
+    this.clients.set(clientKey, {
+      ws: server, userId, deviceId,
+      token: sessionToken,
+      lastAuthCheck: Date.now(),
+    });
 
     // Notify others that user is online
     this.broadcast(
@@ -113,7 +119,7 @@ export class ChatRoom implements DurableObject {
     );
 
     server.addEventListener('message', (event) => {
-      this.handleMessage(clientKey, event.data);
+      void this.handleMessage(clientKey, event.data);
     });
 
     server.addEventListener('close', () => {
@@ -131,7 +137,7 @@ export class ChatRoom implements DurableObject {
     return new Response(null, { status: 101, webSocket: client });
   }
 
-  private handleMessage(senderKey: string, data: string | ArrayBuffer): void {
+  private async handleMessage(senderKey: string, data: string | ArrayBuffer): Promise<void> {
     if (typeof data !== 'string') return;
 
     let msg: WsMessage;
@@ -143,6 +149,30 @@ export class ChatRoom implements DurableObject {
 
     const sender = this.clients.get(senderKey);
     if (!sender) return;
+
+    // Re-validate session every 60 seconds to catch revoked/expired tokens
+    const SESSION_RECHECK_MS = 60_000;
+    if (Date.now() - sender.lastAuthCheck > SESSION_RECHECK_MS) {
+      const sessionData = await this.env.KV.get(`session:${sender.token}`);
+      if (!sessionData) {
+        try { sender.ws.close(4001, 'Session expired'); } catch {}
+        this.clients.delete(senderKey);
+        return;
+      }
+      try {
+        const sess = JSON.parse(sessionData) as { userId: string; expiresAt: number };
+        if (sess.userId !== sender.userId || sess.expiresAt < Math.floor(Date.now() / 1000)) {
+          try { sender.ws.close(4001, 'Session expired'); } catch {}
+          this.clients.delete(senderKey);
+          return;
+        }
+      } catch {
+        try { sender.ws.close(4001, 'Session invalid'); } catch {}
+        this.clients.delete(senderKey);
+        return;
+      }
+      sender.lastAuthCheck = Date.now();
+    }
 
     switch (msg.type) {
       case 'typing':

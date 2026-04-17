@@ -321,6 +321,14 @@ async function sendMessage(request: Request, env: Env, session: Session): Promis
   const now = Math.floor(Date.now() / 1000);
   const expiresAt = expiresIn ? now + expiresIn : null;
 
+  // Per-user storage quota (10,000 stored messages max)
+  const countRow = await env.DB.prepare(
+    'SELECT COUNT(*) as cnt FROM messages WHERE sender_id = ?'
+  ).bind(session.userId).first<{ cnt: number }>();
+  if (countRow && countRow.cnt >= 10_000) {
+    return errorResponse('Storage quota exceeded — delete old messages first', 413);
+  }
+
   await env.DB.prepare(
     `INSERT INTO messages (id, conversation_id, sender_id, encrypted, server_timestamp, expires_at)
      VALUES (?, ?, ?, ?, ?, ?)`,

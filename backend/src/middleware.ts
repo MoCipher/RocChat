@@ -50,14 +50,20 @@ export async function rateLimit(
 ): Promise<{ ok: boolean }> {
   let limit: number;
   let window: number;
-  if (path.startsWith('/api/messages')) { limit = 60; window = 60; }
-  else if (path === '/api/auth/login') { limit = 5; window = 300; }
-  else if (path === '/api/auth/refresh') { limit = 30; window = 300; }
-  else if (path.startsWith('/api/media')) { limit = 20; window = 3600; }
-  else if (path.startsWith('/api/contacts/search')) { limit = 10; window = 60; }
-  else if (path.startsWith('/api/keys')) { limit = 30; window = 60; }
-  else { limit = 120; window = 60; }
-  const key = `rl:${userId}:${path.split('/').slice(0, 3).join('/')}`;
+  let bucket: string;
+  if (path.startsWith('/api/messages')) { limit = 60; window = 60; bucket = '/api/messages'; }
+  else if (path === '/api/auth/login') { limit = 5; window = 300; bucket = '/api/auth/login'; }
+  else if (path === '/api/auth/refresh') { limit = 30; window = 300; bucket = '/api/auth/refresh'; }
+  else if (path.startsWith('/api/media')) { limit = 20; window = 3600; bucket = '/api/media'; }
+  else if (path.startsWith('/api/contacts/search')) { limit = 10; window = 60; bucket = '/api/contacts/search'; }
+  else if (path.startsWith('/api/keys')) { limit = 30; window = 60; bucket = '/api/keys'; }
+  else if (path.startsWith('/api/groups')) {
+    // Separate buckets for sensitive admin actions vs read operations
+    const action = path.split('/')[4] || 'default'; // e.g. promote, kick, mute, members
+    limit = 30; window = 60; bucket = `/api/groups/:id/${action}`;
+  }
+  else { limit = 120; window = 60; bucket = path.split('/').slice(0, 4).join('/'); }
+  const key = `rl:${userId}:${bucket}`;
   const currentStr = await env.KV.get(key);
   const current = currentStr ? parseInt(currentStr, 10) : 0;
   if (current >= limit) return { ok: false };

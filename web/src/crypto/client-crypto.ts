@@ -20,6 +20,7 @@ import {
   hkdf,
   encode,
 } from '@rocchat/shared';
+import { putSecretString, getSecretString } from './secure-store.js';
 
 const PBKDF2_ITERATIONS = 600_000;
 
@@ -124,13 +125,14 @@ export async function decryptPrivateKeys(
 }
 
 /**
- * Store keys in IndexedDB (encrypted at rest via vault key).
+ * Store keys in IndexedDB (encrypted at rest via vault key AND an
+ * in-browser non-extractable AES-GCM wrap key — defence in depth).
  */
 export async function storeKeysLocally(vaultKey: Uint8Array, bundle: LocalKeyBundle): Promise<void> {
   const encrypted = await encryptPrivateKeys(vaultKey, bundle);
-  localStorage.setItem('rocchat_keys', encrypted);
+  await putSecretString('rocchat_keys', encrypted);
   localStorage.setItem('rocchat_identity_pub', toBase64(bundle.identityKeyPair.publicKey));
-  localStorage.setItem('rocchat_identity_priv', toBase64(bundle.identityKeyPair.privateKey));
+  await putSecretString('rocchat_identity_priv', toBase64(bundle.identityKeyPair.privateKey));
 }
 
 /**
@@ -150,7 +152,9 @@ export async function maybeRotateSignedPreKey(): Promise<void> {
   const lastRotation = Number(localStorage.getItem('rocchat_spk_last_rotation') || '0');
   if (Date.now() - lastRotation < SPK_ROTATION_INTERVAL) return;
 
-  const identityPrivB64 = localStorage.getItem('rocchat_identity_priv');
+  const identityPrivB64 =
+    (await getSecretString('rocchat_identity_priv')) ||
+    localStorage.getItem('rocchat_identity_priv');
   if (!identityPrivB64) return;
 
   try {
@@ -168,12 +172,7 @@ export async function maybeRotateSignedPreKey(): Promise<void> {
 
     if (res.ok) {
       localStorage.setItem('rocchat_spk_last_rotation', String(Date.now()));
-      // Update stored SPK private key
-      const keysBlob = localStorage.getItem('rocchat_keys');
-      if (keysBlob) {
-        // Store new SPK private alongside for session use
-        localStorage.setItem('rocchat_spk_priv', toBase64(newSpk.privateKey));
-      }
+      await putSecretString('rocchat_spk_priv', toBase64(newSpk.privateKey));
     }
   } catch {
     // Non-critical — will retry next load

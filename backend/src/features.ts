@@ -33,6 +33,15 @@ export async function handleFeatures(
     }
 
     const id = crypto.randomUUID();
+
+    // Per-user scheduled message quota (100 max)
+    const countRow = await env.DB.prepare(
+      'SELECT COUNT(*) as cnt FROM scheduled_messages WHERE sender_id = ?'
+    ).bind(session.userId).first<{ cnt: number }>();
+    if (countRow && countRow.cnt >= 100) {
+      return errorResponse('Scheduled message quota exceeded', 413);
+    }
+
     await env.DB.prepare(
       'INSERT INTO scheduled_messages (id, conversation_id, sender_id, encrypted, scheduled_at) VALUES (?, ?, ?, ?, ?)'
     ).bind(id, convId, session.userId, encrypted, scheduledAt).run();

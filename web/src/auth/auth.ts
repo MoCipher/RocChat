@@ -17,6 +17,7 @@ import {
 import { toBase64, fromBase64, generateX25519KeyPair } from '@rocchat/shared';
 import { generateRecoveryPhrase } from '../crypto/recovery-phrase.js';
 import { setKeyMaterial } from '../crypto/session-manager.js';
+import { putSecretString } from '../crypto/secure-store.js';
 
 export function renderAuth(container: HTMLElement, onSuccess: () => void) {
   let mode: 'login' | 'register' = 'login';
@@ -216,9 +217,9 @@ export function renderAuth(container: HTMLElement, onSuccess: () => void) {
       if (res.data.encrypted_keys) {
         try {
           const keys = await decryptPrivateKeys(vaultKey, res.data.encrypted_keys);
-          localStorage.setItem('rocchat_keys', res.data.encrypted_keys);
+          await putSecretString('rocchat_keys', res.data.encrypted_keys);
           localStorage.setItem('rocchat_identity_pub', res.data.identity_key);
-          localStorage.setItem('rocchat_identity_priv', toBase64(keys.identityPrivateKey));
+          await putSecretString('rocchat_identity_priv', toBase64(keys.identityPrivateKey));
 
           // Store SPK public from server response for X3DH responder
           if (res.data.signed_pre_key_public) {

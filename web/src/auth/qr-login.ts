@@ -6,6 +6,7 @@
  */
 
 import * as api from '../api.js';
+import { putSecretString } from '../crypto/secure-store.js';
 
 // ── Roc Bird SVG for QR center overlay ──
 const ROC_BIRD_QR = `<svg viewBox="0 0 64 64" width="56" height="56">
@@ -400,7 +401,7 @@ export function renderQrLogin(container: HTMLElement, onSuccess: () => void, onB
         api.setToken(res.data.session_token!);
         localStorage.setItem('rocchat_user_id', res.data.user_id!);
         if (res.data.encrypted_keys) {
-          localStorage.setItem('rocchat_keys', res.data.encrypted_keys);
+          await putSecretString('rocchat_keys', res.data.encrypted_keys);
         }
         if (res.data.identity_key) {
           localStorage.setItem('rocchat_identity_pub', res.data.identity_key);

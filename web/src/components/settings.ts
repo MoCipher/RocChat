@@ -4,6 +4,7 @@
 
 import * as api from '../api.js';
 import { generateQRCodeSVG } from '../auth/qr-login.js';
+import { clearAllSecrets } from '../crypto/secure-store.js';
 
 function showToast(message: string, type: 'success' | 'error' = 'success') {
   let container = document.getElementById('toast-container');
@@ -778,6 +779,7 @@ export function renderSettings(container: HTMLElement) {
     localStorage.removeItem('rocchat_identity_priv');
     localStorage.removeItem('rocchat_identity_dh');
     localStorage.removeItem('rocchat_spk_pub');
+    await clearAllSecrets();
     sessionStorage.clear();
     location.reload();
   });

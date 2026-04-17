@@ -107,9 +107,15 @@ async function authorize(
 
   // Create a new session token for the web client
   const webSessionToken = crypto.randomUUID();
+  const deviceId = crypto.randomUUID();
+  const expiresAt = Math.floor(Date.now() / 1000) + 86400 * 7;
+  // Create a devices row for the web QR session
+  await env.DB.prepare(
+    'INSERT OR IGNORE INTO devices (id, user_id, name, platform, created_at, last_active) VALUES (?, ?, ?, ?, unixepoch(), unixepoch())'
+  ).bind(deviceId, user.id, 'Web (QR)', 'web').run();
   await env.KV.put(
     `session:${webSessionToken}`,
-    JSON.stringify({ userId: user.id, device: 'web', created: Date.now() }),
+    JSON.stringify({ userId: user.id, deviceId, expiresAt }),
     { expirationTtl: 86400 * 7 }, // 7 days
   );
 

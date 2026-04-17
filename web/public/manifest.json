@@ -4,7 +4,7 @@
   "description": "End-to-end encrypted messaging. Messages. Calls. Nothing else.",
   "start_url": "/",
   "display": "standalone",
-  "orientation": "portrait-primary",
+  "orientation": "any",
   "theme_color": "#D4AF37",
   "background_color": "#0D1117",
   "icons": [

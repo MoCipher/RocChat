@@ -7,6 +7,7 @@
 import * as api from '../api.js';
 import type { Conversation, Message } from '../api.js';
 import { escapeHtml } from '../utils.js';
+import { showToast } from '../components/toast.js';
 import { encryptMessage, decryptMessage, getOrCreateSession } from '../crypto/session-manager.js';
 import { groupEncrypt, groupDecrypt, isGroupEncrypted, handleSenderKeyDistribution } from '../crypto/group-session-manager.js';
 import { maybeRotateSignedPreKey } from '../crypto/client-crypto.js';
@@ -226,26 +227,6 @@ window.addEventListener('offline', () => {
   document.getElementById('offline-banner')?.classList.add('visible');
 });
 
-// ── Toast Notifications ──
-function showToast(message: string, type: 'success' | 'error' | 'info' = 'info') {
-  let container = document.querySelector('.toast-container');
-  if (!container) {
-    container = document.createElement('div');
-    container.className = 'toast-container';
-    container.setAttribute('role', 'alert');
-    container.setAttribute('aria-live', 'polite');
-    document.body.appendChild(container);
-  }
-  const toast = document.createElement('div');
-  toast.className = `toast toast-${type}`;
-  toast.textContent = message;
-  container.appendChild(toast);
-  setTimeout(() => {
-    toast.classList.add('toast-exit');
-    toast.addEventListener('animationend', () => toast.remove());
-  }, 3000);
-}
-
 export async function renderChats(container: HTMLElement) {
   container.innerHTML = `
     <div class="panel-list" id="conversations-panel">
@@ -308,7 +289,7 @@ export async function renderChats(container: HTMLElement) {
   }
 
   // Rotate signed pre-key if needed (non-blocking)
-  maybeRotateSignedPreKey().catch(() => {});
+  maybeRotateSignedPreKey().catch(e => console.warn('SPK rotation failed:', e));
 
   // Bind new chat
   container.querySelector('#new-chat-btn')?.addEventListener('click', () => {
@@ -3215,10 +3196,12 @@ function showMessageContextMenu(e: MouseEvent, msgId: string, isMine: boolean, c
     {
       label: 'Copy',
       icon: '📋',
-      action: () => {
+      action: async () => {
         const textEl = document.querySelector(`[data-msg-id="${msgId}"] .message-text`);
-        if (textEl) navigator.clipboard.writeText(textEl.textContent || '');
-        showToast('Copied', 'info');
+        try {
+          if (textEl) await navigator.clipboard.writeText(textEl.textContent || '');
+          showToast('Copied', 'info');
+        } catch { showToast('Copy failed', 'error'); }
         menu.remove();
       },
     },

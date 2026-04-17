@@ -5,22 +5,7 @@
 import * as api from '../api.js';
 import { generateQRCodeSVG } from '../auth/qr-login.js';
 import { clearAllSecrets } from '../crypto/secure-store.js';
-
-function showToast(message: string, type: 'success' | 'error' = 'success') {
-  let container = document.getElementById('toast-container');
-  if (!container) {
-    container = document.createElement('div');
-    container.id = 'toast-container';
-    container.className = 'toast-container';
-    container.setAttribute('role', 'alert');
-    document.body.appendChild(container);
-  }
-  const toast = document.createElement('div');
-  toast.className = `toast toast-${type}`;
-  toast.textContent = message;
-  container.appendChild(toast);
-  setTimeout(() => { toast.classList.add('toast-exit'); setTimeout(() => toast.remove(), 300); }, 2500);
-}
+import { showToast } from './toast.js';
 
 async function saveSetting(fn: () => Promise<unknown>) {
   try {

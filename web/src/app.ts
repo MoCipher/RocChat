@@ -58,7 +58,7 @@ window.addEventListener('unhandledrejection', (e) => {
 
 function init() {
   // Migrate any legacy secrets from localStorage to encrypted IDB
-  migrateLegacySecrets().catch(() => {});
+  migrateLegacySecrets().catch(e => console.warn('Secret migration failed:', e));
 
   // Apply saved theme
   const savedTheme = localStorage.getItem('rocchat_theme') || 'auto';

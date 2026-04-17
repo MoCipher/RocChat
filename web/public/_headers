@@ -1,0 +1,7 @@
+/*
+  Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; connect-src 'self' wss://rocchat-api.spoass.workers.dev https://rocchat-api.spoass.workers.dev; img-src 'self' data: blob:; media-src 'self' blob:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; manifest-src 'self'; worker-src 'self'
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: DENY
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: camera=(self), microphone=(self), geolocation=()
+  Strict-Transport-Security: max-age=31536000; includeSubDomains

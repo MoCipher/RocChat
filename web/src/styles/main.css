@@ -806,16 +806,13 @@ a:hover { text-decoration: underline; }
 .message-row {
   display: flex;
   max-width: 70%;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 60px;
+  animation: messageSlide 0.2s var(--ease-out);
 }
 
 .message-row.mine { align-self: flex-end; }
 .message-row.theirs { align-self: flex-start; }
-
-/* Off-screen virtualization for long message histories — browser-native */
-.message-row {
-  content-visibility: auto;
-  contain-intrinsic-size: auto 60px;
-}
 
 .message-bubble {
   padding: var(--sp-2) var(--sp-3);
@@ -1143,19 +1140,9 @@ a:hover { text-decoration: underline; }
 }
 
 /* ── Message row animation ── */
-.message-row {
-  display: flex;
-  max-width: 70%;
-  animation: messageSlide 0.2s var(--ease-out);
-}
-
 @keyframes messageSlide {
   from { opacity: 0; transform: translateY(8px); }
   to { opacity: 1; transform: translateY(0); }
-}
-
-.message-row.mine { align-self: flex-end; }
-.message-row.theirs { align-self: flex-start; }
 
 /* ── Conversation hover shine ── */
 .conversation-item::before {

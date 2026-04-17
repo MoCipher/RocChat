@@ -212,6 +212,18 @@ export function renderSettings(container: HTMLElement) {
         </div>
 
         <div class="settings-section">
+          <h3>Push Notifications</h3>
+          <div class="setting-row">
+            <div>
+              <div class="setting-label">Enable Push Notifications</div>
+              <div class="setting-desc">Receive message alerts even when RocChat is closed</div>
+            </div>
+            <button class="btn btn-outline" id="btn-enable-push" style="font-size:var(--text-xs);padding:6px 16px">Enable</button>
+          </div>
+          <div id="push-status" style="font-size:var(--text-xs);color:var(--text-tertiary);margin-top:var(--sp-1)"></div>
+        </div>
+
+        <div class="settings-section">
           <h3>Quiet Hours</h3>
           <div class="setting-row">
             <div>
@@ -1066,6 +1078,53 @@ export function renderSettings(container: HTMLElement) {
   loadBusinessState();
   loadDonorBadge();
   loadQuietHours();
+
+  // Push notification toggle
+  const pushBtn = document.getElementById('btn-enable-push');
+  const pushStatus = document.getElementById('push-status');
+  if (pushBtn && pushStatus) {
+    // Check current state
+    if ('serviceWorker' in navigator && 'PushManager' in window) {
+      navigator.serviceWorker.getRegistration().then(reg => {
+        if (!reg) { pushStatus.textContent = 'Service worker not available'; return; }
+        reg.pushManager.getSubscription().then(sub => {
+          if (sub) {
+            pushBtn.textContent = 'Disable';
+            pushStatus.textContent = '✅ Push notifications are enabled';
+          } else {
+            pushBtn.textContent = 'Enable';
+            pushStatus.textContent = 'Push notifications are disabled';
+          }
+        });
+      });
+    } else {
+      pushBtn.style.display = 'none';
+      pushStatus.textContent = 'Push notifications not supported in this browser';
+    }
+    pushBtn.addEventListener('click', async () => {
+      const reg = await navigator.serviceWorker.getRegistration();
+      if (!reg) return;
+      const sub = await reg.pushManager.getSubscription();
+      if (sub) {
+        // Unsubscribe
+        await sub.unsubscribe();
+        pushBtn.textContent = 'Enable';
+        pushStatus.textContent = 'Push notifications are disabled';
+        showToast('Push notifications disabled', 'success');
+      } else {
+        // Subscribe
+        if ((window as any).__rocchatEnablePush) {
+          await (window as any).__rocchatEnablePush();
+          const newSub = await reg.pushManager.getSubscription();
+          if (newSub) {
+            pushBtn.textContent = 'Disable';
+            pushStatus.textContent = '✅ Push notifications are enabled';
+            showToast('Push notifications enabled', 'success');
+          }
+        }
+      }
+    });
+  }
 
   // Quiet hours event handlers
   document.getElementById('save-quiet-hours')?.addEventListener('click', async () => {

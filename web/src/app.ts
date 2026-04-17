@@ -31,6 +31,30 @@ import { migrateLegacySecrets } from './crypto/secure-store.js';
 
 let currentTab: Tab = 'chats';
 
+// ── Error boundary & client error reporter ──
+const ERROR_REPORT_URL = '/api/client-errors';
+const errorQueue: { message: string; source?: string; line?: number; col?: number; stack?: string; ts: number }[] = [];
+let errorFlushTimer: ReturnType<typeof setTimeout> | null = null;
+
+function flushErrors() {
+  if (!errorQueue.length) return;
+  const batch = errorQueue.splice(0, 20);
+  const token = getToken();
+  if (!token) return;
+  navigator.sendBeacon?.(ERROR_REPORT_URL, JSON.stringify({ errors: batch, token }));
+}
+
+window.addEventListener('error', (e) => {
+  errorQueue.push({ message: e.message, source: e.filename, line: e.lineno, col: e.colno, stack: e.error?.stack, ts: Date.now() });
+  if (!errorFlushTimer) errorFlushTimer = setTimeout(() => { errorFlushTimer = null; flushErrors(); }, 5000);
+});
+window.addEventListener('unhandledrejection', (e) => {
+  const msg = e.reason instanceof Error ? e.reason.message : String(e.reason);
+  const stack = e.reason instanceof Error ? e.reason.stack : undefined;
+  errorQueue.push({ message: msg, stack, ts: Date.now() });
+  if (!errorFlushTimer) errorFlushTimer = setTimeout(() => { errorFlushTimer = null; flushErrors(); }, 5000);
+});
+
 function init() {
   // Migrate any legacy secrets from localStorage to encrypted IDB
   migrateLegacySecrets().catch(() => {});

@@ -807,6 +807,35 @@ a:hover { text-decoration: underline; }
   line-height: 1.45;
 }
 
+.reply-quote {
+  padding: var(--sp-1) var(--sp-2);
+  margin-bottom: var(--sp-1);
+  border-left: 3px solid var(--roc-gold, #D4AF37);
+  border-radius: 4px;
+  background: rgba(212, 175, 55, 0.08);
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  cursor: pointer;
+  max-height: 40px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.reply-quote:hover { background: rgba(212, 175, 55, 0.15); }
+
+.reply-banner {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-4);
+  background: var(--surface-primary);
+  border-left: 3px solid var(--roc-gold, #D4AF37);
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+}
+.reply-banner-text { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.reply-banner-close { background: none; border: none; color: var(--text-tertiary); cursor: pointer; font-size: 16px; padding: 4px; }
+
 .message-meta {
   display: flex;
   align-items: center;

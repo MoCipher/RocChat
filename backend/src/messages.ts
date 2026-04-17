@@ -98,6 +98,20 @@ export async function handleMessages(
     return jsonResponse({ chat_theme: body.theme });
   }
 
+  // POST /api/messages/conversations/:id/pin — toggle pin conversation
+  if (request.method === 'POST' && path.match(/^\/api\/messages\/conversations\/[^/]+\/pin$/)) {
+    const convId = path.split('/')[4];
+    const member = await env.DB.prepare(
+      'SELECT pinned_at FROM conversation_members WHERE conversation_id = ? AND user_id = ?'
+    ).bind(convId, session.userId).first<{ pinned_at: number | null }>();
+    if (!member) return errorResponse('Not a member', 403);
+    const newPinned = member.pinned_at ? null : Math.floor(Date.now() / 1000);
+    await env.DB.prepare(
+      'UPDATE conversation_members SET pinned_at = ? WHERE conversation_id = ? AND user_id = ?'
+    ).bind(newPinned, convId, session.userId).run();
+    return jsonResponse({ pinned: !!newPinned });
+  }
+
   // ── Message Reactions ──
 
   // POST /api/messages/:msgId/react — add/update reaction
@@ -275,6 +289,7 @@ async function sendMessage(request: Request, env: Env, session: Session): Promis
 
   const expiresIn = (raw.expires_in ?? raw.expiresIn) as number | undefined;
   const messageType = (raw.message_type ?? raw.messageType ?? 'text') as string;
+  const replyTo = (raw.reply_to ?? raw.replyTo) as string | undefined;
 
   if (!conversationId || !encrypted.ciphertext) {
     return errorResponse('Missing conversation_id or message content', 400);
@@ -330,8 +345,8 @@ async function sendMessage(request: Request, env: Env, session: Session): Promis
   }
 
   await env.DB.prepare(
-    `INSERT INTO messages (id, conversation_id, sender_id, encrypted, server_timestamp, expires_at)
-     VALUES (?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO messages (id, conversation_id, sender_id, encrypted, server_timestamp, expires_at, reply_to)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
   )
     .bind(
       messageId,
@@ -340,6 +355,7 @@ async function sendMessage(request: Request, env: Env, session: Session): Promis
       JSON.stringify({ ...encrypted, message_type: messageType }),
       now,
       expiresAt,
+      replyTo || null,
     )
     .run();
 
@@ -411,12 +427,12 @@ async function getMessages(
   let params: unknown[];
 
   if (before !== null) {
-    query = `SELECT id, sender_id, encrypted, server_timestamp, expires_at
+    query = `SELECT id, sender_id, encrypted, server_timestamp, expires_at, reply_to
              FROM messages WHERE conversation_id = ? AND server_timestamp < ?
              ORDER BY server_timestamp DESC LIMIT ?`;
     params = [conversationId, before, limit];
   } else {
-    query = `SELECT id, sender_id, encrypted, server_timestamp, expires_at
+    query = `SELECT id, sender_id, encrypted, server_timestamp, expires_at, reply_to
              FROM messages WHERE conversation_id = ?
              ORDER BY server_timestamp DESC LIMIT ?`;
     params = [conversationId, limit];
@@ -438,6 +454,7 @@ async function getMessages(
       message_type: parsed.message_type || 'text',
       created_at: new Date((row.server_timestamp as number) * 1000).toISOString(),
       expires_at: row.expires_at,
+      reply_to: row.reply_to || null,
     };
   });
 
@@ -506,7 +523,7 @@ async function listConversations(env: Env, session: Session, includeArchived: bo
   const archivedFilter = includeArchived ? '' : 'AND cm.archived_at IS NULL';
   const result = await env.DB.prepare(
     `SELECT c.id, c.type, c.encrypted_meta, c.created_at,
-            cm.muted_at, cm.archived_at, cm.chat_theme,
+            cm.muted_at, cm.archived_at, cm.chat_theme, cm.pinned_at,
             (SELECT json_group_array(json_object(
               'user_id', cm2.user_id,
               'username', u2.username,
@@ -522,7 +539,7 @@ async function listConversations(env: Env, session: Session, includeArchived: bo
      FROM conversations c
      JOIN conversation_members cm ON cm.conversation_id = c.id AND cm.user_id = ?
      WHERE 1=1 ${archivedFilter}
-     ORDER BY last_message_at DESC NULLS LAST`,
+     ORDER BY (cm.pinned_at IS NOT NULL) DESC, cm.pinned_at ASC, last_message_at DESC NULLS LAST`,
   )
     .bind(session.userId)
     .all();
@@ -534,6 +551,7 @@ async function listConversations(env: Env, session: Session, includeArchived: bo
     members: JSON.parse(row.members as string || '[]'),
     muted: !!row.muted_at,
     archived: !!row.archived_at,
+    pinned: !!row.pinned_at,
     chat_theme: row.chat_theme || null,
     last_message_at: row.last_message_at
       ? new Date((row.last_message_at as number) * 1000).toISOString()

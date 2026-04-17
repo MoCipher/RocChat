@@ -469,6 +469,7 @@ function renderConversationsList(filter = '') {
       return `
         <div class="swipe-container" data-conv-id="${c.id}">
           <div class="swipe-actions-right">
+            <button class="swipe-action swipe-pin" title="${c.pinned ? 'Unpin' : 'Pin'}">📌</button>
             <button class="swipe-action swipe-mute" title="Mute"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18.8 5.2a1 1 0 0 0-1.4 0l-12 12a1 1 0 1 0 1.4 1.4l12-12a1 1 0 0 0 0-1.4z"/><path d="M2 1 1 2"/><path d="m7 7-3.8 3.8a2 2 0 0 0 0 2.8L8 18.4a2 2 0 0 0 2.8 0L14.7 14.7"/><path d="m10 10 4-4a2 2 0 0 1 2.8 0l2.4 2.4a2 2 0 0 1 0 2.8L15.3 15.3"/></svg></button>
             <button class="swipe-action swipe-archive" title="Archive"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></svg></button>
             <button class="swipe-action swipe-delete" title="Delete"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg></button>
@@ -483,6 +484,7 @@ function renderConversationsList(filter = '') {
             </div>
             <div class="conversation-meta">
               <span class="conversation-time">${time}</span>
+              ${c.pinned ? '<span style="font-size:10px;color:var(--accent)" title="Pinned">📌</span>' : ''}
               ${c.muted ? '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" stroke-width="2" style="margin-top:2px"><line x1="1" y1="1" x2="23" y2="23"/><path d="M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V4a3 3 0 0 0-5.94-.6"/><path d="M17 16.95A7 7 0 0 1 5 12v-2m14 0v2c0 .76-.13 1.49-.35 2.17"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>' : ''}
             </div>
           </div>
@@ -534,7 +536,7 @@ async function openConversation(conversationId: string) {
       </button>
       ${renderAvatar(name, other?.avatar_url, other?.user_id, 36, 13, other?.account_tier)}
       <div class="chat-header-info">
-        <div class="chat-header-name">${escapeHtml(name)}</div>
+        <div class="chat-header-name">${escapeHtml(name)}<span id="safety-badge" style="margin-left:4px;font-size:12px;display:none" title="Identity verified">✅</span></div>
         <div class="chat-header-status">
           <span style="font-size:8px">🔒</span> End-to-end encrypted
         </div>
@@ -644,6 +646,9 @@ async function openConversation(conversationId: string) {
   // Load messages
   await loadMessages(conversationId);
 
+  // Show safety badge if verified
+  updateSafetyBadge(conv);
+
   // Connect WebSocket
   connectWebSocket(conversationId);
 
@@ -656,7 +661,20 @@ async function openConversation(conversationId: string) {
     // Auto-resize
     input.style.height = 'auto';
     input.style.height = Math.min(input.scrollHeight, 120) + 'px';
+    // Save draft
+    const v = input.value;
+    if (v) localStorage.setItem(`rocchat_draft_${conversationId}`, v);
+    else localStorage.removeItem(`rocchat_draft_${conversationId}`);
   });
+
+  // Restore draft
+  const savedDraft = localStorage.getItem(`rocchat_draft_${conversationId}`);
+  if (savedDraft && input) {
+    input.value = savedDraft;
+    sendBtn.disabled = false;
+    input.style.height = 'auto';
+    input.style.height = Math.min(input.scrollHeight, 120) + 'px';
+  }
 
   input?.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -779,9 +797,59 @@ async function loadMessages(conversationId: string) {
       const msgs = res.data.messages || [];
       state.messages.set(conversationId, msgs);
       renderMessages(msgs);
+      // Batch-load reactions for visible messages
+      loadReactionsForMessages(msgs);
     }
   } catch {
     // Offline — show cached
+  }
+}
+
+/** Fetch and display reactions for all messages in the current view */
+async function loadReactionsForMessages(msgs: Message[]) {
+  for (const msg of msgs) {
+    try {
+      const res = await api.getReactions(msg.id) as { ok: boolean; data?: { reactions?: { user_id: string; emoji: string }[] } };
+      if (res.ok && res.data?.reactions?.length) {
+        for (const r of res.data.reactions) {
+          updateReactionUI(msg.id, r.user_id, r.emoji);
+        }
+      }
+    } catch { /* ignore per-message failures */ }
+  }
+}
+
+/** Apply decrypted plaintext content to a message row (shared by cache-hit and async-decrypt paths) */
+function applyDecryptedContent(div: HTMLElement, plaintext: string, isMine: boolean, msg: Message) {
+  const gif = tryParseGif(plaintext);
+  const fileMsg = tryParseFileMessage(plaintext);
+  const bubble = div.querySelector('.message-bubble');
+  if (gif && bubble) {
+    bubble.classList.add('gif-bubble');
+    const textEl = bubble.querySelector('.message-text');
+    if (textEl) {
+      const img = document.createElement('img');
+      img.src = gif.preview || gif.url;
+      img.alt = 'GIF';
+      img.className = 'gif-message';
+      img.decoding = 'async';
+      img.style.cssText = 'max-width:240px;max-height:200px;border-radius:12px;cursor:pointer';
+      textEl.replaceWith(img);
+    }
+  } else if (fileMsg && bubble) {
+    renderFileMessage(bubble, fileMsg, msg.conversation_id);
+  } else if (plaintext.startsWith('{"type":"vault_item"')) {
+    try {
+      const vault = JSON.parse(plaintext);
+      renderVaultItem(bubble!, vault);
+    } catch { if (bubble) { const t = bubble.querySelector('.message-text'); if (t) t.textContent = plaintext; } }
+  } else {
+    const textEl = div.querySelector('.message-text');
+    if (textEl) {
+      (textEl as HTMLElement).innerHTML = renderCustomEmoji(plaintext, true);
+      const bubbleEl = div.querySelector('.message-bubble') as HTMLElement | null;
+      if (bubbleEl) attachPreviewIfAny(bubbleEl, plaintext);
+    }
   }
 }
 
@@ -793,42 +861,98 @@ function renderMessages(messages: Message[]) {
   const now = Math.floor(Date.now() / 1000);
 
   // Filter expired disappearing messages client-side
-  const visible = messages.filter(m => !m.expires_at || m.expires_at > now);
+  const visible = messages.filter(m => !m.expires_at || m.expires_at > now)
+    .filter(m => m.message_type !== 'sender_key_distribution');
 
-  // Keep encryption banner
-  const banner = area.querySelector('.encryption-banner')?.outerHTML || '';
-  area.innerHTML = banner;
+  // Ensure encryption banner exists
+  if (!area.querySelector('.encryption-banner')) {
+    const banner = document.createElement('div');
+    banner.className = 'encryption-banner';
+    banner.innerHTML = '🔒 Messages are end-to-end encrypted';
+    area.prepend(banner);
+  }
+
+  // Build lookup of existing rendered nodes
+  const existingNodes = new Map<string, HTMLElement>();
+  area.querySelectorAll<HTMLElement>('.message-row[data-msg-id]').forEach((el) => {
+    existingNodes.set(el.dataset.msgId!, el);
+  });
+
+  const newIds = new Set(visible.map(m => m.id));
+
+  // Remove nodes for messages no longer in the list (deleted, expired)
+  existingNodes.forEach((el, id) => {
+    if (!newIds.has(id)) el.remove();
+  });
+
+  // Track whether we should auto-scroll (only if already near bottom)
+  const wasAtBottom = area.scrollHeight - area.scrollTop - area.clientHeight < 80;
+
+  let prevChild: Element | null = area.querySelector('.encryption-banner');
 
   visible.forEach((msg) => {
     const isMine = msg.sender_id === userId;
 
-    // Skip sender key distribution messages — not visible
-    if (msg.message_type === 'sender_key_distribution') return;
-
-    const div = document.createElement('div');
-    div.className = `message-row ${isMine ? 'mine' : 'theirs'}`;
-    div.dataset.msgId = msg.id;
-    // a11y: every message is a separate article so screen readers can navigate
-    // through them message-by-message. The aria-label is rebuilt after decrypt.
-    div.setAttribute('role', 'article');
-    div.setAttribute('aria-label', `${isMine ? 'You' : 'Message'} at ${formatTime(msg.created_at)}`);
-
-    // Deleted messages show a placeholder
-    if (msg.deleted_at) {
-      div.innerHTML = `<div class="message-bubble message-deleted"><em>🚫 This message was deleted</em></div>`;
-      area.appendChild(div);
+    // If this message row already exists, skip recreation — just ensure order
+    const existing = existingNodes.get(msg.id);
+    if (existing) {
+      // Update status icon (delivery/read receipts may have changed)
+      const metaEl = existing.querySelector('.message-meta');
+      if (metaEl && isMine) {
+        const statusEl = metaEl.querySelector('.message-status');
+        const newStatus = getStatusIcon(msg.id, isMine);
+        if (statusEl && newStatus) statusEl.outerHTML = newStatus;
+      }
+      // Update edited indicator
+      if (msg.edited_at && !existing.querySelector('.message-edited')) {
+        const timeEl = existing.querySelector('.message-time');
+        if (timeEl) timeEl.insertAdjacentHTML('beforebegin', '<span class="message-edited" title="Edited">edited</span>');
+      }
+      // Update deleted state
+      if (msg.deleted_at && !existing.querySelector('.message-deleted')) {
+        const bubble = existing.querySelector('.message-bubble');
+        if (bubble) bubble.innerHTML = '<em>🚫 This message was deleted</em>';
+        existing.querySelector('.message-bubble')?.classList.add('message-deleted');
+      }
+      // Ensure correct DOM order
+      if (prevChild && prevChild.nextElementSibling !== existing) {
+        prevChild.after(existing);
+      }
+      prevChild = existing;
       return;
     }
 
-    // Try to decrypt if we have ratchet data
+    // ── Create new message row ──
+    const div = document.createElement('div');
+    div.className = `message-row ${isMine ? 'mine' : 'theirs'}`;
+    div.dataset.msgId = msg.id;
+    div.setAttribute('role', 'article');
+    div.setAttribute('aria-label', `${isMine ? 'You' : 'Message'} at ${formatTime(msg.created_at)}`);
+
+    if (msg.deleted_at) {
+      div.innerHTML = `<div class="message-bubble message-deleted"><em>🚫 This message was deleted</em></div>`;
+      if (prevChild) prevChild.after(div); else area.prepend(div);
+      prevChild = div;
+      return;
+    }
+
     const hasRatchet = msg.ratchet_header && msg.iv && msg.ciphertext;
     const displayText = hasRatchet ? '🔒 Decrypting...' : msg.ciphertext;
-
-    // Check if the plaintext is a GIF message
     const gifContent = tryParseGif(displayText);
+
+    // Build reply quote if this message is a reply
+    let replyQuoteHtml = '';
+    if (msg.reply_to) {
+      const quotedPlain = plaintextCache.get(msg.reply_to);
+      const quotedSnippet = quotedPlain
+        ? escapeHtml(quotedPlain.length > 80 ? quotedPlain.slice(0, 80) + '…' : quotedPlain)
+        : '🔒 Encrypted message';
+      replyQuoteHtml = `<div class="reply-quote" data-reply-id="${escapeHtml(msg.reply_to)}">${quotedSnippet}</div>`;
+    }
 
     div.innerHTML = `
       <div class="message-bubble${gifContent ? ' gif-bubble' : ''}">
+        ${replyQuoteHtml}
         ${gifContent
           ? `<img src="${escapeHtml(gifContent.preview || gifContent.url)}" alt="GIF" class="gif-message" loading="lazy" decoding="async" style="max-width:240px;max-height:200px;border-radius:12px;cursor:pointer" />`
           : `<div class="message-text">${escapeHtml(displayText)}</div>`
@@ -842,48 +966,19 @@ function renderMessages(messages: Message[]) {
         </div>
       </div>
     `;
-    // Context menu on right-click / long-press
     div.addEventListener('contextmenu', (e) => {
       e.preventDefault();
       showMessageContextMenu(e as MouseEvent, msg.id, isMine, msg.conversation_id);
     });
-    area.appendChild(div);
 
-    // Async decrypt (both mine and theirs)
+    if (prevChild) prevChild.after(div); else area.prepend(div);
+    prevChild = div;
+
+    // Async decrypt
     if (hasRatchet) {
-      // Fast-path: plaintext cache hit
       const cached = plaintextCache.get(msg.id);
       if (cached !== undefined) {
-        const gif = tryParseGif(cached);
-        const fileMsg = tryParseFileMessage(cached);
-        const bubble = div.querySelector('.message-bubble');
-        if (gif && bubble) {
-          bubble.classList.add('gif-bubble');
-          const textEl = bubble.querySelector('.message-text');
-          if (textEl) {
-            const img = document.createElement('img');
-            img.src = gif.preview || gif.url;
-            img.alt = 'GIF';
-            img.className = 'gif-message';
-            img.decoding = 'async';
-            img.style.cssText = 'max-width:240px;max-height:200px;border-radius:12px;cursor:pointer';
-            textEl.replaceWith(img);
-          }
-        } else if (fileMsg && bubble) {
-          renderFileMessage(bubble, fileMsg, msg.conversation_id);
-        } else if (cached.startsWith('{"type":"vault_item"')) {
-          try {
-            const vault = JSON.parse(cached);
-            renderVaultItem(bubble!, vault);
-          } catch { if (bubble) { const t = bubble.querySelector('.message-text'); if (t) t.textContent = cached; } }
-        } else {
-          const textEl = div.querySelector('.message-text');
-          if (textEl) {
-            (textEl as HTMLElement).innerHTML = renderCustomEmoji(cached, true);
-            const bubbleEl = div.querySelector('.message-bubble') as HTMLElement | null;
-            if (bubbleEl) attachPreviewIfAny(bubbleEl, cached);
-          }
-        }
+        applyDecryptedContent(div, cached, isMine, msg);
         return;
       }
 
@@ -906,39 +1001,9 @@ function renderMessages(messages: Message[]) {
       decryptPromise
         .then((plaintext) => {
           cachePlaintext(msg.id, plaintext);
-          // Update aria-label after successful decryption
           const snippet = plaintext.length > 80 ? plaintext.slice(0, 80) + '…' : plaintext;
           div.setAttribute('aria-label', `${isMine ? 'You' : 'Message'} at ${formatTime(msg.created_at)}: ${snippet}`);
-          const gif = tryParseGif(plaintext);
-          const fileMsg = tryParseFileMessage(plaintext);
-          const bubble = div.querySelector('.message-bubble');
-          if (gif && bubble) {
-            bubble.classList.add('gif-bubble');
-            const textEl = bubble.querySelector('.message-text');
-            if (textEl) {
-              const img = document.createElement('img');
-              img.src = gif.preview || gif.url;
-              img.alt = 'GIF';
-              img.className = 'gif-message';
-              img.decoding = 'async';
-              img.style.cssText = 'max-width:240px;max-height:200px;border-radius:12px;cursor:pointer';
-              textEl.replaceWith(img);
-            }
-          } else if (fileMsg && bubble) {
-            renderFileMessage(bubble, fileMsg, msg.conversation_id);
-          } else if (plaintext.startsWith('{"type":"vault_item"')) {
-            try {
-              const vault = JSON.parse(plaintext);
-              renderVaultItem(bubble!, vault);
-            } catch { if (bubble) { const t = bubble.querySelector('.message-text'); if (t) t.textContent = plaintext; } }
-          } else {
-            const textEl = div.querySelector('.message-text');
-            if (textEl) {
-              (textEl as HTMLElement).innerHTML = renderCustomEmoji(plaintext, true);
-              const bubbleEl = div.querySelector('.message-bubble') as HTMLElement | null;
-              if (bubbleEl) attachPreviewIfAny(bubbleEl, plaintext);
-            }
-          }
+          applyDecryptedContent(div, plaintext, isMine, msg);
         })
         .catch(() => {
           const textEl = div.querySelector('.message-text');
@@ -947,7 +1012,7 @@ function renderMessages(messages: Message[]) {
     }
   });
 
-  area.scrollTop = area.scrollHeight;
+  if (wasAtBottom) area.scrollTop = area.scrollHeight;
 
   // Send encrypted read receipts for unread messages from others
   const unreadIds = messages
@@ -968,9 +1033,15 @@ async function sendMessageHandler() {
   const text = input.value.trim();
   if (!text) return;
 
+  // Capture and clear reply-to
+  const replyTo = input.dataset.replyTo || undefined;
+  delete input.dataset.replyTo;
+  document.getElementById('reply-banner')?.remove();
+
   input.value = '';
   input.style.height = 'auto';
   sendBtn.disabled = true;
+  localStorage.removeItem(`rocchat_draft_${state.activeConversationId}`);
 
   const conv = state.conversations.find((c) => c.id === state.activeConversationId);
   const userId = localStorage.getItem('rocchat_user_id') || '';
@@ -996,6 +1067,7 @@ async function sendMessageHandler() {
         ratchet_header: JSON.stringify(headerObj),
         message_type: 'text',
         expires_in: expiresIn,
+        reply_to: replyTo,
       };
     } else if (conv?.type === 'group' && conv.members.length > 2) {
       // Group encryption with Sender Keys
@@ -1007,6 +1079,7 @@ async function sendMessageHandler() {
         ratchet_header: groupEnc.ratchet_header,
         message_type: 'text',
         expires_in: expiresIn,
+        reply_to: replyTo,
       };
     } else {
       // Fallback for group or unknown
@@ -1016,6 +1089,7 @@ async function sendMessageHandler() {
         iv: '',
         ratchet_header: '',
         expires_in: expiresIn,
+        reply_to: replyTo,
       };
     }
 
@@ -1030,6 +1104,7 @@ async function sendMessageHandler() {
       ratchet_header: '',
       message_type: 'text',
       created_at: new Date().toISOString(),
+      reply_to: replyTo,
     });
     state.messages.set(state.activeConversationId, msgs);
     renderMessages(msgs);
@@ -1378,12 +1453,18 @@ function connectWebSocket(conversationId: string) {
     // Send encrypted typing indicators
     const input = document.getElementById('message-input');
     let typingTimeout: ReturnType<typeof setTimeout>;
+    let lastTypingSent = 0;
+    const TYPING_THROTTLE = 3000; // Only send typing:true at most once per 3s
     input?.addEventListener('input', () => {
       if (!state.ws || state.ws.readyState !== WebSocket.OPEN) return;
       clearTimeout(typingTimeout);
-      encryptMeta(conversationId, { isTyping: true }).then(enc => {
-        state.ws?.send(JSON.stringify({ type: 'typing', payload: { e: enc } }));
-      }).catch(() => {});
+      const now = Date.now();
+      if (now - lastTypingSent >= TYPING_THROTTLE) {
+        lastTypingSent = now;
+        encryptMeta(conversationId, { isTyping: true }).then(enc => {
+          state.ws?.send(JSON.stringify({ type: 'typing', payload: { e: enc } }));
+        }).catch(() => {});
+      }
       typingTimeout = setTimeout(() => {
         if (state.ws?.readyState === WebSocket.OPEN) {
           encryptMeta(conversationId, { isTyping: false }).then(enc => {
@@ -1762,6 +1843,17 @@ function initSwipeActions(listEl: HTMLElement) {
         renderConversationsList();
       }
     });
+    container.querySelector('.swipe-pin')?.addEventListener('click', async () => {
+      item.style.transition = 'transform 0.25s ease';
+      item.style.transform = 'translateX(0)';
+      item.dataset.swiped = '';
+      try {
+        const res = await api.pinConversation(convId);
+        const conv = state.conversations.find(c => c.id === convId);
+        if (conv) conv.pinned = res.data?.pinned ?? false;
+        renderConversationsList();
+      } catch { showToast('Failed to pin', 'error'); }
+    });
     container.querySelector('.swipe-mute')?.addEventListener('click', async () => {
       item.style.transition = 'transform 0.25s ease';
       item.style.transform = 'translateX(0)';
@@ -1974,6 +2066,8 @@ async function showSafetyNumber(conv: Conversation) {
   );
 
   const groups = safetyNumber.split(' ');
+  const verifiedKey = `rocchat_verified_${other.user_id}`;
+  const isVerified = localStorage.getItem(verifiedKey) === safetyNumber;
   const overlay = document.createElement('div');
   overlay.style.cssText = `
     position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:50;
@@ -1998,6 +2092,7 @@ async function showSafetyNumber(conv: Conversation) {
       <div style="display:flex;gap:var(--sp-2);margin-top:var(--sp-4)">
         <button class="btn-secondary" id="close-safety" style="flex:1">Close</button>
         <button class="btn-primary" id="copy-safety" style="flex:1">Copy</button>
+        <button class="btn-primary" id="verify-safety" style="flex:1;background:var(--accent-secondary,#22c55e)">${isVerified ? '✅ Verified' : '🔒 Mark Verified'}</button>
       </div>
     </div>
   `;
@@ -2015,6 +2110,27 @@ async function showSafetyNumber(conv: Conversation) {
     const btn = overlay.querySelector('#copy-safety') as HTMLButtonElement;
     if (btn) { btn.textContent = 'Copied!'; setTimeout(() => { btn.textContent = 'Copy'; }, 1500); }
   });
+
+  overlay.querySelector('#verify-safety')?.addEventListener('click', () => {
+    const btn = overlay.querySelector('#verify-safety') as HTMLButtonElement;
+    if (localStorage.getItem(verifiedKey) === safetyNumber) {
+      localStorage.removeItem(verifiedKey);
+      if (btn) btn.textContent = '🔒 Mark Verified';
+    } else {
+      localStorage.setItem(verifiedKey, safetyNumber);
+      if (btn) btn.textContent = '✅ Verified';
+    }
+    updateSafetyBadge(conv);
+  });
+}
+
+function updateSafetyBadge(conv: Conversation) {
+  const userId = localStorage.getItem('rocchat_user_id') || '';
+  const other = conv.members.find(m => m.user_id !== userId);
+  const badge = document.getElementById('safety-badge');
+  if (!badge || !other) return;
+  const verifiedKey = `rocchat_verified_${other.user_id}`;
+  badge.style.display = localStorage.getItem(verifiedKey) ? 'inline' : 'none';
 }
 
 // ── Helpers ──
@@ -3039,7 +3155,24 @@ function showMessageContextMenu(e: MouseEvent, msgId: string, isMine: boolean, c
       icon: '↩️',
       action: () => {
         const input = document.getElementById('message-input') as HTMLTextAreaElement;
-        if (input) { input.focus(); input.dataset.replyTo = msgId; }
+        if (input) {
+          input.focus();
+          input.dataset.replyTo = msgId;
+          // Show reply banner above composer
+          document.getElementById('reply-banner')?.remove();
+          const quoted = plaintextCache.get(msgId);
+          const snippet = quoted ? (quoted.length > 60 ? quoted.slice(0, 60) + '…' : quoted) : '🔒 Encrypted message';
+          const banner = document.createElement('div');
+          banner.id = 'reply-banner';
+          banner.className = 'reply-banner';
+          banner.innerHTML = `<span class="reply-banner-text">↩️ ${escapeHtml(snippet)}</span><button class="reply-banner-close" aria-label="Cancel reply">✕</button>`;
+          banner.querySelector('.reply-banner-close')?.addEventListener('click', () => {
+            delete input.dataset.replyTo;
+            banner.remove();
+          });
+          const composer = document.querySelector('.composer');
+          if (composer) composer.parentElement?.insertBefore(banner, composer);
+        }
         menu.remove();
       },
     },
@@ -3095,6 +3228,23 @@ function showMessageContextMenu(e: MouseEvent, msgId: string, isMine: boolean, c
         }
       },
       condition: isMine,
+    },
+    {
+      label: 'Block User',
+      icon: '🚫',
+      action: async () => {
+        menu.remove();
+        const msgs = state.messages.get(conversationId);
+        const msg = msgs?.find(m => m.id === msgId);
+        if (!msg) return;
+        if (confirm('Block this user? They will not be able to message you.')) {
+          try {
+            await api.blockContact(msg.sender_id, true);
+            showToast('User blocked', 'info');
+          } catch { showToast('Failed to block user', 'error'); }
+        }
+      },
+      condition: !isMine,
     },
   ];
 

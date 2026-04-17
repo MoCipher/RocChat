@@ -95,6 +95,18 @@ export default {
           return withCors(jsonResponse({ status: 'degraded', service: 'rocchat-api' }, 503));
         }
       }
+
+      if (path === '/api/client-errors' && request.method === 'POST') {
+        try {
+          const body = await request.json() as { errors?: { message: string; source?: string; line?: number; col?: number; stack?: string; ts: number }[] };
+          const errors = (body.errors || []).slice(0, 20);
+          for (const e of errors) {
+            logEvent('error', 'client_error', { message: String(e.message).slice(0, 500), source: e.source, line: e.line, stack: String(e.stack || '').slice(0, 1000), ts: e.ts });
+          }
+        } catch { /* ignore malformed */ }
+        return withCors(jsonResponse({ ok: true }));
+      }
+
       if (path === '/api/config' && request.method === 'GET') {
         return withCors(jsonResponse({
           pow_enabled: true,

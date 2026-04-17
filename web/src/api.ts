@@ -175,6 +175,7 @@ export function sendMessage(body: {
   ratchet_header: string;
   message_type?: string;
   expires_in?: number;
+  reply_to?: string;
 }) {
   return req('/messages/send', { method: 'POST', body: JSON.stringify(body) });
 }
@@ -207,6 +208,10 @@ export function setNotificationMode(conversationId: string, mode: string) {
 
 export function archiveConversation(conversationId: string) {
   return req<{ archived: boolean }>(`/messages/conversations/${conversationId}/archive`, { method: 'POST' });
+}
+
+export function pinConversation(conversationId: string) {
+  return req<{ pinned: boolean }>(`/messages/conversations/${conversationId}/pin`, { method: 'POST' });
 }
 
 export function setConversationTheme(conversationId: string, theme: string | null) {
@@ -466,6 +471,7 @@ export interface Conversation {
   members: { user_id: string; username: string; display_name: string; avatar_url?: string; account_tier?: string }[];
   muted?: boolean;
   archived?: boolean;
+  pinned?: boolean;
   chat_theme?: string | null;
   last_message_at: string;
 }
@@ -482,6 +488,7 @@ export interface Message {
   edited_at?: number;
   deleted_at?: number;
   expires_at?: number;
+  reply_to?: string | null;
 }
 
 export interface UserResult {

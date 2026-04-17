@@ -21,6 +21,7 @@
 import * as api from './api.js';
 import { chatState } from './chat/chat.js';
 import { aesGcmEncrypt, aesGcmDecrypt, pbkdf2 } from '@rocchat/shared';
+import { argon2id } from 'hash-wasm';
 import { getSecretString, putSecretString } from './crypto/secure-store.js';
 
 // =============================================================================
@@ -508,15 +509,25 @@ export async function exportEncryptedBackup(passphrase: string): Promise<void> {
   const snapshot = await snapshotLocalState();
   const json = new TextEncoder().encode(JSON.stringify(snapshot));
   const salt = crypto.getRandomValues(new Uint8Array(16));
-  const key = await pbkdf2(new TextEncoder().encode(passphrase), salt, 310_000, 32);
+  const keyHex = await argon2id({
+    password: passphrase,
+    salt,
+    parallelism: 1,
+    iterations: 3,
+    memorySize: 65536, // 64 MiB
+    hashLength: 32,
+    outputType: 'hex',
+  });
+  const key = new Uint8Array(keyHex.match(/.{2}/g)!.map(b => parseInt(b, 16)));
   const { ciphertext, iv, tag } = await aesGcmEncrypt(json, key);
   const payload = {
-    magic: 'ROCCHAT-BACKUP-1',
+    magic: 'ROCCHAT-BACKUP-2',
+    kdf: 'argon2id',
     salt: Array.from(salt),
     iv: Array.from(iv),
     ciphertext: Array.from(new Uint8Array(ciphertext)),
     tag: Array.from(tag),
-    iterations: 310_000,
+    argon2: { parallelism: 1, iterations: 3, memorySize: 65536 },
   };
   const blob = new Blob([JSON.stringify(payload)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
@@ -533,18 +544,34 @@ export async function importEncryptedBackup(file: File, passphrase: string): Pro
     const text = await file.text();
     const payload = JSON.parse(text) as {
       magic: string;
+      kdf?: string;
       salt: number[];
       iv: number[];
       ciphertext: number[];
       tag: number[];
-      iterations: number;
+      iterations?: number;
+      argon2?: { parallelism: number; iterations: number; memorySize: number };
     };
-    if (payload.magic !== 'ROCCHAT-BACKUP-1') { toast('Not a RocChat backup file', 'error'); return; }
+    if (payload.magic !== 'ROCCHAT-BACKUP-1' && payload.magic !== 'ROCCHAT-BACKUP-2') { toast('Not a RocChat backup file', 'error'); return; }
     const salt = new Uint8Array(payload.salt);
     const iv = new Uint8Array(payload.iv);
     const ct = new Uint8Array(payload.ciphertext);
     const tag = new Uint8Array(payload.tag);
-    const key = await pbkdf2(new TextEncoder().encode(passphrase), salt, payload.iterations, 32);
+    let key: Uint8Array;
+    if (payload.magic === 'ROCCHAT-BACKUP-2' && payload.kdf === 'argon2id' && payload.argon2) {
+      const keyHex = await argon2id({
+        password: passphrase,
+        salt,
+        parallelism: payload.argon2.parallelism,
+        iterations: payload.argon2.iterations,
+        memorySize: payload.argon2.memorySize,
+        hashLength: 32,
+        outputType: 'hex',
+      });
+      key = new Uint8Array(keyHex.match(/.{2}/g)!.map(b => parseInt(b, 16)));
+    } else {
+      key = await pbkdf2(new TextEncoder().encode(passphrase), salt, payload.iterations || 310_000, 32);
+    }
     const plain = await aesGcmDecrypt(ct, key, iv, tag);
     const snapshot = JSON.parse(new TextDecoder().decode(plain)) as {
       localStorage: Record<string, string>;
@@ -590,7 +617,7 @@ export function openBackupDialog(): void {
         <p style="font-size:14px;color:var(--text-secondary)">
           Export or restore your on-device keys, messages, and settings.
           The backup file is encrypted with a passphrase of your choice
-          (PBKDF2 + AES-GCM). Losing the passphrase means losing the backup.
+          (Argon2id + AES-GCM). Losing the passphrase means losing the backup.
         </p>
         <label style="display:block;margin-top:12px">Passphrase
           <input type="password" class="rc-backup-pass" minlength="12" autocomplete="new-password" style="width:100%;margin-top:4px" />

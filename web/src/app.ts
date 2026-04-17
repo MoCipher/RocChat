@@ -16,8 +16,9 @@ import '@fontsource/jetbrains-mono/400.css';
 import '@fontsource/jetbrains-mono/500.css';
 
 // Self-hosted Lucide icons (npm — no CDN)
-import { createIcons } from 'lucide';
-(window as any).lucide = { createIcons };
+import { createIcons, Search, Edit, Pencil, ShieldCheck, Trash2, Phone, PhoneOff, Mic, MicOff, Video, VideoOff } from 'lucide';
+const lucideIcons = { Search, Edit, Pencil, ShieldCheck, Trash2, Phone, PhoneOff, Mic, MicOff, Video, VideoOff };
+(window as any).lucide = { createIcons: (opts?: any) => createIcons({ icons: lucideIcons, ...opts }) };
 
 import { renderLanding } from './landing/landing.js';
 import { renderQrLogin } from './auth/qr-login.js';

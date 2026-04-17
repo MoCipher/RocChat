@@ -123,6 +123,7 @@ object APIClient {
         val messageType: String,
         val createdAt: String,
         val expiresAt: Long? = null,
+        var status: String = "sent",
     )
 
     suspend fun getMessages(conversationId: String): List<ChatMessage> {
@@ -140,6 +141,7 @@ object APIClient {
                 messageType = m.optString("message_type", "text"),
                 createdAt = m.optString("created_at", ""),
                 expiresAt = if (m.has("expires_at") && !m.isNull("expires_at")) m.getLong("expires_at") else null,
+                status = m.optString("status", "sent"),
             )
         }
     }
@@ -364,4 +366,26 @@ object APIClient {
                 conn.disconnect()
             }
         }
+
+    suspend fun uploadMedia(data: ByteArray): String = withContext(Dispatchers.IO) {
+        val conn = (URL("$BASE_URL/media/upload").openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            setRequestProperty("Content-Type", "application/octet-stream")
+            sessionToken?.let { setRequestProperty("Authorization", "Bearer $it") }
+            doOutput = true
+            connectTimeout = 30_000
+            readTimeout = 30_000
+        }
+        try {
+            conn.outputStream.use { it.write(data) }
+            val code = conn.responseCode
+            val respBody = (if (code in 200..299) conn.inputStream else conn.errorStream)
+                ?.bufferedReader()?.use { it.readText() } ?: "{}"
+            if (code !in 200..299) throw IOException("HTTP $code: $respBody")
+            val json = JSONObject(respBody)
+            json.optString("blob_id", respBody.trim())
+        } finally {
+            conn.disconnect()
+        }
+    }
 }

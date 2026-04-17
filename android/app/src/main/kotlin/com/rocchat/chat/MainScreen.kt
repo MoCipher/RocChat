@@ -675,7 +675,50 @@ fun ConversationScreen(conversationId: String, conversationName: String, recipie
     var isOffline by remember { mutableStateOf(false) }
     var editingMessageId by remember { mutableStateOf<String?>(null) }
     var replyingTo by remember { mutableStateOf<APIClient.ChatMessage?>(null) }
+    var forwardingMessage by remember { mutableStateOf<APIClient.ChatMessage?>(null) }
+    var showForwardDialog by remember { mutableStateOf(false) }
+    var searchText by remember { mutableStateOf("") }
+    var isSearching by remember { mutableStateOf(false) }
     val haptics = LocalHapticFeedback.current
+
+    // File/photo picker
+    val photoPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri ->
+        uri?.let {
+            scope.launch {
+                try {
+                    val inputStream = context.contentResolver.openInputStream(it) ?: return@launch
+                    val data = inputStream.readBytes()
+                    inputStream.close()
+                    val mime = context.contentResolver.getType(it) ?: "application/octet-stream"
+                    val filename = it.lastPathSegment ?: "file"
+                    // Upload encrypted
+                    val encrypted = SessionManager.encryptFileData(context, data)
+                    val blobId = APIClient.uploadMedia(encrypted)
+                    val payload = JSONObject().apply {
+                        put("type", "file")
+                        put("blob_id", blobId)
+                        put("filename", filename)
+                        put("mime", mime)
+                        put("size", data.size)
+                    }
+                    val plaintext = payload.toString()
+                    if (recipientUserId.isNotEmpty()) {
+                        val env = SessionManager.encryptMessage(context, conversationId, recipientUserId, plaintext)
+                        APIClient.sendMessage(conversationId, env.ciphertext, env.iv, env.ratchetHeader, "file")
+                    } else {
+                        APIClient.sendMessage(conversationId, plaintext, "", "", "file")
+                    }
+                    messages = messages + APIClient.ChatMessage(
+                        id = "local-${System.currentTimeMillis()}", conversationId = conversationId,
+                        senderId = userId, ciphertext = "📎 $filename", iv = "", ratchetHeader = "",
+                        messageType = "file", createdAt = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US).format(Date())
+                    )
+                } catch (_: Exception) {}
+            }
+        }
+    }
 
     // Load messages
     LaunchedEffect(conversationId) {
@@ -736,6 +779,23 @@ fun ConversationScreen(conversationId: String, conversationName: String, recipie
                                     createdAt = payload.optString("created_at", Date().toString()),
                                 )
                                 messages = messages + newMsg
+                                // Send delivery receipt back
+                                if (newMsg.senderId != userId) {
+                                    val receipt = JSONObject().apply {
+                                        put("type", "delivery_receipt")
+                                        put("payload", JSONObject().apply {
+                                            put("message_id", newMsg.id)
+                                            put("fromUserId", userId)
+                                        })
+                                    }
+                                    ws?.send(receipt.toString())
+                                }
+                            }
+                            "delivery_receipt", "read_receipt" -> {
+                                val payload = data.getJSONObject("payload")
+                                val msgId = payload.optString("message_id")
+                                val newStatus = if (data.optString("type") == "read_receipt") "read" else "delivered"
+                                messages = messages.map { if (it.id == msgId) it.copy(status = newStatus) else it }
                             }
                             "call_offer" -> {
                                 val payload = data.getJSONObject("payload")
@@ -858,6 +918,9 @@ fun ConversationScreen(conversationId: String, conversationName: String, recipie
                     IconButton(onClick = { showSafetyDialog = true }) {
                         Icon(Icons.Default.Security, contentDescription = "Safety Number", tint = RocColors.RocGold)
                     }
+                    IconButton(onClick = { isSearching = !isSearching }) {
+                        Icon(Icons.Default.Search, contentDescription = "Search messages", tint = RocColors.RocGold)
+                    }
                 },
             )
         },
@@ -879,6 +942,23 @@ fun ConversationScreen(conversationId: String, conversationName: String, recipie
                 Text("Messages are end-to-end encrypted", fontSize = 12.sp, color = RocColors.Turquoise)
             }
 
+            // Search bar
+            if (isSearching) {
+                OutlinedTextField(
+                    value = searchText,
+                    onValueChange = { searchText = it },
+                    placeholder = { Text("Search messages...") },
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+                    singleLine = true,
+                    trailingIcon = {
+                        IconButton(onClick = { searchText = ""; isSearching = false }) {
+                            Icon(Icons.Default.Close, "Close search")
+                        }
+                    },
+                    shape = RoundedCornerShape(20.dp),
+                )
+            }
+
             // Messages
             LazyColumn(
                 modifier = Modifier.weight(1f).fillMaxWidth(),
@@ -887,8 +967,11 @@ fun ConversationScreen(conversationId: String, conversationName: String, recipie
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 items(messages.filter { msg ->
-                    val ea = msg.expiresAt ?: return@filter true
-                    ea > (System.currentTimeMillis() / 1000)
+                    val ea = msg.expiresAt
+                    val notExpired = ea == null || ea > (System.currentTimeMillis() / 1000)
+                    if (searchText.isNotEmpty()) {
+                        notExpired && msg.ciphertext.contains(searchText, ignoreCase = true)
+                    } else notExpired
                 }) { msg ->
                     val isMine = msg.senderId == userId
                     MessageBubble(
@@ -907,6 +990,7 @@ fun ConversationScreen(conversationId: String, conversationName: String, recipie
                             scope.launch { try { APIClient.post("/messages/conversations/$conversationId/pin/${msg.id}", JSONObject()) } catch (_: Exception) {} }
                         },
                         onReply = { replyingTo = msg },
+                        onForward = { forwardingMessage = msg; showForwardDialog = true },
                     )
                 }
             }
@@ -995,21 +1079,34 @@ fun ConversationScreen(conversationId: String, conversationName: String, recipie
                         .padding(horizontal = 8.dp, vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    IconButton(onClick = {
-                        startVoiceRecording(context) { isRecordingVoice = true }
-                    }) {
-                        Icon(
-                            Icons.Default.Mic,
-                            contentDescription = "Voice note",
-                            tint = RocColors.RocGold,
-                        )
-                    }
-                    IconButton(onClick = { showVideoRecorder = true }) {
-                        Icon(
-                            Icons.Default.Videocam,
-                            contentDescription = "Video message",
-                            tint = RocColors.RocGold,
-                        )
+                    // Attachment menu
+                    var showAttachMenu by remember { mutableStateOf(false) }
+                    Box {
+                        IconButton(onClick = { showAttachMenu = true }) {
+                            Icon(Icons.Default.Add, contentDescription = "Attach", tint = RocColors.RocGold)
+                        }
+                        DropdownMenu(expanded = showAttachMenu, onDismissRequest = { showAttachMenu = false }) {
+                            DropdownMenuItem(
+                                text = { Text("Photo & Video") },
+                                leadingIcon = { Icon(Icons.Default.Image, null) },
+                                onClick = { showAttachMenu = false; photoPickerLauncher.launch("image/*") }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Document") },
+                                leadingIcon = { Icon(Icons.Default.Description, null) },
+                                onClick = { showAttachMenu = false; photoPickerLauncher.launch("*/*") }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Voice Note") },
+                                leadingIcon = { Icon(Icons.Default.Mic, null) },
+                                onClick = { showAttachMenu = false; startVoiceRecording(context) { isRecordingVoice = true } }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Video Message") },
+                                leadingIcon = { Icon(Icons.Default.Videocam, null) },
+                                onClick = { showAttachMenu = false; showVideoRecorder = true }
+                            )
+                        }
                     }
                 OutlinedTextField(
                     value = inputText,
@@ -1384,6 +1481,7 @@ private fun MessageBubble(
     onDelete: () -> Unit = {},
     onPin: () -> Unit = {},
     onReply: () -> Unit = {},
+    onForward: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -1524,7 +1622,11 @@ private fun MessageBubble(
                     )
                     if (isMine) {
                         Spacer(Modifier.width(4.dp))
-                        Text("✓✓", fontSize = 11.sp, color = RocColors.Turquoise)
+                        when (msg.status) {
+                            "read" -> Text("✓✓", fontSize = 11.sp, color = RocColors.Turquoise)
+                            "delivered" -> Text("✓✓", fontSize = 11.sp, color = RocColors.TextSecondary)
+                            else -> Text("✓", fontSize = 11.sp, color = RocColors.TextSecondary)
+                        }
                     }
                 }
 
@@ -1553,6 +1655,11 @@ private fun MessageBubble(
                         text = { Text("Pin") },
                         leadingIcon = { Icon(Icons.Default.PushPin, null) },
                         onClick = { showContextMenu = false; onPin() }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Forward") },
+                        leadingIcon = { Icon(Icons.Default.Share, null) },
+                        onClick = { showContextMenu = false; onForward() }
                     )
                     if (isMine) {
                         DropdownMenuItem(

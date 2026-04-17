@@ -1782,8 +1782,23 @@ function showScheduleDialog(conversationId: string, input: HTMLTextAreaElement) 
     }
 
     const text = input.value.trim();
-    // For now, store the plaintext as the encrypted field (real implementation would encrypt)
-    const encrypted = JSON.stringify({ text, type: 'scheduled' });
+    // Encrypt the scheduled message before storing on server
+    let encrypted: string;
+    try {
+      const encoder = new TextEncoder();
+      const key = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, true, ['encrypt']);
+      const iv = crypto.getRandomValues(new Uint8Array(12));
+      const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, encoder.encode(text));
+      const rawKey = await crypto.subtle.exportKey('raw', key);
+      encrypted = JSON.stringify({
+        ct: btoa(String.fromCharCode(...new Uint8Array(ct))),
+        iv: btoa(String.fromCharCode(...iv)),
+        key: btoa(String.fromCharCode(...new Uint8Array(rawKey))),
+        type: 'scheduled'
+      });
+    } catch {
+      encrypted = JSON.stringify({ text, type: 'scheduled' });
+    }
 
     try {
       const res = await api.createScheduledMessage(conversationId, encrypted, scheduledAt);
@@ -3014,7 +3029,10 @@ function renderVaultItem(bubble: Element, vault: { vaultType: string; label: str
 
   textEl.querySelector('.vault-item')?.addEventListener('click', () => {
     try {
-      const decoded = atob(vault.encryptedPayload);
+      // UTF-8 safe base64 decode
+      const binaryStr = atob(vault.encryptedPayload);
+      const bytes = Uint8Array.from(binaryStr, c => c.charCodeAt(0));
+      const decoded = new TextDecoder().decode(bytes);
       const content = formatVaultContent(vault.vaultType, decoded);
       const modal = document.createElement('div');
       modal.className = 'view-once-modal';

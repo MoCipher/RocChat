@@ -189,4 +189,20 @@ class APIClient {
         case invalidResponse
         case httpError(Int)
     }
+
+    /// Upload encrypted media to R2, returns the blob ID string
+    func uploadMedia(_ encryptedData: Data) async throws -> String {
+        let data = try await uploadBinary("/media/upload", data: encryptedData, headers: [
+            "Content-Type": "application/octet-stream"
+        ])
+        if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let blobId = json["blob_id"] as? String {
+            return blobId
+        }
+        // Fallback: some APIs return the id at the top level
+        if let str = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines), !str.isEmpty {
+            return str
+        }
+        throw APIError.invalidResponse
+    }
 }

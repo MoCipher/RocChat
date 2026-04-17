@@ -539,4 +539,15 @@ object SessionManager {
             32,
         )
     }
+
+    /** Encrypt raw file data with a random AES-256-GCM key. Returns combined IV+ciphertext+tag. */
+    fun encryptFileData(context: Context, data: ByteArray): ByteArray {
+        val key = javax.crypto.KeyGenerator.getInstance("AES").apply { init(256) }.generateKey()
+        val cipher = javax.crypto.Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(javax.crypto.Cipher.ENCRYPT_MODE, key)
+        val iv = cipher.iv
+        val encrypted = cipher.doFinal(data)
+        // Return iv + encrypted (which includes GCM tag)
+        return iv + encrypted
+    }
 }

@@ -3,6 +3,7 @@ import UIKit
 import CryptoKit
 import AVFoundation
 import PhotosUI
+import UniformTypeIdentifiers
 
 // MARK: - Data Models
 
@@ -33,6 +34,14 @@ struct ChatMessage: Identifiable {
     let messageType: String
     let createdAt: String
     let expiresAt: Int?
+    var status: String // "sent", "delivered", "read"
+
+    init(id: String, conversationId: String, senderId: String, ciphertext: String, iv: String, ratchetHeader: String, messageType: String, createdAt: String, expiresAt: Int?, status: String = "sent") {
+        self.id = id; self.conversationId = conversationId; self.senderId = senderId
+        self.ciphertext = ciphertext; self.iv = iv; self.ratchetHeader = ratchetHeader
+        self.messageType = messageType; self.createdAt = createdAt; self.expiresAt = expiresAt
+        self.status = status
+    }
 }
 
 // MARK: - Main Tab View
@@ -672,6 +681,14 @@ struct ConversationView: View {
     @State private var scheduleDate = Date().addingTimeInterval(3600)
     @State private var editingMessageId: String?
     @State private var replyingTo: ChatMessage?
+    @State private var showPhotoPicker = false
+    @State private var showFilePicker = false
+    @State private var showAttachMenu = false
+    @State private var selectedPhotoData: Data?
+    @State private var showForwardSheet = false
+    @State private var forwardMessage: ChatMessage?
+    @State private var searchText = ""
+    @State private var isSearching = false
     private let userId = UserDefaults.standard.string(forKey: "user_id") ?? ""
 
     private var convName: String {
@@ -698,8 +715,17 @@ struct ConversationView: View {
                 ScrollView {
                     LazyVStack(spacing: 4) {
                         ForEach(messages.filter { msg in
-                            guard let expires = msg.expiresAt else { return true }
-                            return expires > Int(Date().timeIntervalSince1970)
+                            guard let expires = msg.expiresAt else {
+                                if !searchText.isEmpty {
+                                    return msg.ciphertext.localizedCaseInsensitiveContains(searchText)
+                                }
+                                return true
+                            }
+                            let notExpired = expires > Int(Date().timeIntervalSince1970)
+                            if !searchText.isEmpty {
+                                return notExpired && msg.ciphertext.localizedCaseInsensitiveContains(searchText)
+                            }
+                            return notExpired
                         }) { msg in
                             MessageBubbleView(
                                 message: msg,
@@ -712,6 +738,10 @@ struct ConversationView: View {
                                     withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
                                         replyingTo = msg
                                     }
+                                },
+                                onForward: {
+                                    forwardMessage = msg
+                                    showForwardSheet = true
                                 }
                             )
                                 .id(msg.id)
@@ -803,31 +833,30 @@ struct ConversationView: View {
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             } else {
             HStack(alignment: .bottom, spacing: 10) {
-                // Mic button (tap to start recording; stop/send happens in the recording bar)
-                Button(action: { startRecording() }) {
+                // Attachment menu (photo, file, vault)
+                Menu {
+                    Button(action: { showPhotoPicker = true }) {
+                        Label("Photo & Video", systemImage: "photo.on.rectangle")
+                    }
+                    Button(action: { showFilePicker = true }) {
+                        Label("Document", systemImage: "doc.fill")
+                    }
+                    Button(action: { startRecording() }) {
+                        Label("Voice Note", systemImage: "mic.fill")
+                    }
+                    Button(action: { showVideoRecorder = true }) {
+                        Label("Video Message", systemImage: "video.fill")
+                    }
+                } label: {
                     ZStack {
                         Circle()
                             .fill(Color.rocGold.opacity(0.12))
                             .frame(width: 40, height: 40)
-                        Image(systemName: "mic.fill")
+                        Image(systemName: "plus")
                             .font(.system(size: 18, weight: .semibold))
                             .foregroundColor(.rocGold)
                     }
                 }
-                .buttonStyle(.plain)
-
-                // Video message button
-                Button(action: { showVideoRecorder = true }) {
-                    ZStack {
-                        Circle()
-                            .fill(Color.rocGold.opacity(0.12))
-                            .frame(width: 40, height: 40)
-                        Image(systemName: "video.fill")
-                            .font(.system(size: 16, weight: .semibold))
-                            .foregroundColor(.rocGold)
-                    }
-                }
-                .buttonStyle(.plain)
 
                 // Capsule text field
                 HStack(alignment: .center, spacing: 6) {
@@ -924,8 +953,12 @@ struct ConversationView: View {
                 Button(action: { loadSafetyNumber() }) {
                     Image(systemName: "shield.fill").foregroundColor(.rocGold)
                 }
+                Button(action: { withAnimation { isSearching.toggle() } }) {
+                    Image(systemName: "magnifyingglass").foregroundColor(.rocGold)
+                }
             }
         }
+        .searchable(text: $searchText, isPresented: $isSearching, prompt: "Search messages")
         .task { await loadMessages() }
         .onAppear {
             disappearTimer = UserDefaults.standard.integer(forKey: "disappear_\(conversation.id)")
@@ -987,6 +1020,144 @@ struct ConversationView: View {
             }
             .presentationDetents([.medium])
         }
+        .photosPicker(isPresented: $showPhotoPicker, selection: Binding(
+            get: { nil },
+            set: { item in
+                guard let item else { return }
+                Task {
+                    if let data = try? await item.loadTransferable(type: Data.self) {
+                        await sendPhotoAttachment(data: data)
+                    }
+                }
+            }
+        ), matching: .any(of: [.images, .videos]))
+        .fileImporter(isPresented: $showFilePicker, allowedContentTypes: [.data], allowsMultipleSelection: false) { result in
+            if case .success(let urls) = result, let url = urls.first {
+                guard url.startAccessingSecurityScopedResource() else { return }
+                defer { url.stopAccessingSecurityScopedResource() }
+                if let data = try? Data(contentsOf: url) {
+                    let filename = url.lastPathComponent
+                    let mime = url.mimeType
+                    Task { await sendFileAttachment(data: data, filename: filename, mime: mime) }
+                }
+            }
+        }
+        .sheet(isPresented: $showForwardSheet) {
+            ForwardMessageSheet(message: forwardMessage) { targetConversationId in
+                showForwardSheet = false
+                guard let msg = forwardMessage else { return }
+                Task { await forwardMessageTo(msg, targetConversationId: targetConversationId) }
+            }
+        }
+    }
+
+    // MARK: - Photo/File Attachment
+
+    private func sendPhotoAttachment(data: Data) async {
+        do {
+            let recipientId = conversation.members.first(where: { $0.userId != userId })?.userId ?? ""
+            // Encrypt file with random key
+            let fileKey = SymmetricKey(size: .bits256)
+            let iv = AES.GCM.Nonce()
+            let sealed = try AES.GCM.seal(data, using: fileKey, nonce: iv)
+            guard let encrypted = sealed.combined else { return }
+
+            // Upload to R2
+            let uploadResult = try await APIClient.shared.uploadMedia(encrypted)
+            let blobId = uploadResult
+
+            // Send message with file metadata via Double Ratchet
+            let payload: [String: Any] = [
+                "type": "file",
+                "blob_id": blobId,
+                "file_key": fileKey.withUnsafeBytes { Data($0).base64EncodedString() },
+                "file_iv": Data(iv).base64EncodedString(),
+                "filename": "photo.jpg",
+                "mime": "image/jpeg",
+                "size": data.count
+            ]
+            let plaintext = String(data: try JSONSerialization.data(withJSONObject: payload), encoding: .utf8) ?? ""
+
+            var body: [String: Any] = [
+                "conversation_id": conversation.id,
+                "message_type": "file",
+            ]
+            if !recipientId.isEmpty {
+                let envelope = try await SessionManager.shared.encryptMessage(
+                    conversationId: conversation.id, recipientUserId: recipientId, plaintext: plaintext)
+                body["ciphertext"] = envelope.ciphertext
+                body["iv"] = envelope.iv
+                body["ratchet_header"] = envelope.ratchetHeader
+            } else {
+                body["ciphertext"] = plaintext
+                body["iv"] = ""
+                body["ratchet_header"] = ""
+            }
+            _ = try await APIClient.shared.postRaw("/messages/send", body: body)
+            messages.append(ChatMessage(id: "local-\(Date().timeIntervalSince1970)",
+                conversationId: conversation.id, senderId: userId,
+                ciphertext: "📎 Photo sent", iv: "", ratchetHeader: "",
+                messageType: "file", createdAt: ISO8601DateFormatter().string(from: Date()), expiresAt: nil))
+        } catch {}
+    }
+
+    private func sendFileAttachment(data: Data, filename: String, mime: String) async {
+        do {
+            let recipientId = conversation.members.first(where: { $0.userId != userId })?.userId ?? ""
+            let fileKey = SymmetricKey(size: .bits256)
+            let iv = AES.GCM.Nonce()
+            let sealed = try AES.GCM.seal(data, using: fileKey, nonce: iv)
+            guard let encrypted = sealed.combined else { return }
+
+            let uploadResult = try await APIClient.shared.uploadMedia(encrypted)
+            let blobId = uploadResult
+
+            let payload: [String: Any] = [
+                "type": "file",
+                "blob_id": blobId,
+                "file_key": fileKey.withUnsafeBytes { Data($0).base64EncodedString() },
+                "file_iv": Data(iv).base64EncodedString(),
+                "filename": filename,
+                "mime": mime,
+                "size": data.count
+            ]
+            let plaintext = String(data: try JSONSerialization.data(withJSONObject: payload), encoding: .utf8) ?? ""
+
+            var body: [String: Any] = [
+                "conversation_id": conversation.id,
+                "message_type": "file",
+            ]
+            if !recipientId.isEmpty {
+                let envelope = try await SessionManager.shared.encryptMessage(
+                    conversationId: conversation.id, recipientUserId: recipientId, plaintext: plaintext)
+                body["ciphertext"] = envelope.ciphertext
+                body["iv"] = envelope.iv
+                body["ratchet_header"] = envelope.ratchetHeader
+            } else {
+                body["ciphertext"] = plaintext
+                body["iv"] = ""
+                body["ratchet_header"] = ""
+            }
+            _ = try await APIClient.shared.postRaw("/messages/send", body: body)
+            messages.append(ChatMessage(id: "local-\(Date().timeIntervalSince1970)",
+                conversationId: conversation.id, senderId: userId,
+                ciphertext: "📎 \(filename)", iv: "", ratchetHeader: "",
+                messageType: "file", createdAt: ISO8601DateFormatter().string(from: Date()), expiresAt: nil))
+        } catch {}
+    }
+
+    private func forwardMessageTo(_ msg: ChatMessage, targetConversationId: String) async {
+        do {
+            // Forward as a new message to the target conversation
+            var body: [String: Any] = [
+                "conversation_id": targetConversationId,
+                "message_type": msg.messageType,
+                "ciphertext": msg.ciphertext,
+                "iv": "",
+                "ratchet_header": "",
+            ]
+            _ = try await APIClient.shared.postRaw("/messages/send", body: body)
+        } catch {}
     }
 
     private func loadSafetyNumber() {
@@ -1261,7 +1432,8 @@ struct ConversationView: View {
                         ratchetHeader: rh,
                         messageType: m["message_type"] as? String ?? "text",
                         createdAt: m["created_at"] as? String ?? "",
-                        expiresAt: m["expires_at"] as? Int
+                        expiresAt: m["expires_at"] as? Int,
+                        status: m["status"] as? String ?? "sent"
                     )
                 }
             }
@@ -1555,6 +1727,14 @@ struct ConversationView: View {
                             )
                             DispatchQueue.main.async {
                                 messages.append(newMsg)
+                                // Send delivery receipt back
+                                if newMsg.senderId != userId, let msgId = payload["id"] as? String {
+                                    let receipt: [String: Any] = ["type": "delivery_receipt", "payload": ["message_id": msgId, "fromUserId": userId]]
+                                    if let data = try? JSONSerialization.data(withJSONObject: receipt),
+                                       let str = String(data: data, encoding: .utf8) {
+                                        task.send(.string(str)) { _ in }
+                                    }
+                                }
                             }
                         } else if type == "call_offer" {
                             DispatchQueue.main.async {
@@ -1583,6 +1763,14 @@ struct ConversationView: View {
                         } else if type == "call_p2p_candidate" {
                             DispatchQueue.main.async {
                                 CallManager.shared.handleP2PCandidate(payload: payload)
+                            }
+                        } else if type == "delivery_receipt" || type == "read_receipt" {
+                            let msgId = payload["message_id"] as? String ?? ""
+                            let newStatus = type == "read_receipt" ? "read" : "delivered"
+                            DispatchQueue.main.async {
+                                if let idx = messages.firstIndex(where: { $0.id == msgId }) {
+                                    messages[idx].status = newStatus
+                                }
                             }
                         }
                     }
@@ -1617,6 +1805,7 @@ struct MessageBubbleView: View {
     var onDelete: (() -> Void)?
     var onPin: (() -> Void)?
     var onReply: (() -> Void)?
+    var onForward: (() -> Void)?
     @State private var viewOnceRevealed = false
     @State private var viewOnceImage: UIImage?
     @State private var showViewOnceModal = false
@@ -1661,7 +1850,14 @@ struct MessageBubbleView: View {
                         .font(.system(size: 11))
                         .foregroundColor(.adaptiveTextSec)
                     if isMine {
-                        Text("✓✓").font(.system(size: 11)).foregroundColor(.turquoise)
+                        switch message.status {
+                        case "read":
+                            Text("✓✓").font(.system(size: 11)).foregroundColor(.turquoise)
+                        case "delivered":
+                            Text("✓✓").font(.system(size: 11)).foregroundColor(.adaptiveTextSec)
+                        default:
+                            Text("✓").font(.system(size: 11)).foregroundColor(.adaptiveTextSec)
+                        }
                     }
                 }
             }
@@ -1689,6 +1885,9 @@ struct MessageBubbleView: View {
                 }
                 Button { onPin?() } label: {
                     Label("Pin", systemImage: "pin")
+                }
+                Button { onForward?() } label: {
+                    Label("Forward", systemImage: "arrowshape.turn.up.right")
                 }
                 if isMine {
                     Button(role: .destructive) { onDelete?() } label: {
@@ -1866,6 +2065,7 @@ struct SettingsView: View {
     @State private var showPhotoPicker = false
     @State private var selectedPhoto: PhotosPickerItem?
     @State private var isUploadingAvatar = false
+    @AppStorage("app_theme") private var appTheme = "system"
 
     var body: some View {
         NavigationStack {
@@ -2061,6 +2261,26 @@ struct SettingsView: View {
                     }
                 }
                 .tint(.rocGold)
+
+                Section("Appearance") {
+                    Picker("Theme", selection: $appTheme) {
+                        Text("System").tag("system")
+                        Text("Dark").tag("dark")
+                        Text("Light").tag("light")
+                    }
+                    .pickerStyle(.segmented)
+                    .onChange(of: appTheme) { _, newValue in
+                        let style: UIUserInterfaceStyle = switch newValue {
+                        case "dark": .dark
+                        case "light": .light
+                        default: .unspecified
+                        }
+                        UIApplication.shared.connectedScenes
+                            .compactMap { $0 as? UIWindowScene }
+                            .flatMap { $0.windows }
+                            .forEach { $0.overrideUserInterfaceStyle = style }
+                    }
+                }
 
                 Section("Quiet Hours") {
                     Toggle("Enable Quiet Hours", isOn: $quietHoursEnabled)
@@ -2556,5 +2776,80 @@ struct SafetyNumberSheet: View {
                 }
             }
         }
+    }
+}
+
+// MARK: - Forward Message Sheet
+
+struct ForwardMessageSheet: View {
+    let message: ChatMessage?
+    let onForward: (String) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var conversations: [ChatConversation] = []
+    private let userId = UserDefaults.standard.string(forKey: "user_id") ?? ""
+
+    var body: some View {
+        NavigationStack {
+            List(conversations) { conv in
+                Button(action: {
+                    onForward(conv.id)
+                    dismiss()
+                }) {
+                    HStack(spacing: 12) {
+                        AvatarView(url: conv.avatarURL, fallback: conv.name ?? conv.members.first?.username ?? "?", size: 40)
+                        VStack(alignment: .leading) {
+                            Text(conv.name ?? conv.members.filter { $0.userId != userId }.map { $0.displayName.isEmpty ? $0.username : $0.displayName }.joined(separator: ", "))
+                                .font(.headline)
+                                .lineLimit(1)
+                        }
+                        Spacer()
+                        Image(systemName: "chevron.right").foregroundColor(.secondary)
+                    }
+                }
+                .buttonStyle(.plain)
+            }
+            .navigationTitle("Forward To")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+            }
+            .task {
+                do {
+                    let data = try await APIClient.shared.getRaw("/conversations")
+                    if let json = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
+                        conversations = json.compactMap { dict -> ChatConversation? in
+                            guard let id = dict["id"] as? String else { return nil }
+                            let name = dict["name"] as? String
+                            let avatar = dict["avatar_url"] as? String
+                            let members = (dict["members"] as? [[String: Any]])?.compactMap { m -> (userId: String, username: String, displayName: String)? in
+                                guard let uid = m["user_id"] as? String ?? m["userId"] as? String,
+                                      let un = m["username"] as? String,
+                                      let dn = m["display_name"] as? String ?? m["displayName"] as? String else { return nil }
+                                return (uid, un, dn)
+                            } ?? []
+                            return ChatConversation(id: id, name: name, avatarURL: avatar, lastMessage: nil, lastTimestamp: nil, unreadCount: 0, isPinned: false, isMuted: false, isGroup: (dict["is_group"] as? Bool) ?? false, members: members)
+                        }
+                    }
+                } catch {}
+            }
+        }
+    }
+}
+
+// MARK: - URL MIME Type Extension
+
+extension URL {
+    var mimeType: String {
+        let ext = pathExtension.lowercased()
+        let map: [String: String] = [
+            "jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png",
+            "gif": "image/gif", "pdf": "application/pdf", "doc": "application/msword",
+            "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "txt": "text/plain", "mp4": "video/mp4", "mov": "video/quicktime",
+            "mp3": "audio/mpeg", "m4a": "audio/mp4", "zip": "application/zip",
+        ]
+        return map[ext] ?? "application/octet-stream"
     }
 }

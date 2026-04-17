@@ -33,6 +33,201 @@ export async function handleMessages(
     return listConversations(env, session);
   }
 
+  // DELETE /api/messages/conversations/:id — leave/delete a conversation
+  if (request.method === 'DELETE') {
+    const parts = path.split('/');
+    if (parts[3] === 'conversations' && parts[4]) {
+      const convId = parts[4];
+      // Remove the user's membership
+      await env.DB.prepare('DELETE FROM conversation_members WHERE conversation_id = ? AND user_id = ?')
+        .bind(convId, session.userId).run();
+      return jsonResponse({ ok: true });
+    }
+  }
+
+  // POST /api/messages/conversations/:id/mute — toggle mute
+  if (request.method === 'POST' && path.match(/^\/api\/messages\/conversations\/[^/]+\/mute$/)) {
+    const convId = path.split('/')[4];
+    const member = await env.DB.prepare(
+      'SELECT muted_at FROM conversation_members WHERE conversation_id = ? AND user_id = ?'
+    ).bind(convId, session.userId).first<{ muted_at: number | null }>();
+    if (!member) return errorResponse('Not a member', 403);
+    const newMuted = member.muted_at ? null : Math.floor(Date.now() / 1000);
+    await env.DB.prepare(
+      'UPDATE conversation_members SET muted_at = ? WHERE conversation_id = ? AND user_id = ?'
+    ).bind(newMuted, convId, session.userId).run();
+    return jsonResponse({ muted: !!newMuted });
+  }
+
+  // POST /api/messages/conversations/:id/notification-mode — set notification mode
+  if (request.method === 'POST' && path.match(/^\/api\/messages\/conversations\/[^/]+\/notification-mode$/)) {
+    const convId = path.split('/')[4];
+    const body = await request.json() as { mode: string };
+    const validModes = ['normal', 'quiet', 'focus', 'emergency', 'silent', 'scheduled'];
+    if (!validModes.includes(body.mode)) return errorResponse('Invalid notification mode', 400);
+    await env.DB.prepare(
+      'UPDATE conversation_members SET notification_mode = ? WHERE conversation_id = ? AND user_id = ?'
+    ).bind(body.mode, convId, session.userId).run();
+    return jsonResponse({ notification_mode: body.mode });
+  }
+
+  // POST /api/messages/conversations/:id/archive — toggle archive
+  if (request.method === 'POST' && path.match(/^\/api\/messages\/conversations\/[^/]+\/archive$/)) {
+    const convId = path.split('/')[4];
+    const member = await env.DB.prepare(
+      'SELECT archived_at FROM conversation_members WHERE conversation_id = ? AND user_id = ?'
+    ).bind(convId, session.userId).first<{ archived_at: number | null }>();
+    if (!member) return errorResponse('Not a member', 403);
+    const newArchived = member.archived_at ? null : Math.floor(Date.now() / 1000);
+    await env.DB.prepare(
+      'UPDATE conversation_members SET archived_at = ? WHERE conversation_id = ? AND user_id = ?'
+    ).bind(newArchived, convId, session.userId).run();
+    return jsonResponse({ archived: !!newArchived });
+  }
+
+  // PUT /api/messages/conversations/:id/theme — set per-conversation chat theme
+  if (request.method === 'PUT' && path.match(/^\/api\/messages\/conversations\/[^/]+\/theme$/)) {
+    const convId = path.split('/')[4];
+    const body = await request.json() as { theme: string | null };
+    const validThemes = [null, 'default', 'midnight-blue', 'forest-green', 'sunset-amber', 'ocean-teal', 'rose-gold', 'lavender', 'charcoal'];
+    if (!validThemes.includes(body.theme)) return errorResponse('Invalid theme', 400);
+    await env.DB.prepare(
+      'UPDATE conversation_members SET chat_theme = ? WHERE conversation_id = ? AND user_id = ?'
+    ).bind(body.theme, convId, session.userId).run();
+    return jsonResponse({ chat_theme: body.theme });
+  }
+
+  // ── Message Reactions ──
+
+  // POST /api/messages/:msgId/react — add/update reaction
+  if (request.method === 'POST' && path.match(/^\/api\/messages\/[^/]+\/react$/)) {
+    const msgId = path.split('/')[3];
+    const body = await request.json() as { encrypted_reaction: string };
+    if (!body.encrypted_reaction) return errorResponse('Missing encrypted_reaction', 400);
+    // Verify message exists and user is member of conversation
+    const msg = await env.DB.prepare('SELECT conversation_id FROM messages WHERE id = ?').bind(msgId).first<{ conversation_id: string }>();
+    if (!msg) return errorResponse('Message not found', 404);
+    const member = await env.DB.prepare('SELECT 1 FROM conversation_members WHERE conversation_id = ? AND user_id = ?')
+      .bind(msg.conversation_id, session.userId).first();
+    if (!member) return errorResponse('Not a member', 403);
+    const id = crypto.randomUUID();
+    await env.DB.prepare(
+      'INSERT INTO message_reactions (id, message_id, user_id, encrypted_reaction) VALUES (?, ?, ?, ?) ON CONFLICT(message_id, user_id) DO UPDATE SET encrypted_reaction = excluded.encrypted_reaction, created_at = unixepoch()'
+    ).bind(id, msgId, session.userId, body.encrypted_reaction).run();
+    // Broadcast reaction via Durable Object
+    const roomId = env.CHAT_ROOM.idFromName(msg.conversation_id);
+    const room = env.CHAT_ROOM.get(roomId);
+    await room.fetch(new Request('https://internal/broadcast', {
+      method: 'POST',
+      body: JSON.stringify({ type: 'reaction', payload: { message_id: msgId, user_id: session.userId, encrypted_reaction: body.encrypted_reaction } }),
+    }));
+    return jsonResponse({ ok: true, id });
+  }
+
+  // DELETE /api/messages/:msgId/react — remove reaction
+  if (request.method === 'DELETE' && path.match(/^\/api\/messages\/[^/]+\/react$/)) {
+    const msgId = path.split('/')[3];
+    await env.DB.prepare('DELETE FROM message_reactions WHERE message_id = ? AND user_id = ?')
+      .bind(msgId, session.userId).run();
+    return jsonResponse({ ok: true });
+  }
+
+  // GET /api/messages/:msgId/reactions — get reactions for a message
+  if (request.method === 'GET' && path.match(/^\/api\/messages\/[^/]+\/reactions$/)) {
+    const msgId = path.split('/')[3];
+    const reactions = await env.DB.prepare(
+      'SELECT id, user_id, encrypted_reaction, created_at FROM message_reactions WHERE message_id = ? ORDER BY created_at'
+    ).bind(msgId).all();
+    return jsonResponse(reactions.results);
+  }
+
+  // ── Message Edit ──
+
+  // PATCH /api/messages/:msgId — edit message (re-encrypt)
+  if (request.method === 'PATCH' && path.match(/^\/api\/messages\/[^/]+$/) && !path.includes('conversations')) {
+    const msgId = path.split('/')[3];
+    const body = await request.json() as { encrypted: string };
+    if (!body.encrypted) return errorResponse('Missing encrypted payload', 400);
+    // Only sender can edit
+    const msg = await env.DB.prepare('SELECT sender_id, conversation_id FROM messages WHERE id = ? AND deleted_at IS NULL')
+      .bind(msgId).first<{ sender_id: string; conversation_id: string }>();
+    if (!msg) return errorResponse('Message not found', 404);
+    if (msg.sender_id !== session.userId) return errorResponse('Not your message', 403);
+    await env.DB.prepare('UPDATE messages SET encrypted = ?, edited_at = unixepoch() WHERE id = ?')
+      .bind(body.encrypted, msgId).run();
+    // Broadcast edit via Durable Object
+    const roomId = env.CHAT_ROOM.idFromName(msg.conversation_id);
+    const room = env.CHAT_ROOM.get(roomId);
+    await room.fetch(new Request('https://internal/broadcast', {
+      method: 'POST',
+      body: JSON.stringify({ type: 'message_edit', payload: { message_id: msgId, encrypted: body.encrypted, edited_at: Math.floor(Date.now() / 1000) } }),
+    }));
+    return jsonResponse({ ok: true });
+  }
+
+  // ── Message Delete ──
+
+  // DELETE /api/messages/:msgId — soft-delete message
+  if (request.method === 'DELETE' && path.match(/^\/api\/messages\/[^/]+$/) && !path.includes('conversations')) {
+    const msgId = path.split('/')[3];
+    const msg = await env.DB.prepare('SELECT sender_id, conversation_id FROM messages WHERE id = ? AND deleted_at IS NULL')
+      .bind(msgId).first<{ sender_id: string; conversation_id: string }>();
+    if (!msg) return errorResponse('Message not found', 404);
+    if (msg.sender_id !== session.userId) return errorResponse('Not your message', 403);
+    await env.DB.prepare('UPDATE messages SET deleted_at = unixepoch(), encrypted = ? WHERE id = ?')
+      .bind('{}', msgId).run();
+    // Broadcast delete
+    const roomId = env.CHAT_ROOM.idFromName(msg.conversation_id);
+    const room = env.CHAT_ROOM.get(roomId);
+    await room.fetch(new Request('https://internal/broadcast', {
+      method: 'POST',
+      body: JSON.stringify({ type: 'message_delete', payload: { message_id: msgId } }),
+    }));
+    return jsonResponse({ ok: true });
+  }
+
+  // ── Pinned Messages ──
+
+  // POST /api/messages/conversations/:id/pin/:msgId — pin a message
+  if (request.method === 'POST' && path.match(/^\/api\/messages\/conversations\/[^/]+\/pin\/[^/]+$/)) {
+    const parts = path.split('/');
+    const convId = parts[4];
+    const msgId = parts[6];
+    const member = await env.DB.prepare('SELECT 1 FROM conversation_members WHERE conversation_id = ? AND user_id = ?')
+      .bind(convId, session.userId).first();
+    if (!member) return errorResponse('Not a member', 403);
+    await env.DB.prepare(
+      'INSERT INTO pinned_messages (conversation_id, message_id, pinned_by) VALUES (?, ?, ?) ON CONFLICT DO NOTHING'
+    ).bind(convId, msgId, session.userId).run();
+    // Broadcast pin
+    const roomId = env.CHAT_ROOM.idFromName(convId);
+    const room = env.CHAT_ROOM.get(roomId);
+    await room.fetch(new Request('https://internal/broadcast', {
+      method: 'POST',
+      body: JSON.stringify({ type: 'message_pin', payload: { message_id: msgId, pinned_by: session.userId } }),
+    }));
+    return jsonResponse({ ok: true });
+  }
+
+  // DELETE /api/messages/conversations/:id/pin/:msgId — unpin
+  if (request.method === 'DELETE' && path.match(/^\/api\/messages\/conversations\/[^/]+\/pin\/[^/]+$/)) {
+    const parts = path.split('/');
+    const convId = parts[4];
+    const msgId = parts[6];
+    await env.DB.prepare('DELETE FROM pinned_messages WHERE conversation_id = ? AND message_id = ?')
+      .bind(convId, msgId).run();
+    return jsonResponse({ ok: true });
+  }
+
+  // GET /api/messages/conversations/:id/pins — list pinned messages
+  if (request.method === 'GET' && path.match(/^\/api\/messages\/conversations\/[^/]+\/pins$/)) {
+    const convId = path.split('/')[4];
+    const pins = await env.DB.prepare(
+      'SELECT pm.message_id, pm.pinned_by, pm.pinned_at, m.encrypted, m.sender_id, m.server_timestamp FROM pinned_messages pm JOIN messages m ON pm.message_id = m.id WHERE pm.conversation_id = ? ORDER BY pm.pinned_at DESC'
+    ).bind(convId).all();
+    return jsonResponse(pins.results);
+  }
+
   // GET /api/messages/:conversationId — fetch messages
   if (request.method === 'GET') {
     const parts = path.split('/');
@@ -132,13 +327,18 @@ async function sendMessage(request: Request, env: Env, session: Session): Promis
   await room.fetch(new Request('https://internal/broadcast', {
     method: 'POST',
     body: JSON.stringify({
-      type: 'new_message',
-      messageId,
-      senderId: session.userId,
-      conversationId,
-      encrypted,
-      messageType,
-      serverTimestamp: now,
+      type: 'message',
+      payload: {
+        id: messageId,
+        fromUserId: session.userId,
+        ciphertext: encrypted.ciphertext || '',
+        iv: encrypted.iv || '',
+        ratchet_header: encrypted.ratchet_header || (encrypted.header ? JSON.stringify(encrypted.header) : ''),
+        tag: encrypted.tag || '',
+        message_type: messageType,
+        created_at: new Date(now * 1000).toISOString(),
+      },
+      excludeUserId: session.userId,
     }),
   }));
 
@@ -154,7 +354,7 @@ async function sendMessage(request: Request, env: Env, session: Session): Promis
 
     // Fire-and-forget push to all other members
     for (const m of otherMembers.results) {
-      sendPushNotification(env, m.user_id, senderName).catch(() => {});
+      sendPushNotification(env, m.user_id, senderName, session.userId).catch(() => {});
     }
   }
 
@@ -283,11 +483,14 @@ async function createConversation(
 async function listConversations(env: Env, session: Session): Promise<Response> {
   const result = await env.DB.prepare(
     `SELECT c.id, c.type, c.encrypted_meta, c.created_at,
+            cm.muted_at, cm.archived_at, cm.chat_theme,
             (SELECT json_group_array(json_object(
               'user_id', cm2.user_id,
               'username', u2.username,
               'display_name', COALESCE(u2.display_name, u2.username),
-              'role', cm2.role
+              'role', cm2.role,
+              'avatar_url', u2.avatar_url,
+              'account_tier', u2.account_tier
             ))
              FROM conversation_members cm2
              JOIN users u2 ON u2.id = cm2.user_id
@@ -305,6 +508,9 @@ async function listConversations(env: Env, session: Session): Promise<Response> 
     type: row.type,
     name: row.encrypted_meta,
     members: JSON.parse(row.members as string || '[]'),
+    muted: !!row.muted_at,
+    archived: !!row.archived_at,
+    chat_theme: row.chat_theme || null,
     last_message_at: row.last_message_at
       ? new Date((row.last_message_at as number) * 1000).toISOString()
       : null,

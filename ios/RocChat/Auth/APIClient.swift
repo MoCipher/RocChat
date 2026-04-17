@@ -47,6 +47,7 @@ class APIClient {
         authHash: String,
         salt: String,
         identityKey: String,
+        identityDHKey: String,
         identityPrivateEncrypted: String,
         signedPreKeyPublic: String,
         signedPreKeyPrivateEncrypted: String,
@@ -59,12 +60,13 @@ class APIClient {
             "auth_hash": authHash,
             "salt": salt,
             "identity_key": identityKey,
+            "identity_dh_key": identityDHKey,
             "identity_private_encrypted": identityPrivateEncrypted,
             "signed_pre_key_public": signedPreKeyPublic,
             "signed_pre_key_private_encrypted": signedPreKeyPrivateEncrypted,
             "signed_pre_key_signature": signedPreKeySignature,
             "one_time_pre_keys": oneTimePreKeys,
-            "turnstile_token": "",
+
         ]
         let data = try await post("/auth/register", body: body)
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -119,6 +121,32 @@ class APIClient {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try validateResponse(response)
+        return data
+    }
+
+    func uploadBinary(_ path: String, data: Data, headers: [String: String]) async throws -> Data {
+        var request = URLRequest(url: URL(string: "\(baseURL)\(path)")!)
+        request.httpMethod = "POST"
+        if let token = sessionToken {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        for (key, value) in headers {
+            request.setValue(value, forHTTPHeaderField: key)
+        }
+        request.httpBody = data
+        let (respData, response) = try await URLSession.shared.data(for: request)
+        try validateResponse(response)
+        return respData
+    }
+
+    func deleteRaw(_ path: String) async throws -> Data {
+        var request = URLRequest(url: URL(string: "\(baseURL)\(path)")!)
+        request.httpMethod = "DELETE"
+        if let token = sessionToken {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
         let (data, response) = try await URLSession.shared.data(for: request)
         try validateResponse(response)
         return data

@@ -23,6 +23,7 @@ import com.rocchat.auth.BiometricHelper
 import com.rocchat.chat.MainScreen
 import com.rocchat.network.APIClient
 import com.rocchat.push.PushManager
+import kotlinx.coroutines.launch
 
 class MainActivity : FragmentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -61,6 +62,8 @@ class MainActivity : FragmentActivity() {
                         if (userId != null) {
                             PushManager.registerAndSubscribe(this@MainActivity, userId)
                         }
+                        // Key maintenance: SPK rotation + prekey replenishment
+                        com.rocchat.crypto.KeyRotationManager.performMaintenance(this@MainActivity)
                     }
                 }
 
@@ -106,6 +109,10 @@ class MainActivity : FragmentActivity() {
                     isAuthenticated -> {
                         MainScreen(
                             onLogout = {
+                                // Server-side session invalidation
+                                kotlinx.coroutines.MainScope().launch {
+                                    try { APIClient.postPublic("/auth/logout", org.json.JSONObject()) } catch (_: Exception) {}
+                                }
                                 APIClient.sessionToken = null
                                 prefs.edit().clear().apply()
                                 isAuthenticated = false

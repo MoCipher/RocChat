@@ -7,6 +7,7 @@
 
 import type { Env } from './index.js';
 import { jsonResponse, errorResponse, generateSessionToken } from './middleware.js';
+import { verifyPowSolution } from './pow.js';
 
 export async function handleAuth(
   request: Request,
@@ -28,7 +29,9 @@ async function handleRegister(request: Request, env: Env): Promise<Response> {
   const encryptedKeys = (raw.encrypted_keys ?? raw.encryptedKeys ?? raw.identity_private_encrypted) as string | undefined;
   const identityKey = (raw.identity_key ?? raw.identityKey) as string | undefined;
   const identityDHKey = (raw.identity_dh_key ?? raw.identityDHKey ?? identityKey) as string | undefined;
-  const turnstileToken = (raw.turnstile_token ?? raw.turnstileToken) as string | undefined;
+  // Turnstile removed — PoW only. No third-party CAPTCHA.
+  const powToken = (raw.pow_token ?? raw.powToken) as string | undefined;
+  const powNonce = (raw.pow_nonce ?? raw.powNonce) as string | undefined;
 
   // Signed pre-key: accept nested object OR flat fields
   let spkId = 0;
@@ -69,11 +72,16 @@ async function handleRegister(request: Request, env: Env): Promise<Response> {
     );
   }
 
-  // Verify Turnstile token
-  if (turnstileToken) {
-    const turnstileOk = await verifyTurnstile(turnstileToken, env);
-    if (!turnstileOk) {
-      return errorResponse('Turnstile verification failed', 403);
+  // Proof-of-work anti-bot protection — no third-party CAPTCHA services
+  const difficulty = parseInt(env.POW_DIFFICULTY || '18', 10);
+  if (difficulty > 0) {
+    const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
+    if (!powToken || !powNonce) {
+      return errorResponse('Proof-of-work required', 403);
+    }
+    const powOk = await verifyPowSolution(env, powToken, powNonce, ip);
+    if (!powOk) {
+      return errorResponse('Invalid proof-of-work', 403);
     }
   }
 
@@ -166,9 +174,23 @@ async function handleLogin(request: Request, env: Env): Promise<Response> {
   const authHash = (raw.auth_hash ?? raw.authHash) as string | undefined;
   const deviceName = (raw.device_name ?? raw.deviceName) as string | undefined;
   const platform = raw.platform as string | undefined;
+  const powToken = (raw.pow_token ?? raw.powToken) as string | undefined;
+  const powNonce = (raw.pow_nonce ?? raw.powNonce) as string | undefined;
 
   if (!username || !authHash) {
     return errorResponse('Missing username or passphrase', 400);
+  }
+
+  const difficulty = parseInt(env.POW_DIFFICULTY || '0', 10) || 0;
+  if (difficulty > 0) {
+    const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
+    if (!powToken || !powNonce) {
+      return errorResponse('Proof-of-work required', 403);
+    }
+    const powOk = await verifyPowSolution(env, powToken, powNonce, ip);
+    if (!powOk) {
+      return errorResponse('Invalid proof-of-work', 403);
+    }
   }
 
   // Constant-time-ish lookup (always query to prevent timing attacks)
@@ -229,22 +251,7 @@ async function handleLogin(request: Request, env: Env): Promise<Response> {
   });
 }
 
-/** Verify Cloudflare Turnstile token */
-async function verifyTurnstile(token: string, env: Env): Promise<boolean> {
-  if (!env.TURNSTILE_SECRET_KEY) return true; // Skip if not configured
-
-  const resp = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      secret: env.TURNSTILE_SECRET_KEY,
-      response: token,
-    }),
-  });
-
-  const result = await resp.json() as { success: boolean };
-  return result.success;
-}
+// Turnstile removed — RocChat uses proof-of-work only. No third-party CAPTCHA.
 
 /** Constant-time string comparison using Web Crypto */
 function timingSafeEqual(a: string, b: string): boolean {

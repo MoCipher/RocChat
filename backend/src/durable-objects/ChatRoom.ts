@@ -28,7 +28,19 @@ interface WsMessage {
     | 'call_answer'
     | 'call_ice'
     | 'call_end'
-    | 'read_receipt';
+    | 'call_audio'
+    | 'call_p2p_candidate'
+    | 'read_receipt'
+    | 'group_call_start'
+    | 'group_call_join'
+    | 'group_call_leave'
+    | 'group_call_offer'
+    | 'group_call_answer'
+    | 'group_call_ice'
+    | 'reaction'
+    | 'message_edit'
+    | 'message_delete'
+    | 'message_pin';
   payload: Record<string, unknown>;
 }
 
@@ -69,14 +81,14 @@ export class ChatRoom implements DurableObject {
       return new Response('Missing auth params', { status: 400 });
     }
 
-    // Verify session token via KV
+    // Verify session token via KV (userId only — deviceId varies by platform)
     const sessionData = await this.env.KV.get(`session:${sessionToken}`);
     if (!sessionData) {
       return new Response('Invalid session', { status: 401 });
     }
 
     const session = JSON.parse(sessionData) as { userId: string; deviceId: string };
-    if (session.userId !== userId || session.deviceId !== deviceId) {
+    if (session.userId !== userId) {
       return new Response('Session mismatch', { status: 401 });
     }
 
@@ -164,6 +176,52 @@ export class ChatRoom implements DurableObject {
             },
             sender.userId,
           );
+        }
+        break;
+      }
+
+      case 'call_audio': {
+        // Relay encrypted audio frames — zero-knowledge, server only forwards
+        // Payload: { callId, targetUserId, seq, frame (base64 opus/pcm) }
+        const targetUserId = msg.payload.targetUserId as string | undefined;
+        if (!targetUserId) break;
+        this.sendToUser(targetUserId, {
+          type: 'call_audio',
+          payload: { ...msg.payload, fromUserId: sender.userId },
+        });
+        break;
+      }
+
+      case 'call_p2p_candidate': {
+        // Relay a RocP2P UDP candidate (host or srflx) so the peer can hole-punch
+        const targetUserId = msg.payload.targetUserId as string | undefined;
+        if (!targetUserId) break;
+        this.sendToUser(targetUserId, {
+          type: 'call_p2p_candidate',
+          payload: { ...msg.payload, fromUserId: sender.userId },
+        });
+        break;
+      }
+
+      // Group call signaling — broadcast start/join/leave, targeted offer/answer/ice
+      case 'group_call_start':
+      case 'group_call_join':
+      case 'group_call_leave':
+        this.broadcast(
+          { type: msg.type, payload: { ...msg.payload, fromUserId: sender.userId } },
+          sender.userId,
+        );
+        break;
+
+      case 'group_call_offer':
+      case 'group_call_answer':
+      case 'group_call_ice': {
+        const gcTarget = msg.payload.targetUserId as string | undefined;
+        const gcPayload = { ...msg.payload, fromUserId: sender.userId };
+        if (gcTarget) {
+          this.sendToUser(gcTarget, { type: msg.type, payload: gcPayload });
+        } else {
+          this.broadcast({ type: msg.type, payload: gcPayload }, sender.userId);
         }
         break;
       }

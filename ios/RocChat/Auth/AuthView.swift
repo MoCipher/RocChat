@@ -13,30 +13,50 @@ struct AuthView: View {
             Color.midnightAzure.ignoresSafeArea()
             
             VStack(spacing: 24) {
-                // Roc bird logo
-                Image(systemName: "bird.fill")
-                    .font(.system(size: 48))
-                    .foregroundStyle(
-                        LinearGradient(
-                            colors: [.rocGoldLight, .rocGold, .rocGoldDark],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
+                // Roc bird logo - golden gradient circle with bird
+                ZStack {
+                    Circle()
+                        .fill(
+                            RadialGradient(
+                                gradient: Gradient(colors: [
+                                    .rocGold.opacity(0.2),
+                                    .clear
+                                ]),
+                                center: .center,
+                                startRadius: 0,
+                                endRadius: 60
+                            )
                         )
-                    )
-                
-                Text("RocChat")
-                    .font(.custom("Montserrat", size: 28).bold())
-                    .foregroundStyle(
-                        LinearGradient(
-                            colors: [Color(hex: "fbbf24"), .rocGold, Color(hex: "b45309")],
-                            startPoint: .leading,
-                            endPoint: .trailing
+                        .frame(width: 120, height: 120)
+
+                    Image(systemName: "bird.fill")
+                        .font(.system(size: 48))
+                        .foregroundStyle(
+                            LinearGradient(
+                                colors: [.rocGoldLight, .rocGold, .rocGoldDark],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
                         )
-                    )
+                        .shadow(color: .rocGold.opacity(0.3), radius: 8, y: 4)
+                }
                 
-                Text("End-to-end encrypted")
-                    .font(.custom("JetBrains Mono", size: 12))
-                    .foregroundColor(.turquoise)
+                VStack(spacing: 6) {
+                    Text("RocChat")
+                        .font(.custom("Montserrat", size: 32).bold())
+                        .foregroundStyle(
+                            LinearGradient(
+                                colors: [Color(hex: "fbbf24"), .rocGold, Color(hex: "b45309")],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            )
+                        )
+                    
+                    Text("End-to-end encrypted")
+                        .font(.custom("JetBrains Mono", size: 12))
+                        .foregroundColor(.turquoise)
+                        .tracking(1)
+                }
                 
                 VStack(spacing: 16) {
                     TextField("Username", text: $username)

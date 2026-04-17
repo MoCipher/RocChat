@@ -3,17 +3,20 @@ package com.rocchat.auth
 import android.content.Context
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.rocchat.crypto.RocCrypto
+import com.rocchat.crypto.SessionManager
 import com.rocchat.network.APIClient
 import com.rocchat.ui.RocColors
 import kotlinx.coroutines.launch
@@ -51,17 +54,30 @@ fun AuthScreen(onSuccess: () -> Unit) {
                 modifier = Modifier.padding(32.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                // Title
+                // Title with gradient glow
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier.padding(bottom = 8.dp)
+                ) {
+                    // Glow circle
+                    Box(
+                        modifier = Modifier
+                            .size(80.dp)
+                            .clip(CircleShape)
+                            .background(RocColors.RocGold.copy(alpha = 0.12f))
+                    )
+                }
                 Text(
                     text = "RocChat",
-                    fontSize = 28.sp,
+                    fontSize = 32.sp,
                     fontWeight = FontWeight.Bold,
                     color = RocColors.RocGold
                 )
                 Text(
                     text = "End-to-end encrypted",
                     fontSize = 12.sp,
-                    color = RocColors.Turquoise
+                    color = RocColors.Turquoise,
+                    letterSpacing = 1.sp
                 )
 
                 Spacer(modifier = Modifier.height(24.dp))
@@ -167,20 +183,25 @@ fun AuthScreen(onSuccess: () -> Unit) {
                                 val authHashB64 = Base64.encodeToString(authHash, Base64.NO_WRAP)
 
                                 if (isRegistering) {
-                                    // Generate X25519 keypairs for signal protocol
-                                    val identityKp = RocCrypto.generateX25519KeyPair()
+                                    // Generate Ed25519 identity keypair (for signing)
+                                    val identityKp = RocCrypto.generateEd25519KeyPair()
+                                    // Generate X25519 signed pre-key
                                     val signedPreKp = RocCrypto.generateX25519KeyPair()
+                                    // Sign the SPK public key with the Ed25519 identity key
                                     val signature = RocCrypto.sign(identityKp.first, signedPreKp.second)
 
-                                    val oneTimePreKeys = (1..20).map {
-                                        val kp = RocCrypto.generateX25519KeyPair()
-                                        Base64.encodeToString(kp.second, Base64.NO_WRAP)
-                                    }
+                                    // Generate identity DH key (X25519 for X3DH)
+                                    val identityDHKp = RocCrypto.generateX25519KeyPair()
+
+                                    val otpKeyPairs = (1..20).map { RocCrypto.generateX25519KeyPair() }
+                                    val oneTimePreKeys = otpKeyPairs.map { Base64.encodeToString(it.second, Base64.NO_WRAP) }
 
                                     // Derive vault key and encrypt private keys
                                     val vaultKey = RocCrypto.deriveVaultKey(passphrase, salt)
                                     val privateKeysJson = """{"identityPrivateKey":"${Base64.encodeToString(identityKp.first, Base64.NO_WRAP)}","signedPreKeyPrivateKey":"${Base64.encodeToString(signedPreKp.first, Base64.NO_WRAP)}"}"""
                                     val encryptedKeys = RocCrypto.aesGcmEncrypt(vaultKey, privateKeysJson.toByteArray())
+                                    // Encrypt SPK private with vault key before sending
+                                    val encryptedSpkPriv = RocCrypto.aesGcmEncrypt(vaultKey, signedPreKp.first)
 
                                     val regResult = APIClient.register(
                                         username = cleanUsername,
@@ -188,9 +209,10 @@ fun AuthScreen(onSuccess: () -> Unit) {
                                         authHash = authHashB64,
                                         salt = Base64.encodeToString(salt, Base64.NO_WRAP),
                                         identityKey = Base64.encodeToString(identityKp.second, Base64.NO_WRAP),
+                                        identityDHKey = Base64.encodeToString(identityDHKp.second, Base64.NO_WRAP),
                                         identityPrivateEncrypted = Base64.encodeToString(encryptedKeys, Base64.NO_WRAP),
                                         signedPreKeyPublic = Base64.encodeToString(signedPreKp.second, Base64.NO_WRAP),
-                                        signedPreKeyPrivateEncrypted = Base64.encodeToString(signedPreKp.first, Base64.NO_WRAP),
+                                        signedPreKeyPrivateEncrypted = Base64.encodeToString(encryptedSpkPriv, Base64.NO_WRAP),
                                         signedPreKeySignature = Base64.encodeToString(signature, Base64.NO_WRAP),
                                         oneTimePreKeys = oneTimePreKeys,
                                     )
@@ -205,6 +227,13 @@ fun AuthScreen(onSuccess: () -> Unit) {
                                             .putString("user_id", regUserId)
                                             .apply()
                                     }
+                                    // Cache key material for E2E session manager
+                                    SessionManager.identityDHPublic = identityDHKp.second
+                                    SessionManager.identityDHPrivate = identityDHKp.first
+                                    SessionManager.cacheKeyMaterial(
+                                        context, signedPreKp.second, signedPreKp.first,
+                                        otpKeyPairs.mapIndexed { i, kp -> Triple(i, kp.first, kp.second) }
+                                    )
                                     // Generate 12-word recovery phrase (BIP39-style)
                                     recoveryPhrase = generateRecoveryPhrase()
                                 } else {
@@ -215,6 +244,7 @@ fun AuthScreen(onSuccess: () -> Unit) {
                                         .putString("session_token", result.sessionToken)
                                         .putString("user_id", result.userId)
                                         .apply()
+                                    SessionManager.loadCachedKeyMaterial(context)
                                     onSuccess()
                                 }
                             } catch (e: Exception) {

@@ -48,7 +48,8 @@ export interface OneTimePreKey {
 
 /** Published to server for other users to fetch */
 export interface PreKeyBundle {
-  identityKey: Uint8Array; // Ed25519 public key
+  identityKey: Uint8Array; // Ed25519 public key (for signature verification)
+  identityDHKey?: Uint8Array; // X25519 public key (for DH operations)
   signedPreKey: {
     id: number;
     publicKey: Uint8Array;
@@ -172,9 +173,9 @@ export async function x3dhInitiate(
   // 3. Perform DH operations
   // DH1 = DH(IK_A, SPK_B)
   const dh1 = await x25519DH(ourIdentityDHKeyPair.privateKey, theirBundle.signedPreKey.publicKey);
-  // DH2 = DH(EK_A, IK_B) — need their X25519 identity key
-  // For simplicity, we use their identity key directly (assumes X25519 identity)
-  const dh2 = await x25519DH(ephemeral.privateKey, theirBundle.identityKey);
+  // DH2 = DH(EK_A, IK_B) — need their X25519 identity DH key
+  const theirDHKey = theirBundle.identityDHKey || theirBundle.identityKey;
+  const dh2 = await x25519DH(ephemeral.privateKey, theirDHKey);
   // DH3 = DH(EK_A, SPK_B)
   const dh3 = await x25519DH(ephemeral.privateKey, theirBundle.signedPreKey.publicKey);
 

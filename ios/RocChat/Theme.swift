@@ -18,6 +18,13 @@ extension Color {
     static let success       = Color(hex: "1EA672")
     static let danger        = Color(hex: "DC3545")
 
+    // Dark mode variants
+    static let darkBgApp     = Color(hex: "151210")
+    static let darkBgCard    = Color(hex: "1C1814")
+    static let darkText      = Color(hex: "E8E2D4")
+    static let darkTextSec   = Color(hex: "A09888")
+    static let darkBubbleTheirs = Color(hex: "1C1814")
+
     init(hex: String) {
         let hex = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
         var int: UInt64 = 0
@@ -39,4 +46,22 @@ extension Color {
             opacity: Double(a) / 255
         )
     }
+}
+
+// MARK: - Adaptive Colors (Light/Dark)
+
+extension Color {
+    static func adaptive(light: Color, dark: Color) -> Color {
+        Color(UIColor { traitCollection in
+            traitCollection.userInterfaceStyle == .dark
+                ? UIColor(dark)
+                : UIColor(light)
+        })
+    }
+
+    static let adaptiveBg = adaptive(light: bgApp, dark: darkBgApp)
+    static let adaptiveCard = adaptive(light: bgCard, dark: darkBgCard)
+    static let adaptiveText = adaptive(light: textPrimary, dark: darkText)
+    static let adaptiveTextSec = adaptive(light: textSecondary, dark: darkTextSec)
+    static let adaptiveBubbleTheirs = adaptive(light: bubbleTheirs, dark: darkBubbleTheirs)
 }

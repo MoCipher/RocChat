@@ -30,6 +30,14 @@ fun CallOverlay() {
     val status = CallManager.callStatus
     if (status == "idle") return
 
+    // Dismiss soft keyboard when entering an active call
+    val keyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
+    val focus = androidx.compose.ui.platform.LocalFocusManager.current
+    LaunchedEffect(status) {
+        keyboard?.hide()
+        focus.clearFocus(force = true)
+    }
+
     Box(
         modifier = Modifier
             .fillMaxSize()

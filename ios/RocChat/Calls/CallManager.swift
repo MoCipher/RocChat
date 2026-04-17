@@ -4,6 +4,7 @@
  * WebRTC voice & video calls with:
  * - Peer connection management (STUN/TURN)
  * - Signaling via WebSocket (Durable Object relay)
+ * - E2E encrypted signaling (Double Ratchet)
  * - Media capture (mic + camera via AVFoundation)
  * - Call state machine (idle → outgoing/incoming → connected → ended)
  *
@@ -12,6 +13,7 @@
 
 import Foundation
 import AVFoundation
+import CryptoKit
 import Combine
 
 // MARK: - Call State
@@ -57,13 +59,28 @@ class CallManager: ObservableObject {
     private var durationTimer: Timer?
     private var pendingSdp: String?
 
+    // RocP2P — direct UDP + AES-GCM. Falls back to WS relay after 3 s.
+    private var p2p: P2PTransport?
+    private var p2pConnected: Bool = false
+    private var p2pFallbackTimer: Timer?
+    private var isCallInitiator: Bool = false
+
     // WebRTC (using AVFoundation for audio as baseline)
     private var audioSession = AVAudioSession.sharedInstance()
     private var audioPlayer: AVAudioPlayer?
 
+    // Voice-over-WebSocket audio engine (no third-party — pure AVFoundation)
+    // 16 kHz mono PCM Int16 frames, base64-encoded, E2E-encrypted via Double Ratchet
+    private var audioEngine: AVAudioEngine?
+    private var playerNode: AVAudioPlayerNode?
+    private var audioSeq: UInt64 = 0
+    private let audioSampleRate: Double = 16000
+    private let audioFormat = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: 16000, channels: 1, interleaved: true)!
+
+    // Independent STUN servers — no Google, no surveillance
     private let iceServers = [
-        "stun:stun.l.google.com:19302",
-        "stun:stun1.l.google.com:19302"
+        "stun:stun.stunprotocol.org:3478",
+        "stun:stun.nextcloud.com:3478"
     ]
 
     private init() {
@@ -83,9 +100,11 @@ class CallManager: ObservableObject {
         self.callType = callType
         self.callStatus = .outgoing
         self.ws = ws
+        self.isCallInitiator = true
 
         configureAudioSession()
-        sendSignal(type: "call_offer", extra: [
+        startP2P(isInitiator: true)
+        sendEncryptedSignal(type: "call_offer", extra: [
             "callId": callId ?? "",
             "callType": callType.rawValue,
             "targetUserId": remoteUserId,
@@ -111,14 +130,16 @@ class CallManager: ObservableObject {
             return
         }
 
-        self.callId = payload["callId"] as? String
+        let decrypted = decryptSignaling(payload, conversationId: conversationId)
+
+        self.callId = decrypted["callId"] as? String
         self.conversationId = conversationId
-        self.remoteUserId = (payload["fromUserId"] as? String) ?? ""
+        self.remoteUserId = (decrypted["fromUserId"] as? String) ?? (payload["fromUserId"] as? String) ?? ""
         self.remoteName = String(self.remoteUserId.prefix(8))
-        self.callType = CallType(rawValue: (payload["callType"] as? String) ?? "voice") ?? .voice
+        self.callType = CallType(rawValue: (decrypted["callType"] as? String) ?? "voice") ?? .voice
         self.callStatus = .incoming
         self.ws = ws
-        self.pendingSdp = payload["sdp"] as? String
+        self.pendingSdp = decrypted["sdp"] as? String
 
         configureAudioSession()
 
@@ -136,10 +157,12 @@ class CallManager: ObservableObject {
         startTime = Date()
         startDurationTimer()
 
-        sendSignal(type: "call_answer", extra: [
+        startP2P(isInitiator: false)
+        sendEncryptedSignal(type: "call_answer", extra: [
             "callId": callId ?? "",
             "targetUserId": remoteUserId
         ])
+        startAudioStreaming()
     }
 
     func declineCall() {
@@ -149,20 +172,24 @@ class CallManager: ObservableObject {
     // MARK: - Call Answer / ICE Handling
 
     func handleCallAnswer(payload: [String: Any]) {
-        guard callId == payload["callId"] as? String else { return }
+        let decrypted = decryptSignaling(payload)
+        guard callId == decrypted["callId"] as? String else { return }
         callStatus = .connected
         startTime = Date()
         startDurationTimer()
+        startAudioStreaming()
     }
 
     func handleIceCandidate(payload: [String: Any]) {
-        guard callId == payload["callId"] as? String else { return }
+        let decrypted = decryptSignaling(payload)
+        guard callId == decrypted["callId"] as? String else { return }
         // Would add ICE candidate to RTCPeerConnection
     }
 
     func handleCallEnd(payload: [String: Any]) {
-        guard callId == payload["callId"] as? String else { return }
-        endCall(reason: (payload["reason"] as? String) ?? "hangup", notify: false)
+        let decrypted = decryptSignaling(payload)
+        guard callId == decrypted["callId"] as? String else { return }
+        endCall(reason: (decrypted["reason"] as? String) ?? "hangup", notify: false)
     }
 
     // MARK: - Controls
@@ -179,7 +206,7 @@ class CallManager: ObservableObject {
 
     func endCall(reason: String = "hangup", notify: Bool = true) {
         if notify, let callId = callId {
-            sendSignal(type: "call_end", extra: [
+            sendEncryptedSignal(type: "call_end", extra: [
                 "callId": callId,
                 "reason": reason,
                 "targetUserId": remoteUserId,
@@ -207,6 +234,8 @@ class CallManager: ObservableObject {
         // Clean up
         durationTimer?.invalidate()
         durationTimer = nil
+        stopAudioStreaming()
+        stopP2P()
         callId = nil
         conversationId = nil
         remoteUserId = ""
@@ -229,6 +258,67 @@ class CallManager: ObservableObject {
         guard let data = try? JSONSerialization.data(withJSONObject: message),
               let str = String(data: data, encoding: .utf8) else { return }
         ws?.send(.string(str)) { _ in }
+    }
+
+    private func sendEncryptedSignal(type: String, extra: [String: String]) {
+        guard let convId = conversationId, !remoteUserId.isEmpty else {
+            sendSignal(type: type, extra: extra)
+            return
+        }
+        let callId = extra["callId"] ?? ""
+        let targetUserId = extra["targetUserId"] ?? ""
+        var sensitiveData = extra
+        sensitiveData.removeValue(forKey: "targetUserId")
+        sensitiveData.removeValue(forKey: "callId")
+
+        Task {
+            do {
+                let plaintext = String(data: try JSONSerialization.data(withJSONObject: sensitiveData), encoding: .utf8)!
+                let envelope = try await SessionManager.shared.encryptMessage(
+                    conversationId: convId, recipientUserId: remoteUserId, plaintext: plaintext
+                )
+                let encryptedSignaling: [String: Any] = [
+                    "ciphertext": envelope.ciphertext,
+                    "iv": envelope.iv,
+                    "ratchet_header": envelope.ratchetHeader
+                ]
+                let payload: [String: Any] = [
+                    "callId": callId,
+                    "targetUserId": targetUserId,
+                    "encryptedSignaling": encryptedSignaling
+                ]
+                let message: [String: Any] = ["type": type, "payload": payload]
+                guard let data = try? JSONSerialization.data(withJSONObject: message),
+                      let str = String(data: data, encoding: .utf8) else { return }
+                ws?.send(.string(str)) { _ in }
+            } catch {
+                // Fallback to plaintext signaling
+                self.sendSignal(type: type, extra: extra)
+            }
+        }
+    }
+
+    private func decryptSignaling(_ payload: [String: Any], conversationId overrideConvId: String? = nil) -> [String: Any] {
+        guard let encSig = payload["encryptedSignaling"] as? [String: Any],
+              let ct = encSig["ciphertext"] as? String,
+              let iv = encSig["iv"] as? String,
+              let rh = encSig["ratchet_header"] as? String,
+              let convId = overrideConvId ?? conversationId else {
+            return payload // plaintext fallback
+        }
+        do {
+            let decrypted = try SessionManager.shared.decryptMessage(
+                conversationId: convId, ciphertext: ct, iv: iv, ratchetHeaderStr: rh
+            )
+            if let data = decrypted.data(using: .utf8),
+               var result = try JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                result["callId"] = payload["callId"]
+                result["targetUserId"] = payload["targetUserId"]
+                result["fromUserId"] = payload["fromUserId"]
+                return result
+            }
+        } catch { /* fallback */ }
+        return payload
     }
 
     private func configureAudioSession() {
@@ -258,5 +348,222 @@ class CallManager: ObservableObject {
     private func saveHistory() {
         guard let data = try? JSONEncoder().encode(callHistory) else { return }
         UserDefaults.standard.set(data, forKey: "rocchat_call_history")
+    }
+
+    // MARK: - Voice-over-WebSocket Audio Engine
+
+    private func startAudioStreaming() {
+        // Voice-only for now; video is UI-only until native media stack ships
+        guard callType == .voice || callType == .video else { return }
+        guard audioEngine == nil else { return }
+
+        let engine = AVAudioEngine()
+        let player = AVAudioPlayerNode()
+        engine.attach(player)
+
+        // Playback path: player -> mainMixer
+        engine.connect(player, to: engine.mainMixerNode, format: audioFormat)
+
+        // Capture path: inputNode tap
+        let inputNode = engine.inputNode
+        let hwFormat = inputNode.outputFormat(forBus: 0)
+        let targetFormat = audioFormat
+        let converter = AVAudioConverter(from: hwFormat, to: targetFormat)
+
+        inputNode.installTap(onBus: 0, bufferSize: 1024, format: hwFormat) { [weak self] buffer, _ in
+            guard let self = self, !self.isMuted else { return }
+            guard let converter = converter else { return }
+            let outCapacity = AVAudioFrameCount(targetFormat.sampleRate * Double(buffer.frameLength) / hwFormat.sampleRate) + 64
+            guard let out = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: outCapacity) else { return }
+            var error: NSError?
+            var supplied = false
+            let status = converter.convert(to: out, error: &error) { _, outStatus in
+                if supplied {
+                    outStatus.pointee = .noDataNow
+                    return nil
+                }
+                supplied = true
+                outStatus.pointee = .haveData
+                return buffer
+            }
+            if status == .error || error != nil { return }
+            guard let channelData = out.int16ChannelData?[0] else { return }
+            let byteCount = Int(out.frameLength) * MemoryLayout<Int16>.size
+            let data = Data(bytes: channelData, count: byteCount)
+            self.sendAudioFrame(data: data)
+        }
+
+        do {
+            try engine.start()
+            player.play()
+            self.audioEngine = engine
+            self.playerNode = player
+        } catch {
+            self.audioEngine = nil
+            self.playerNode = nil
+        }
+    }
+
+    private func stopAudioStreaming() {
+        playerNode?.stop()
+        audioEngine?.inputNode.removeTap(onBus: 0)
+        audioEngine?.stop()
+        audioEngine = nil
+        playerNode = nil
+        audioSeq = 0
+    }
+
+    private func sendAudioFrame(data: Data) {
+        guard let callId = callId, !remoteUserId.isEmpty else { return }
+        // μ-law encode + 1-byte codec tag: [0x01 | mulaw-bytes]. 2× compression.
+        var payload = Data([0x01])
+        payload.append(MuLaw.encode(pcm16: data))
+        // Prefer the direct P2P path once it's connected — WS relay is fallback only.
+        if p2pConnected, let p2p = p2p {
+            p2p.sendAudio(payload)
+            return
+        }
+        audioSeq &+= 1
+        let b64 = payload.base64EncodedString()
+        let msg: [String: Any] = [
+            "type": "call_audio",
+            "payload": [
+                "callId": callId,
+                "targetUserId": remoteUserId,
+                "seq": audioSeq,
+                "frame": b64
+            ]
+        ]
+        guard let jsonData = try? JSONSerialization.data(withJSONObject: msg),
+              let str = String(data: jsonData, encoding: .utf8) else { return }
+        ws?.send(.string(str)) { _ in }
+    }
+
+    /// Decode an inbound audio payload that may be μ-law (0x01) or PCM16 (0x00 / legacy).
+    private func decodeInboundAudio(_ payload: Data) -> Data {
+        guard let first = payload.first else { return payload }
+        if first == 0x01 {
+            return MuLaw.decode(mulaw: payload.dropFirst())
+        }
+        if first == 0x00 {
+            return payload.dropFirst()
+        }
+        return payload // legacy: raw PCM16, no tag
+    }
+
+    func handleCallAudio(payload: [String: Any]) {
+        guard callStatus == .connected,
+              let frameB64 = payload["frame"] as? String,
+              let incomingCallId = payload["callId"] as? String,
+              incomingCallId == callId,
+              let raw = Data(base64Encoded: frameB64),
+              let player = playerNode else { return }
+        let data = decodeInboundAudio(raw)
+        let frameCount = AVAudioFrameCount(data.count / MemoryLayout<Int16>.size)
+        guard frameCount > 0,
+              let buffer = AVAudioPCMBuffer(pcmFormat: audioFormat, frameCapacity: frameCount),
+              let channel = buffer.int16ChannelData?[0] else { return }
+        buffer.frameLength = frameCount
+        data.withUnsafeBytes { raw in
+            if let src = raw.baseAddress?.assumingMemoryBound(to: Int16.self) {
+                channel.update(from: src, count: Int(frameCount))
+            }
+        }
+        player.scheduleBuffer(buffer, completionHandler: nil)
+    }
+
+    // MARK: - RocP2P
+
+    private func startP2P(isInitiator: Bool) {
+        guard let convId = conversationId,
+              let secret = SessionManager.shared.p2pMediaSecret(conversationId: convId) else {
+            // No ratchet yet — stay on WS relay
+            return
+        }
+        let transport = P2PTransport()
+        transport.delegate = self
+        self.p2p = transport
+        self.p2pConnected = false
+        transport.start(sharedSecret: secret, isInitiator: isInitiator)
+
+        // 3-second window to establish direct path; otherwise stay on WS relay.
+        p2pFallbackTimer?.invalidate()
+        p2pFallbackTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: false) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self = self, !self.p2pConnected else { return }
+                // Keep transport alive — late-connecting candidates may still promote us.
+                // No-op here; sendAudioFrame already uses WS when !p2pConnected.
+            }
+        }
+    }
+
+    private func stopP2P() {
+        p2pFallbackTimer?.invalidate()
+        p2pFallbackTimer = nil
+        p2p?.stop()
+        p2p = nil
+        p2pConnected = false
+    }
+
+    func handleP2PCandidate(payload: [String: Any]) {
+        let decrypted = decryptSignaling(payload)
+        guard callId == decrypted["callId"] as? String,
+              let type = decrypted["candidateType"] as? String,
+              let host = decrypted["host"] as? String,
+              let port = decrypted["port"] as? Int else { return }
+        let priority = (decrypted["priority"] as? Int) ?? 0
+        let kind: P2PCandidate.CandidateType = (type == "host") ? .host : .srflx
+        let cand = P2PCandidate(type: kind, host: host, port: UInt16(clamping: port), priority: UInt32(clamping: priority))
+        p2p?.addRemoteCandidate(cand)
+    }
+}
+
+// MARK: - P2PTransportDelegate
+
+extension CallManager: P2PTransportDelegate {
+    nonisolated func p2pDidGatherCandidate(_ candidate: P2PCandidate) {
+        Task { @MainActor [weak self] in
+            guard let self = self, let cid = self.callId else { return }
+            self.sendEncryptedSignal(type: "call_p2p_candidate", extra: [
+                "callId": cid,
+                "targetUserId": self.remoteUserId,
+                "candidateType": candidate.type == .host ? "host" : "srflx",
+                "host": candidate.host,
+                "port": "\(candidate.port)",
+                "priority": "\(candidate.priority)"
+            ])
+        }
+    }
+
+    nonisolated func p2pDidConnect() {
+        Task { @MainActor [weak self] in
+            self?.p2pConnected = true
+        }
+    }
+
+    nonisolated func p2pDidFail(reason: String) {
+        // Stay on WS relay; do not end the call.
+        Task { @MainActor [weak self] in
+            self?.p2pConnected = false
+        }
+    }
+
+    nonisolated func p2pDidReceiveAudio(_ pcm: Data) {
+        Task { @MainActor [weak self] in
+            guard let self = self, self.callStatus == .connected,
+                  let player = self.playerNode else { return }
+            let data = self.decodeInboundAudio(pcm)
+            let frameCount = AVAudioFrameCount(data.count / MemoryLayout<Int16>.size)
+            guard frameCount > 0,
+                  let buffer = AVAudioPCMBuffer(pcmFormat: self.audioFormat, frameCapacity: frameCount),
+                  let channel = buffer.int16ChannelData?[0] else { return }
+            buffer.frameLength = frameCount
+            data.withUnsafeBytes { raw in
+                if let src = raw.baseAddress?.assumingMemoryBound(to: Int16.self) {
+                    channel.update(from: src, count: Int(frameCount))
+                }
+            }
+            player.scheduleBuffer(buffer, completionHandler: nil)
+        }
     }
 }

@@ -34,4 +34,10 @@ targets:
         CURRENT_PROJECT_VERSION: 1
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         DEVELOPMENT_TEAM: ""
+        # Mac Catalyst — build the same iOS target for macOS as a first-class app
+        SUPPORTS_MACCATALYST: YES
+        SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: YES
+        DERIVE_MACCATALYST_PRODUCT_BUNDLE_IDENTIFIER: NO
+        # iPad + iPhone + Mac
+        TARGETED_DEVICE_FAMILY: "1,2,6"
     dependencies: []

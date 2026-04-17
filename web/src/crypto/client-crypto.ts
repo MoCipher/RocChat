@@ -130,6 +130,7 @@ export async function storeKeysLocally(vaultKey: Uint8Array, bundle: LocalKeyBun
   const encrypted = await encryptPrivateKeys(vaultKey, bundle);
   localStorage.setItem('rocchat_keys', encrypted);
   localStorage.setItem('rocchat_identity_pub', toBase64(bundle.identityKeyPair.publicKey));
+  localStorage.setItem('rocchat_identity_priv', toBase64(bundle.identityKeyPair.privateKey));
 }
 
 /**
@@ -137,4 +138,44 @@ export async function storeKeysLocally(vaultKey: Uint8Array, bundle: LocalKeyBun
  */
 export function generateSalt(): Uint8Array {
   return randomBytes(32);
+}
+
+const SPK_ROTATION_INTERVAL = 7 * 24 * 3600 * 1000; // 7 days
+
+/**
+ * Check if signed pre-key needs rotation and rotate if so.
+ * Called on chat init. Generates new X25519 SPK, signs with identity key, uploads.
+ */
+export async function maybeRotateSignedPreKey(): Promise<void> {
+  const lastRotation = Number(localStorage.getItem('rocchat_spk_last_rotation') || '0');
+  if (Date.now() - lastRotation < SPK_ROTATION_INTERVAL) return;
+
+  const identityPrivB64 = localStorage.getItem('rocchat_identity_priv');
+  if (!identityPrivB64) return;
+
+  try {
+    const identityPriv = fromBase64(identityPrivB64);
+    const newSpk = await generateX25519KeyPair();
+    const signature = await ed25519Sign(identityPriv, newSpk.publicKey);
+    const spkId = Math.floor(Date.now() / 1000);
+
+    const { rotateSignedPreKey } = await import('../api.js');
+    const res = await rotateSignedPreKey({
+      id: spkId,
+      publicKey: toBase64(newSpk.publicKey),
+      signature: toBase64(signature),
+    });
+
+    if (res.ok) {
+      localStorage.setItem('rocchat_spk_last_rotation', String(Date.now()));
+      // Update stored SPK private key
+      const keysBlob = localStorage.getItem('rocchat_keys');
+      if (keysBlob) {
+        // Store new SPK private alongside for session use
+        localStorage.setItem('rocchat_spk_priv', toBase64(newSpk.privateKey));
+      }
+    }
+  } catch {
+    // Non-critical — will retry next load
+  }
 }

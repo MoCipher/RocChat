@@ -1,4 +1,4 @@
-const CACHE_NAME = 'rocchat-v2';
+const CACHE_NAME = 'rocchat-v3';
 const SHELL_ASSETS = [
   '/',
   '/index.html',
@@ -24,6 +24,38 @@ self.addEventListener('activate', (event) => {
   self.clients.claim();
 });
 
+// Push notification display (for future web push support)
+self.addEventListener('push', (event) => {
+  if (!event.data) return;
+  try {
+    const data = event.data.json();
+    event.waitUntil(
+      self.registration.showNotification(data.title || 'RocChat', {
+        body: data.body || 'New encrypted message',
+        icon: '/favicon.svg',
+        badge: '/favicon.svg',
+        tag: data.tag || 'message',
+        data: data.url ? { url: data.url } : undefined,
+      })
+    );
+  } catch { /* ignore malformed push */ }
+});
+
+// Notification click — focus or open app
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const url = event.notification.data?.url || '/';
+  event.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clients) => {
+      const existing = clients.find((c) => c.url.includes(self.location.origin));
+      if (existing) {
+        return existing.focus();
+      }
+      return self.clients.openWindow(url);
+    })
+  );
+});
+
 // Fetch strategy:
 //  - App shell (index.html): network-first, fallback to cache
 //  - Hashed assets (*.js, *.css with hash): cache-first (immutable)
@@ -32,9 +64,8 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
 
-  // Never cache API, WebSocket, or Turnstile requests
+  // Never cache API or WebSocket requests
   if (url.pathname.startsWith('/api/') ||
-      url.hostname === 'challenges.cloudflare.com' ||
       event.request.headers.get('Upgrade') === 'websocket') {
     return;
   }

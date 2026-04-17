@@ -41,6 +41,11 @@ export async function handleContacts(
     return verifyContact(request, env, session);
   }
 
+  // GET /api/contacts/invite-link — generate an invite link
+  if (path === '/api/contacts/invite-link' && request.method === 'GET') {
+    return generateInviteLink(env, session);
+  }
+
   // DELETE /api/contacts/:userId — remove a contact
   if (path.startsWith('/api/contacts/') && request.method === 'DELETE') {
     const contactUserId = path.split('/api/contacts/')[1];
@@ -170,4 +175,18 @@ async function removeContact(env: Env, session: Session, contactUserId: string):
     .run();
 
   return jsonResponse({ ok: true });
+}
+
+async function generateInviteLink(env: Env, session: Session): Promise<Response> {
+  const user = await env.DB.prepare(
+    'SELECT username, identity_key FROM users WHERE id = ?',
+  )
+    .bind(session.userId)
+    .first<{ username: string; identity_key: string }>();
+
+  if (!user) return errorResponse('User not found', 404);
+
+  const link = `https://chat.mocipher.com/add/@${encodeURIComponent(user.username)}?k=${encodeURIComponent(user.identity_key)}`;
+
+  return jsonResponse({ link, username: user.username });
 }

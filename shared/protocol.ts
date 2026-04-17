@@ -223,7 +223,8 @@ export interface RegisterRequest {
     id: number;
     publicKey: string;
   }>;
-  turnstileToken: string; // Cloudflare Turnstile
+  powToken?: string;
+  powNonce?: string;
 }
 
 export interface LoginRequest {

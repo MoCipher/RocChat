@@ -59,7 +59,7 @@ export function renderAuth(container: HTMLElement, onSuccess: () => void) {
       else handleRegister();
     });
 
-    if (mode === 'register') loadTurnstile();
+    if (mode === 'register') initPowWidget();
   }
 
   function loginForm(): string {
@@ -68,7 +68,8 @@ export function renderAuth(container: HTMLElement, onSuccess: () => void) {
         <div class="form-group">
           <label class="form-label" for="username">Username</label>
           <input class="form-input" id="username" name="username" autocomplete="username"
-                 placeholder="@noor" required minlength="3" maxlength="24" />
+                 placeholder="@noor" required minlength="3" maxlength="24" autocapitalize="off"
+                 aria-required="true" />
         </div>
         <div class="form-group">
           <label class="form-label" for="passphrase">Passphrase</label>
@@ -86,9 +87,9 @@ export function renderAuth(container: HTMLElement, onSuccess: () => void) {
         <div class="form-group">
           <label class="form-label" for="username">Username</label>
           <input class="form-input" id="username" name="username" autocomplete="username"
-                 placeholder="@noor" required minlength="3" maxlength="24"
-                 pattern="^[a-zA-Z][a-zA-Z0-9_]{2,23}$" />
-          <div class="form-hint">Letters, numbers, underscores. 3-24 characters.</div>
+                 placeholder="@noor" required minlength="3" maxlength="24" autocapitalize="off"
+                 pattern="^[a-zA-Z][a-zA-Z0-9_]{2,23}$" aria-required="true" aria-describedby="username-hint" />
+          <div class="form-hint" id="username-hint">Letters, numbers, underscores. 3-24 characters.</div>
         </div>
         <div class="form-group">
           <label class="form-label" for="display_name">Display Name</label>
@@ -98,35 +99,24 @@ export function renderAuth(container: HTMLElement, onSuccess: () => void) {
         <div class="form-group">
           <label class="form-label" for="passphrase">Passphrase</label>
           <input class="form-input" id="passphrase" name="passphrase" type="password"
-                 autocomplete="new-password" placeholder="Min 4 words or 16 characters" required minlength="16" />
-          <div class="form-hint">Use a strong passphrase. This is your ONLY way to log in — no recovery via email or phone.</div>
+                 autocomplete="new-password" placeholder="Min 4 words or 16 characters" required minlength="16"
+                 aria-required="true" aria-describedby="passphrase-hint" />
+          <div class="form-hint" id="passphrase-hint">Use a strong passphrase. This is your ONLY way to log in — no recovery via email or phone.</div>
         </div>
         <div class="form-group">
           <label class="form-label" for="passphrase_confirm">Confirm Passphrase</label>
           <input class="form-input" id="passphrase_confirm" name="passphrase_confirm" type="password"
                  autocomplete="new-password" placeholder="Repeat your passphrase" required />
         </div>
-        <div id="turnstile-container"></div>
+        <div id="pow-status" style="font-size:var(--text-xs);color:var(--text-tertiary);margin-bottom:var(--sp-2)"></div>
         <button class="btn-primary" type="submit" id="submit-btn">Create Account</button>
       </form>
     `;
   }
 
-  async function loadTurnstile() {
-    const el = document.getElementById('turnstile-container');
-    if (!el) return;
-    try {
-      const res = await api.health();
-      const cfg = await fetch('/api/config').then(r => r.json()) as { turnstile_site_key?: string };
-      const siteKey = cfg.turnstile_site_key || '1x00000000000000000000AA';
-      el.className = 'cf-turnstile';
-      el.setAttribute('data-sitekey', siteKey);
-      el.setAttribute('data-callback', 'onTurnstileSuccess');
-      el.setAttribute('data-theme', 'dark');
-      if (typeof (window as any).turnstile !== 'undefined') {
-        (window as any).turnstile.render(el);
-      }
-    } catch { /* fallback: test key already in place */ }
+  async function initPowWidget() {
+    const el = document.getElementById('pow-status');
+    if (el) el.textContent = '\uD83D\uDD12 Proof-of-work protection active \u2014 no third-party CAPTCHA';
   }
 
   function showError(msg: string) {
@@ -145,6 +135,52 @@ export function renderAuth(container: HTMLElement, onSuccess: () => void) {
     }
   }
 
+  async function solvePowIfAvailable(): Promise<{ token?: string; nonce?: string }> {
+    try {
+      const challengeRes = await api.getPowChallenge();
+      if (!challengeRes.ok) return {};
+      const { token, challenge, difficulty } = challengeRes.data;
+      const nonce = await solvePow(challenge, difficulty);
+      return { token, nonce };
+    } catch {
+      return {};
+    }
+  }
+
+  async function solvePow(challenge: string, difficulty: number): Promise<string> {
+    const enc = new TextEncoder();
+    let nonce = 0;
+    while (nonce < 10_000_000) {
+      const digest = await crypto.subtle.digest('SHA-256', enc.encode(`${challenge}:${nonce}`));
+      const bytes = new Uint8Array(digest);
+      if (leadingZeroBits(bytes) >= difficulty) return String(nonce);
+      nonce++;
+      if (nonce % 1000 === 0) {
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      }
+    }
+    throw new Error('PoW solve timeout');
+  }
+
+  function leadingZeroBits(bytes: Uint8Array): number {
+    let bits = 0;
+    for (const b of bytes) {
+      if (b === 0) {
+        bits += 8;
+        continue;
+      }
+      if ((b & 0b10000000) === 0) bits += 1; else return bits;
+      if ((b & 0b01000000) === 0) bits += 1; else return bits;
+      if ((b & 0b00100000) === 0) bits += 1; else return bits;
+      if ((b & 0b00010000) === 0) bits += 1; else return bits;
+      if ((b & 0b00001000) === 0) bits += 1; else return bits;
+      if ((b & 0b00000100) === 0) bits += 1; else return bits;
+      if ((b & 0b00000010) === 0) bits += 1; else return bits;
+      if ((b & 0b00000001) === 0) bits += 1; else return bits;
+    }
+    return bits;
+  }
+
   async function handleLogin() {
     const username = (container.querySelector('#username') as HTMLInputElement).value.trim().toLowerCase().replace(/^@/, '');
     const passphrase = (container.querySelector('#passphrase') as HTMLInputElement).value;
@@ -153,11 +189,17 @@ export function renderAuth(container: HTMLElement, onSuccess: () => void) {
 
     setLoading(true);
     try {
+      const pow = await solvePowIfAvailable();
       // First, derive auth hash with a deterministic salt (username-based for login)
       const salt = new TextEncoder().encode(`rocchat:${username}`);
       const authHash = await deriveAuthHash(passphrase, salt);
 
-      const res = await api.login({ username, auth_hash: toBase64(authHash) });
+      const res = await api.login({
+        username,
+        auth_hash: toBase64(authHash),
+        pow_token: pow.token,
+        pow_nonce: pow.nonce,
+      });
 
       if (!res.ok) {
         showError('Invalid username or passphrase.');
@@ -166,6 +208,7 @@ export function renderAuth(container: HTMLElement, onSuccess: () => void) {
 
       api.setToken(res.data.session_token);
       localStorage.setItem('rocchat_user_id', res.data.user_id);
+      if (res.data.device_id) localStorage.setItem('rocchat_device_id', res.data.device_id);
 
       // Decrypt keys with vault key
       const vaultKey = await deriveVaultKey(passphrase, salt);
@@ -174,6 +217,7 @@ export function renderAuth(container: HTMLElement, onSuccess: () => void) {
           const keys = await decryptPrivateKeys(vaultKey, res.data.encrypted_keys);
           localStorage.setItem('rocchat_keys', res.data.encrypted_keys);
           localStorage.setItem('rocchat_identity_pub', res.data.identity_key);
+          localStorage.setItem('rocchat_identity_priv', toBase64(keys.identityPrivateKey));
 
           // Store SPK public from server response for X3DH responder
           if (res.data.signed_pre_key_public) {
@@ -217,6 +261,7 @@ export function renderAuth(container: HTMLElement, onSuccess: () => void) {
 
     setLoading(true);
     try {
+      const pow = await solvePowIfAvailable();
       const salt = generateSalt();
       const authSalt = new TextEncoder().encode(`rocchat:${username}`);
       const authHash = await deriveAuthHash(passphrase, authSalt);
@@ -241,7 +286,8 @@ export function renderAuth(container: HTMLElement, onSuccess: () => void) {
         signed_pre_key_private_encrypted: toBase64(bundle.signedPreKey.keyPair.privateKey),
         signed_pre_key_signature: toBase64(bundle.signedPreKey.signature),
         one_time_pre_keys: bundle.oneTimePreKeys.map((k) => toBase64(k.keyPair.publicKey)),
-        turnstile_token: (window as any).__turnstileToken || ''
+        pow_token: pow.token,
+        pow_nonce: pow.nonce,
       });
 
       if (!res.ok) {
@@ -274,10 +320,11 @@ export function renderAuth(container: HTMLElement, onSuccess: () => void) {
       });
 
       // Store session
-      const resData = res.data as { session_token?: string; user_id?: string };
+      const resData = res.data as { session_token?: string; user_id?: string; device_id?: string };
       if (resData.session_token) {
         api.setToken(resData.session_token);
         localStorage.setItem('rocchat_user_id', resData.user_id || '');
+        if (resData.device_id) localStorage.setItem('rocchat_device_id', resData.device_id);
       }
 
       // Generate and display recovery phrase

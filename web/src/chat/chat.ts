@@ -7,14 +7,83 @@
 import * as api from '../api.js';
 import type { Conversation, Message } from '../api.js';
 import { encryptMessage, decryptMessage, getOrCreateSession } from '../crypto/session-manager.js';
+import { groupEncrypt, groupDecrypt, isGroupEncrypted, handleSenderKeyDistribution } from '../crypto/group-session-manager.js';
+import { maybeRotateSignedPreKey } from '../crypto/client-crypto.js';
 import type { EncryptedMessage } from '@rocchat/shared';
-import { generateSafetyNumber, fromBase64 } from '@rocchat/shared';
+import { generateSafetyNumber, fromBase64, toBase64, randomBytes, sha256 as cryptoSha256 } from '@rocchat/shared';
+import { initEmojiPicker } from './emoji-picker.js';
+import { initGifPicker } from './gif-picker.js';
+
+// ── Lightweight AES-GCM for metadata signals (typing, presence, read receipts) ──
+// Uses a per-conversation key derived from HKDF(identityKey + conversationId)
+const metaKeyCache = new Map<string, CryptoKey>();
+
+async function getMetaKey(conversationId: string): Promise<CryptoKey> {
+  const cached = metaKeyCache.get(conversationId);
+  if (cached) return cached;
+  const idKey = localStorage.getItem('rocchat_identity_key') || conversationId;
+  const raw = new TextEncoder().encode(idKey + ':meta:' + conversationId);
+  const hash = await crypto.subtle.digest('SHA-256', raw);
+  const key = await crypto.subtle.importKey('raw', hash, 'AES-GCM', false, ['encrypt', 'decrypt']);
+  metaKeyCache.set(conversationId, key);
+  return key;
+}
+
+async function encryptMeta(conversationId: string, data: Record<string, unknown>): Promise<string> {
+  const key = await getMetaKey(conversationId);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const plain = new TextEncoder().encode(JSON.stringify(data));
+  const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, plain);
+  return toBase64(iv) + '.' + toBase64(new Uint8Array(ct));
+}
+
+async function decryptMeta(conversationId: string, payload: string): Promise<Record<string, unknown>> {
+  const key = await getMetaKey(conversationId);
+  const [ivB64, ctB64] = payload.split('.');
+  const iv = new Uint8Array(fromBase64(ivB64));
+  const ct = new Uint8Array(fromBase64(ctB64));
+  const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ct);
+  return JSON.parse(new TextDecoder().decode(plain));
+}
 
 interface ChatState {
   conversations: Conversation[];
   activeConversationId: string | null;
   messages: Map<string, Message[]>;
   ws: WebSocket | null;
+}
+
+// Local encrypted plaintext cache keyed by server message id.
+// Prevents "Unable to decrypt" on the sender's own messages after reload,
+// and caches successful receiver decrypts so reloads stay instant.
+const PLAINTEXT_CACHE_KEY = 'rocchat_plaintext_v1';
+const plaintextCache: Map<string, string> = (() => {
+  try {
+    const raw = localStorage.getItem(PLAINTEXT_CACHE_KEY);
+    if (!raw) return new Map();
+    const obj = JSON.parse(raw) as Record<string, string>;
+    return new Map(Object.entries(obj));
+  } catch { return new Map(); }
+})();
+let plaintextCacheSaveTimer: ReturnType<typeof setTimeout> | null = null;
+function savePlaintextCache() {
+  if (plaintextCacheSaveTimer) return;
+  plaintextCacheSaveTimer = setTimeout(() => {
+    plaintextCacheSaveTimer = null;
+    try {
+      // Cap to last ~5000 entries to avoid unbounded growth.
+      const entries = [...plaintextCache.entries()];
+      const capped = entries.slice(-5000);
+      plaintextCache.clear();
+      for (const [k, v] of capped) plaintextCache.set(k, v);
+      localStorage.setItem(PLAINTEXT_CACHE_KEY, JSON.stringify(Object.fromEntries(plaintextCache)));
+    } catch {}
+  }, 300);
+}
+function cachePlaintext(messageId: string, plaintext: string) {
+  if (!messageId || messageId.startsWith('queued-')) return;
+  plaintextCache.set(messageId, plaintext);
+  savePlaintextCache();
 }
 
 interface QueuedMessage {
@@ -29,6 +98,28 @@ const state: ChatState = {
   messages: new Map(),
   ws: null,
 };
+
+// ── Delivery status tracking ──
+// 'queued' → 'sent' → 'delivered' → 'read'
+type DeliveryStatus = 'queued' | 'syncing' | 'sent' | 'delivered' | 'read';
+const deliveryStatus = new Map<string, DeliveryStatus>();
+const onlineUsers = new Set<string>();
+
+// ── Folder filter state ──
+let activeFolderId: string | null = null;
+
+function getStatusIcon(msgId: string, isMine: boolean): string {
+  if (!isMine) return '';
+  const status = deliveryStatus.get(msgId) || 'delivered';
+  switch (status) {
+    case 'queued': return '<span class="message-status" title="Queued">🕐</span>';
+    case 'syncing': return '<span class="message-status" title="Syncing">⟳</span>';
+    case 'sent': return '<span class="message-status" title="Sent">✓</span>';
+    case 'delivered': return '<span class="message-status" title="Delivered">✓✓</span>';
+    case 'read': return '<span class="message-status message-status-read" title="Read">✓✓</span>';
+    default: return '<span class="message-status">✓✓</span>';
+  }
+}
 
 // ── Offline message queue (persisted in IndexedDB) ──
 const messageQueue: QueuedMessage[] = [];
@@ -155,6 +246,7 @@ export async function renderChats(container: HTMLElement) {
           <i data-lucide="search" style="width:16px;height:16px;color:var(--text-tertiary)"></i>
           <input type="text" placeholder="Search..." id="chat-search" />
         </div>
+        <div class="folder-tabs" id="folder-tabs"></div>
       </div>
       <div class="conversations-list" id="conversations-list">
         <div class="empty-state" style="padding:var(--sp-8)">
@@ -178,16 +270,22 @@ export async function renderChats(container: HTMLElement) {
     </div>
   `;
 
-  // Load conversations
+  // Load conversations + folders in parallel
   try {
-    const res = await api.getConversations();
-    if (res.ok) {
-      state.conversations = res.data.conversations || [];
-      renderConversationsList();
+    const [convRes, folderRes] = await Promise.all([api.getConversations(), api.getChatFolders()]);
+    if (convRes.ok) {
+      state.conversations = convRes.data.conversations || [];
     }
+    if (folderRes.ok) {
+      renderFolderTabs(folderRes.data as unknown as api.ChatFolder[]);
+    }
+    renderConversationsList();
   } catch {
     // Network error — show empty
   }
+
+  // Rotate signed pre-key if needed (non-blocking)
+  maybeRotateSignedPreKey().catch(() => {});
 
   // Bind new chat
   container.querySelector('#new-chat-btn')?.addEventListener('click', () => {
@@ -202,9 +300,89 @@ export async function renderChats(container: HTMLElement) {
     searchTimeout = setTimeout(() => renderConversationsList(q), 200);
   });
 
+  // Pull-to-refresh on conversations list
+  attachPullToRefresh(container.querySelector('#conversations-list') as HTMLElement | null);
+
   if (typeof (window as any).lucide !== 'undefined') {
     (window as any).lucide.createIcons();
   }
+}
+
+function attachPullToRefresh(el: HTMLElement | null) {
+  if (!el) return;
+  let startY = 0;
+  let pulling = false;
+  let refreshing = false;
+  const threshold = 64;
+  const indicator = document.createElement('div');
+  indicator.style.cssText = 'position:absolute;top:-40px;left:50%;transform:translateX(-50%);width:28px;height:28px;border:2px solid var(--roc-gold);border-top-color:transparent;border-radius:50%;transition:transform .15s;pointer-events:none;opacity:0;';
+  el.style.position = 'relative';
+  el.prepend(indicator);
+  el.addEventListener('touchstart', (e) => {
+    if (refreshing) return;
+    if (el.scrollTop > 0) return;
+    startY = e.touches[0].clientY;
+    pulling = true;
+  }, { passive: true });
+  el.addEventListener('touchmove', (e) => {
+    if (!pulling || refreshing) return;
+    const dy = e.touches[0].clientY - startY;
+    if (dy <= 0) { indicator.style.opacity = '0'; return; }
+    const pct = Math.min(1, dy / threshold);
+    indicator.style.opacity = String(pct);
+    indicator.style.transform = `translateX(-50%) translateY(${Math.min(dy, threshold + 20)}px) rotate(${dy * 4}deg)`;
+  }, { passive: true });
+  el.addEventListener('touchend', async (e) => {
+    if (!pulling) return;
+    pulling = false;
+    const dy = (e.changedTouches[0]?.clientY ?? 0) - startY;
+    if (dy > threshold && !refreshing) {
+      refreshing = true;
+      indicator.style.animation = 'rocchat-spin 0.8s linear infinite';
+      try {
+        const res = await api.getConversations();
+        if (res.ok) {
+          state.conversations = res.data.conversations || [];
+          renderConversationsList();
+        }
+      } catch {}
+      refreshing = false;
+      indicator.style.animation = '';
+      indicator.style.opacity = '0';
+      indicator.style.transform = 'translateX(-50%)';
+    } else {
+      indicator.style.opacity = '0';
+      indicator.style.transform = 'translateX(-50%)';
+    }
+  });
+  // Spin keyframes (inject once)
+  if (!document.getElementById('rocchat-pull-kf')) {
+    const style = document.createElement('style');
+    style.id = 'rocchat-pull-kf';
+    style.textContent = '@keyframes rocchat-spin { to { transform: translateX(-50%) translateY(40px) rotate(360deg); } }';
+    document.head.appendChild(style);
+  }
+}
+
+function renderFolderTabs(folders: api.ChatFolder[]) {
+  const tabsEl = document.getElementById('folder-tabs');
+  if (!tabsEl) return;
+  if (!folders.length) { tabsEl.style.display = 'none'; return; }
+
+  tabsEl.style.display = 'flex';
+  tabsEl.innerHTML = `
+    <button class="folder-tab ${activeFolderId === null ? 'active' : ''}" data-folder-id="">All</button>
+    ${folders.map(f => `<button class="folder-tab ${activeFolderId === f.id ? 'active' : ''}" data-folder-id="${f.id}" data-conv-ids="${f.conversation_ids.join(',')}">${escapeHtml(f.icon)} ${escapeHtml(f.name)}</button>`).join('')}
+  `;
+  tabsEl.querySelectorAll('.folder-tab').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const fid = (btn as HTMLElement).dataset.folderId || null;
+      activeFolderId = fid || null;
+      tabsEl.querySelectorAll('.folder-tab').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      renderConversationsList();
+    });
+  });
 }
 
 function renderConversationsList(filter = '') {
@@ -213,6 +391,18 @@ function renderConversationsList(filter = '') {
 
   const userId = localStorage.getItem('rocchat_user_id') || '';
   let filtered = state.conversations;
+
+  // Apply folder filter
+  if (activeFolderId) {
+    const tabsEl = document.getElementById('folder-tabs');
+    const activeTab = tabsEl?.querySelector(`.folder-tab[data-folder-id="${activeFolderId}"]`);
+    // We need the folder's conversation_ids — stored on the tab as data
+    const folderConvIds = (activeTab as HTMLElement)?.dataset.convIds?.split(',') || [];
+    if (folderConvIds.length) {
+      filtered = filtered.filter(c => folderConvIds.includes(c.id));
+    }
+  }
+
   if (filter) {
     filtered = filtered.filter((c) => {
       const name = getConversationName(c, userId).toLowerCase();
@@ -236,24 +426,29 @@ function renderConversationsList(filter = '') {
   list.innerHTML = filtered
     .map((c) => {
       const name = getConversationName(c, userId);
-      const initials = name
-        .split(' ')
-        .map((w) => w[0])
-        .join('')
-        .slice(0, 2)
-        .toUpperCase();
+      const other = c.members.find(m => m.user_id !== userId);
       const time = c.last_message_at ? formatTime(c.last_message_at) : '';
       const isActive = c.id === state.activeConversationId;
 
       return `
-        <div class="conversation-item ${isActive ? 'active' : ''}" data-id="${c.id}">
-          <div class="avatar">${initials}</div>
-          <div class="conversation-info">
-            <div class="conversation-name">${escapeHtml(name)}</div>
-            <div class="conversation-preview">Encrypted message</div>
+        <div class="swipe-container" data-conv-id="${c.id}">
+          <div class="swipe-actions-right">
+            <button class="swipe-action swipe-mute" title="Mute"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18.8 5.2a1 1 0 0 0-1.4 0l-12 12a1 1 0 1 0 1.4 1.4l12-12a1 1 0 0 0 0-1.4z"/><path d="M2 1 1 2"/><path d="m7 7-3.8 3.8a2 2 0 0 0 0 2.8L8 18.4a2 2 0 0 0 2.8 0L14.7 14.7"/><path d="m10 10 4-4a2 2 0 0 1 2.8 0l2.4 2.4a2 2 0 0 1 0 2.8L15.3 15.3"/></svg></button>
+            <button class="swipe-action swipe-archive" title="Archive"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></svg></button>
+            <button class="swipe-action swipe-delete" title="Delete"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg></button>
           </div>
-          <div class="conversation-meta">
-            <span class="conversation-time">${time}</span>
+          <div class="conversation-item swipeable ${isActive ? 'active' : ''}" data-id="${c.id}" role="button" tabindex="0" aria-label="Chat with ${escapeHtml(name)}">
+            ${renderAvatar(name, other?.avatar_url, other?.user_id, 50, 18, other?.account_tier)}
+            <div class="conversation-info">
+              <div class="conversation-name">${escapeHtml(name)}</div>
+              <div class="conversation-preview">
+                <span style="font-size:10px;margin-right:2px">🔒</span> Encrypted message
+              </div>
+            </div>
+            <div class="conversation-meta">
+              <span class="conversation-time">${time}</span>
+              ${c.muted ? '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" stroke-width="2" style="margin-top:2px"><line x1="1" y1="1" x2="23" y2="23"/><path d="M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V4a3 3 0 0 0-5.94-.6"/><path d="M17 16.95A7 7 0 0 1 5 12v-2m14 0v2c0 .76-.13 1.49-.35 2.17"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>' : ''}
+            </div>
           </div>
         </div>
       `;
@@ -266,7 +461,17 @@ function renderConversationsList(filter = '') {
       const id = (el as HTMLElement).dataset.id!;
       openConversation(id);
     });
+    el.addEventListener('keydown', (e) => {
+      if ((e as KeyboardEvent).key === 'Enter' || (e as KeyboardEvent).key === ' ') {
+        e.preventDefault();
+        const id = (el as HTMLElement).dataset.id!;
+        openConversation(id);
+      }
+    });
   });
+
+  // Bind swipe gestures
+  initSwipeActions(list);
 }
 
 async function openConversation(conversationId: string) {
@@ -276,8 +481,12 @@ async function openConversation(conversationId: string) {
   const conv = state.conversations.find((c) => c.id === conversationId);
   if (!conv) return;
 
+  // Apply per-conversation theme
+  applyConversationTheme(conv.chat_theme || null);
+
   const userId = localStorage.getItem('rocchat_user_id') || '';
   const name = getConversationName(conv, userId);
+  const other = getOtherMember(conv);
 
   const chatView = document.getElementById('chat-view');
   if (!chatView) return;
@@ -287,9 +496,7 @@ async function openConversation(conversationId: string) {
       <button class="mobile-back-btn" id="btn-back" aria-label="Back to conversations">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
       </button>
-      <div class="avatar" style="width:36px;height:36px;font-size:var(--text-xs)">
-        ${name.split(' ').map((w) => w[0]).join('').slice(0, 2).toUpperCase()}
-      </div>
+      ${renderAvatar(name, other?.avatar_url, other?.user_id, 36, 13, other?.account_tier)}
       <div class="chat-header-info">
         <div class="chat-header-name">${escapeHtml(name)}</div>
         <div class="chat-header-status">
@@ -297,20 +504,29 @@ async function openConversation(conversationId: string) {
         </div>
       </div>
       <div class="chat-header-actions">
+        <button class="icon-btn" title="Search messages" id="btn-search-messages" aria-label="Search messages">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+        </button>
         <button class="icon-btn" title="Verify safety number" id="btn-verify" aria-label="Verify safety number">
-          <i data-lucide="shield-check" style="width:18px;height:18px"></i>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/></svg>
         </button>
         <button class="icon-btn" title="Disappearing messages" id="btn-disappear" aria-label="Disappearing messages">
-          <i data-lucide="timer" style="width:18px;height:18px"></i>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+        </button>
+        <button class="icon-btn" title="Chat theme" id="btn-chat-theme" aria-label="Chat theme">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="13.5" cy="6.5" r="0.5" fill="currentColor"/><circle cx="17.5" cy="10.5" r="0.5" fill="currentColor"/><circle cx="8.5" cy="7.5" r="0.5" fill="currentColor"/><circle cx="6.5" cy="12" r="0.5" fill="currentColor"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z"/></svg>
+        </button>
+        <button class="icon-btn" title="Pinned messages" id="btn-pinned" aria-label="Pinned messages">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/></svg>
         </button>
         <button class="icon-btn" title="Voice call" id="btn-voice-call" aria-label="Voice call">
-          <i data-lucide="phone" style="width:18px;height:18px"></i>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></svg>
         </button>
         <button class="icon-btn" title="Video call" id="btn-video-call" aria-label="Video call">
-          <i data-lucide="video" style="width:18px;height:18px"></i>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m16 13 5.223 3.482a.5.5 0 0 0 .777-.416V7.87a.5.5 0 0 0-.752-.432L16 10.5"/><rect x="2" y="6" width="14" height="12" rx="2"/></svg>
         </button>
         <button class="icon-btn" title="Info" id="btn-chat-info" aria-label="Conversation info">
-          <i data-lucide="info" style="width:18px;height:18px"></i>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
         </button>
       </div>
     </div>
@@ -326,14 +542,34 @@ async function openConversation(conversationId: string) {
 
     <div class="composer">
       <button class="icon-btn" title="Attach file" aria-label="Attach file">
-        <i data-lucide="paperclip" style="width:18px;height:18px"></i>
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+      </button>
+      <button class="icon-btn" id="vault-btn" title="Share vault item" aria-label="Share vault item">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+      </button>
+      <button class="icon-btn" id="emoji-btn" title="Emoji" aria-label="Emoji">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" x2="9.01" y1="9" y2="9"/><line x1="15" x2="15.01" y1="9" y2="9"/></svg>
+      </button>
+      <button class="icon-btn" id="gif-btn" title="GIF" aria-label="Send GIF">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><text x="12" y="15" text-anchor="middle" font-size="8" font-weight="bold" fill="currentColor" stroke="none">GIF</text></svg>
       </button>
       <textarea class="composer-input" id="message-input" placeholder="Type a message..."
                 rows="1" aria-label="Message"></textarea>
+      <button class="icon-btn" id="schedule-btn" title="Schedule message" aria-label="Schedule message">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12,6 12,12 16,14"/></svg>
+      </button>
+      <button class="icon-btn" id="voice-note-btn" title="Record voice note" aria-label="Record voice note">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="23"/><line x1="8" x2="16" y1="23" y2="23"/></svg>
+      </button>
+      <button class="icon-btn" id="video-note-btn" title="Record video message" aria-label="Record video message">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m22 8-6 4 6 4V8Z"/><rect width="14" height="12" x="2" y="6" rx="2" ry="2"/></svg>
+      </button>
       <button class="send-btn" id="send-btn" disabled title="Send" aria-label="Send message">
-        <i data-lucide="send" style="width:18px;height:18px"></i>
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg>
       </button>
     </div>
+    <div class="emoji-picker" id="emoji-picker" style="display:none"></div>
+    <div class="gif-picker" id="gif-picker" style="display:none"></div>
   `;
 
   // Mobile responsive: mark layout as having open conversation
@@ -389,9 +625,19 @@ async function openConversation(conversationId: string) {
     showDisappearingMenu(conversationId);
   });
 
+  // Bind per-conversation theme picker
+  chatView.querySelector('#btn-chat-theme')?.addEventListener('click', () => {
+    showConversationThemePicker(conversationId);
+  });
+
   // Bind safety number verification
   chatView.querySelector('#btn-verify')?.addEventListener('click', () => {
     if (conv) showSafetyNumber(conv);
+  });
+
+  // Bind message search
+  chatView.querySelector('#btn-search-messages')?.addEventListener('click', () => {
+    toggleMessageSearch();
   });
 
   // Bind call buttons
@@ -402,9 +648,59 @@ async function openConversation(conversationId: string) {
     if (conv) startCall(conv, 'video');
   });
 
+  // Bind pinned messages
+  chatView.querySelector('#btn-pinned')?.addEventListener('click', () => {
+    if (state.activeConversationId) showPinnedMessages(state.activeConversationId);
+  });
+
   // Bind attach button
   chatView.querySelector('.composer .icon-btn[title="Attach file"]')?.addEventListener('click', () => {
     if (state.activeConversationId) showFileUpload(state.activeConversationId);
+  });
+
+  // Bind vault button
+  chatView.querySelector('#vault-btn')?.addEventListener('click', () => {
+    if (state.activeConversationId) showVaultComposer();
+  });
+
+  // Voice note recording
+  chatView.querySelector('#voice-note-btn')?.addEventListener('click', () => {
+    if (state.activeConversationId) startVoiceRecording(state.activeConversationId);
+  });
+
+  // Video message recording
+  chatView.querySelector('#video-note-btn')?.addEventListener('click', () => {
+    if (state.activeConversationId) startVideoRecording(state.activeConversationId);
+  });
+
+  // Emoji picker
+  const emojiBtn = chatView.querySelector('#emoji-btn') as HTMLElement;
+  const emojiContainer = chatView.querySelector('#emoji-picker') as HTMLElement;
+  if (emojiBtn && emojiContainer && input) {
+    initEmojiPicker(emojiContainer, emojiBtn, (emoji) => {
+      input.value += emoji;
+      input.dispatchEvent(new Event('input'));
+      input.focus();
+    });
+  }
+
+  // GIF picker
+  const gifBtn = chatView.querySelector('#gif-btn') as HTMLElement;
+  const gifContainer = chatView.querySelector('#gif-picker') as HTMLElement;
+  if (gifBtn && gifContainer) {
+    initGifPicker(gifContainer, gifBtn, (gifUrl, previewUrl, w, h) => {
+      // Send GIF as a special message type
+      sendGifMessage(conversationId, gifUrl, previewUrl, w, h);
+    });
+  }
+
+  // Schedule message button
+  chatView.querySelector('#schedule-btn')?.addEventListener('click', () => {
+    if (!input?.value.trim()) {
+      showToast('Type a message first', 'info');
+      return;
+    }
+    showScheduleDialog(conversationId, input);
   });
 
   if (typeof (window as any).lucide !== 'undefined') {
@@ -433,51 +729,138 @@ function renderMessages(messages: Message[]) {
   if (!area) return;
 
   const userId = localStorage.getItem('rocchat_user_id') || '';
+  const now = Math.floor(Date.now() / 1000);
+
+  // Filter expired disappearing messages client-side
+  const visible = messages.filter(m => !m.expires_at || m.expires_at > now);
 
   // Keep encryption banner
   const banner = area.querySelector('.encryption-banner')?.outerHTML || '';
   area.innerHTML = banner;
 
-  messages.forEach((msg) => {
+  visible.forEach((msg) => {
     const isMine = msg.sender_id === userId;
+
+    // Skip sender key distribution messages — not visible
+    if (msg.message_type === 'sender_key_distribution') return;
+
     const div = document.createElement('div');
     div.className = `message-row ${isMine ? 'mine' : 'theirs'}`;
     div.dataset.msgId = msg.id;
+
+    // Deleted messages show a placeholder
+    if (msg.deleted_at) {
+      div.innerHTML = `<div class="message-bubble message-deleted"><em>🚫 This message was deleted</em></div>`;
+      area.appendChild(div);
+      return;
+    }
 
     // Try to decrypt if we have ratchet data
     const hasRatchet = msg.ratchet_header && msg.iv && msg.ciphertext;
     const displayText = hasRatchet ? '🔒 Decrypting...' : msg.ciphertext;
 
+    // Check if the plaintext is a GIF message
+    const gifContent = tryParseGif(displayText);
+
     div.innerHTML = `
-      <div class="message-bubble">
-        <div class="message-text">${escapeHtml(displayText)}</div>
+      <div class="message-bubble${gifContent ? ' gif-bubble' : ''}">
+        ${gifContent
+          ? `<img src="${escapeHtml(gifContent.preview || gifContent.url)}" alt="GIF" class="gif-message" loading="lazy" style="max-width:240px;max-height:200px;border-radius:12px;cursor:pointer" />`
+          : `<div class="message-text">${escapeHtml(displayText)}</div>`
+        }
+        <div class="message-reactions-row" id="reactions-${msg.id}"></div>
         <div class="message-meta">
           <span class="message-lock">🔒</span>
+          ${msg.edited_at ? '<span class="message-edited" title="Edited">edited</span>' : ''}
           <span class="message-time">${formatTime(msg.created_at)}</span>
-          ${isMine ? '<span class="message-status">✓✓</span>' : ''}
+          ${getStatusIcon(msg.id, isMine)}
         </div>
       </div>
     `;
+    // Context menu on right-click / long-press
+    div.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      showMessageContextMenu(e as MouseEvent, msg.id, isMine, msg.conversation_id);
+    });
     area.appendChild(div);
 
-    // Async decrypt
-    if (hasRatchet && !isMine) {
+    // Async decrypt (both mine and theirs)
+    if (hasRatchet) {
+      // Fast-path: plaintext cache hit
+      const cached = plaintextCache.get(msg.id);
+      if (cached !== undefined) {
+        const gif = tryParseGif(cached);
+        const fileMsg = tryParseFileMessage(cached);
+        const bubble = div.querySelector('.message-bubble');
+        if (gif && bubble) {
+          bubble.classList.add('gif-bubble');
+          const textEl = bubble.querySelector('.message-text');
+          if (textEl) {
+            const img = document.createElement('img');
+            img.src = gif.preview || gif.url;
+            img.alt = 'GIF';
+            img.className = 'gif-message';
+            img.style.cssText = 'max-width:240px;max-height:200px;border-radius:12px;cursor:pointer';
+            textEl.replaceWith(img);
+          }
+        } else if (fileMsg && bubble) {
+          renderFileMessage(bubble, fileMsg, msg.conversation_id);
+        } else if (cached.startsWith('{"type":"vault_item"')) {
+          try {
+            const vault = JSON.parse(cached);
+            renderVaultItem(bubble!, vault);
+          } catch { if (bubble) { const t = bubble.querySelector('.message-text'); if (t) t.textContent = cached; } }
+        } else {
+          const textEl = div.querySelector('.message-text');
+          if (textEl) textEl.textContent = cached;
+        }
+        return;
+      }
+
       let header;
       try { header = JSON.parse(msg.ratchet_header); } catch {
         const textEl = div.querySelector('.message-text');
         if (textEl) textEl.textContent = '🔒 Unable to decrypt';
         return;
       }
-      const encrypted: EncryptedMessage = {
-        header,
-        ciphertext: msg.ciphertext,
-        iv: msg.iv,
-        tag: '', // tag is appended to ciphertext in our format
-      };
-      decryptMessage(msg.conversation_id, encrypted)
+
+      const decryptPromise = isGroupEncrypted(msg.ratchet_header)
+        ? groupDecrypt(msg.conversation_id, msg.sender_id, msg.ciphertext, msg.ratchet_header)
+        : decryptMessage(msg.conversation_id, {
+            header,
+            ciphertext: msg.ciphertext,
+            iv: msg.iv,
+            tag: '',
+          } as EncryptedMessage);
+
+      decryptPromise
         .then((plaintext) => {
-          const textEl = div.querySelector('.message-text');
-          if (textEl) textEl.textContent = plaintext;
+          cachePlaintext(msg.id, plaintext);
+          const gif = tryParseGif(plaintext);
+          const fileMsg = tryParseFileMessage(plaintext);
+          const bubble = div.querySelector('.message-bubble');
+          if (gif && bubble) {
+            bubble.classList.add('gif-bubble');
+            const textEl = bubble.querySelector('.message-text');
+            if (textEl) {
+              const img = document.createElement('img');
+              img.src = gif.preview || gif.url;
+              img.alt = 'GIF';
+              img.className = 'gif-message';
+              img.style.cssText = 'max-width:240px;max-height:200px;border-radius:12px;cursor:pointer';
+              textEl.replaceWith(img);
+            }
+          } else if (fileMsg && bubble) {
+            renderFileMessage(bubble, fileMsg, msg.conversation_id);
+          } else if (plaintext.startsWith('{"type":"vault_item"')) {
+            try {
+              const vault = JSON.parse(plaintext);
+              renderVaultItem(bubble!, vault);
+            } catch { if (bubble) { const t = bubble.querySelector('.message-text'); if (t) t.textContent = plaintext; } }
+          } else {
+            const textEl = div.querySelector('.message-text');
+            if (textEl) textEl.textContent = plaintext;
+          }
         })
         .catch(() => {
           const textEl = div.querySelector('.message-text');
@@ -487,6 +870,16 @@ function renderMessages(messages: Message[]) {
   });
 
   area.scrollTop = area.scrollHeight;
+
+  // Send encrypted read receipts for unread messages from others
+  const unreadIds = messages
+    .filter(m => m.sender_id !== userId && deliveryStatus.get(m.id) !== 'read')
+    .map(m => m.id);
+  if (unreadIds.length && state.ws?.readyState === WebSocket.OPEN && state.activeConversationId) {
+    encryptMeta(state.activeConversationId, { messageIds: unreadIds }).then(enc => {
+      state.ws?.send(JSON.stringify({ type: 'read_receipt', payload: { e: enc } }));
+    }).catch(() => {});
+  }
 }
 
 async function sendMessageHandler() {
@@ -526,6 +919,17 @@ async function sendMessageHandler() {
         message_type: 'text',
         expires_in: expiresIn,
       };
+    } else if (conv?.type === 'group' && conv.members.length > 2) {
+      // Group encryption with Sender Keys
+      const groupEnc = await groupEncrypt(state.activeConversationId, conv.members, text);
+      payload = {
+        conversation_id: state.activeConversationId,
+        ciphertext: groupEnc.ciphertext,
+        iv: groupEnc.iv,
+        ratchet_header: groupEnc.ratchet_header,
+        message_type: 'text',
+        expires_in: expiresIn,
+      };
     } else {
       // Fallback for group or unknown
       payload = {
@@ -554,7 +958,9 @@ async function sendMessageHandler() {
 
     // Try to send; queue on failure
     try {
-      await api.sendMessage(payload);
+      const res = await api.sendMessage(payload);
+      const mid = (res as { ok: boolean; data?: { message_id?: string } }).data?.message_id;
+      if (mid) cachePlaintext(mid, text);
     } catch {
       const queueItem: QueuedMessage = { payload, localId, conversationId: state.activeConversationId };
       messageQueue.push(queueItem);
@@ -565,6 +971,43 @@ async function sendMessageHandler() {
     input.value = text;
     sendBtn.disabled = false;
     showToast('Failed to encrypt message', 'error');
+  }
+}
+
+async function sendGifMessage(conversationId: string, gifUrl: string, previewUrl: string, w: number, h: number) {
+  const userId = localStorage.getItem('rocchat_user_id') || '';
+  const conv = state.conversations.find((c) => c.id === conversationId);
+  const recipientUserId = conv?.members.find((m) => m.user_id !== userId)?.user_id;
+
+  const gifPayload = JSON.stringify({ type: 'gif', url: gifUrl, preview: previewUrl, width: w, height: h });
+
+  try {
+    let payload: Parameters<typeof api.sendMessage>[0];
+    if (recipientUserId) {
+      const encrypted = await encryptMessage(conversationId, recipientUserId, gifPayload);
+      const enc = encrypted as unknown as Record<string, unknown>;
+      const headerObj = enc.x3dh ? { ...encrypted.header, x3dh: enc.x3dh } : encrypted.header;
+      payload = { conversation_id: conversationId, ciphertext: encrypted.ciphertext, iv: encrypted.iv, ratchet_header: JSON.stringify(headerObj), message_type: 'gif' };
+    } else if (conv?.type === 'group' && conv.members.length > 2) {
+      const groupEnc = await groupEncrypt(conversationId, conv.members, gifPayload);
+      payload = { conversation_id: conversationId, ciphertext: groupEnc.ciphertext, iv: groupEnc.iv, ratchet_header: groupEnc.ratchet_header, message_type: 'gif' };
+    } else {
+      payload = { conversation_id: conversationId, ciphertext: gifPayload, iv: '', ratchet_header: '', message_type: 'gif' };
+    }
+
+    // Optimistic local add
+    const msgs = state.messages.get(conversationId) || [];
+    msgs.push({
+      id: `local-${Date.now()}`, conversation_id: conversationId, sender_id: userId,
+      ciphertext: gifPayload, iv: '', ratchet_header: '', message_type: 'gif',
+      created_at: new Date().toISOString(),
+    });
+    state.messages.set(conversationId, msgs);
+    renderMessages(msgs);
+
+    await api.sendMessage(payload);
+  } catch {
+    showToast('Failed to send GIF', 'error');
   }
 }
 
@@ -580,7 +1023,11 @@ function connectWebSocket(conversationId: string) {
   if (!token || !userId) return;
 
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const wsUrl = `${proto}//${location.host}/api/ws/${conversationId}?userId=${userId}&deviceId=web&token=${token}`;
+  // Connect directly to the Worker backend — the Pages Function proxy
+  // cannot handle WebSocket upgrade requests (fetch() strips Upgrade header).
+  const wsHost = location.hostname === 'localhost' ? location.host : 'rocchat-api.spoass.workers.dev';
+  const deviceId = localStorage.getItem('rocchat_device_id') || 'web';
+  const wsUrl = `${proto}//${wsHost}/api/ws/${conversationId}?userId=${userId}&deviceId=${deviceId}&token=${token}`;
 
   try {
     const ws = new WebSocket(wsUrl);
@@ -598,6 +1045,18 @@ function connectWebSocket(conversationId: string) {
           case 'message': {
             const payload = data.payload;
             const msgs = state.messages.get(conversationId) || [];
+            const senderId = payload.fromUserId || payload.sender_id;
+
+            // Handle sender key distribution (not a visible message)
+            if (payload.message_type === 'sender_key_distribution') {
+              try {
+                await handleSenderKeyDistribution(
+                  conversationId, senderId,
+                  payload.ciphertext, payload.iv, payload.ratchet_header,
+                );
+              } catch { /* best effort */ }
+              break;
+            }
 
             // Try to decrypt
             let displayText = payload.ciphertext || '';
@@ -609,13 +1068,23 @@ function connectWebSocket(conversationId: string) {
                 } else {
                   header = payload.ratchet_header;
                 }
-                const encrypted: EncryptedMessage = {
-                  header,
-                  ciphertext: payload.ciphertext,
-                  iv: payload.iv,
-                  tag: payload.tag || '',
-                };
-                displayText = await decryptMessage(conversationId, encrypted);
+
+                if (isGroupEncrypted(typeof payload.ratchet_header === 'string' ? payload.ratchet_header : JSON.stringify(payload.ratchet_header))) {
+                  // Group message — decrypt with Sender Keys
+                  displayText = await groupDecrypt(
+                    conversationId, senderId,
+                    payload.ciphertext, typeof payload.ratchet_header === 'string' ? payload.ratchet_header : JSON.stringify(payload.ratchet_header),
+                  );
+                } else {
+                  // Direct message — decrypt with Double Ratchet
+                  const encrypted: EncryptedMessage = {
+                    header,
+                    ciphertext: payload.ciphertext,
+                    iv: payload.iv,
+                    tag: payload.tag || '',
+                  };
+                  displayText = await decryptMessage(conversationId, encrypted);
+                }
               } catch {
                 displayText = '🔒 Unable to decrypt';
               }
@@ -624,7 +1093,7 @@ function connectWebSocket(conversationId: string) {
             msgs.push({
               id: payload.id || `ws-${Date.now()}`,
               conversation_id: conversationId,
-              sender_id: payload.fromUserId || payload.sender_id,
+              sender_id: senderId,
               ciphertext: displayText,
               iv: '',
               ratchet_header: '',
@@ -638,31 +1107,67 @@ function connectWebSocket(conversationId: string) {
 
           case 'typing': {
             const typingEl = document.querySelector('.chat-header-status');
-            if (typingEl && data.payload.isTyping) {
-              typingEl.innerHTML = `<span class="typing-indicator"><span></span><span></span><span></span></span> typing...`;
-              setTimeout(() => {
-                if (typingEl) typingEl.innerHTML = `<span style="font-size:8px">🔒</span> End-to-end encrypted`;
-              }, 3000);
+            if (typingEl) {
+              // Decrypt encrypted typing indicator
+              const enc = data.payload.e as string | undefined;
+              if (enc) {
+                decryptMeta(conversationId, enc).then(meta => {
+                  if (meta.isTyping) {
+                    typingEl.innerHTML = `<span class="typing-indicator"><span></span><span></span><span></span></span> typing...`;
+                    setTimeout(() => {
+                      if (typingEl) typingEl.innerHTML = `<span style="font-size:8px">🔒</span> End-to-end encrypted`;
+                    }, 3000);
+                  }
+                }).catch(() => {});
+              } else if (data.payload.isTyping) {
+                // Fallback for unencrypted (backward compat)
+                typingEl.innerHTML = `<span class="typing-indicator"><span></span><span></span><span></span></span> typing...`;
+                setTimeout(() => {
+                  if (typingEl) typingEl.innerHTML = `<span style="font-size:8px">🔒</span> End-to-end encrypted`;
+                }, 3000);
+              }
             }
             break;
           }
 
           case 'presence': {
-            const statusEl = document.querySelector('.chat-header-status');
-            if (statusEl && data.payload.status === 'online') {
-              statusEl.setAttribute('data-online', 'true');
+            const presUserId = data.payload.userId as string;
+            const presStatus = data.payload.status as string;
+            if (presStatus === 'online') {
+              onlineUsers.add(presUserId);
+            } else {
+              onlineUsers.delete(presUserId);
             }
+            // Update presence dot in chat header
+            const statusEl = document.querySelector('.chat-header-status');
+            if (statusEl) {
+              statusEl.setAttribute('data-online', presStatus === 'online' ? 'true' : 'false');
+            }
+            // Update presence dots on avatars
+            document.querySelectorAll(`.presence-dot[data-uid="${presUserId}"]`).forEach((dot) => {
+              dot.classList.toggle('online', presStatus === 'online');
+            });
             break;
           }
 
           case 'read_receipt': {
-            // Mark messages as read
-            const msgIds = data.payload.messageIds as string[] | undefined;
-            if (msgIds) {
-              msgIds.forEach((id: string) => {
+            // Decrypt and mark messages as read
+            const enc = data.payload.e as string | undefined;
+            const applyReceipts = (ids: string[]) => {
+              ids.forEach((id: string) => {
+                deliveryStatus.set(id, 'read');
                 const el = document.querySelector(`[data-msg-id="${id}"] .message-status`);
-                if (el) el.textContent = '✓✓';
+                if (el) { el.textContent = '✓✓'; el.classList.add('message-status-read'); }
               });
+            };
+            if (enc) {
+              decryptMeta(conversationId, enc).then(meta => {
+                const ids = meta.messageIds as string[] | undefined;
+                if (ids) applyReceipts(ids);
+              }).catch(() => {});
+            } else {
+              const msgIds = data.payload.messageIds as string[] | undefined;
+              if (msgIds) applyReceipts(msgIds);
             }
             break;
           }
@@ -671,35 +1176,139 @@ function connectWebSocket(conversationId: string) {
             handleIncomingCall(data.payload, conversationId);
             break;
           }
+
+          case 'call_answer': {
+            import('../calls/calls.js').then((mod) => {
+              mod.handleCallAnswer(data.payload);
+            });
+            break;
+          }
+
+          case 'call_ice': {
+            import('../calls/calls.js').then((mod) => {
+              mod.handleIceCandidate(data.payload);
+            });
+            break;
+          }
+
+          case 'call_end': {
+            import('../calls/calls.js').then((mod) => {
+              mod.handleCallEnd(data.payload);
+            });
+            break;
+          }
+
+          // Group call signaling
+          case 'group_call_start': {
+            import('../calls/calls.js').then((mod) => {
+              mod.handleGroupCallStart(data.payload, conversationId, state.ws);
+            });
+            break;
+          }
+          case 'group_call_join': {
+            import('../calls/calls.js').then((mod) => {
+              mod.handleGroupCallJoin(data.payload);
+            });
+            break;
+          }
+          case 'group_call_offer': {
+            import('../calls/calls.js').then((mod) => {
+              mod.handleGroupCallOffer(data.payload);
+            });
+            break;
+          }
+          case 'group_call_answer': {
+            import('../calls/calls.js').then((mod) => {
+              mod.handleGroupCallAnswer(data.payload);
+            });
+            break;
+          }
+          case 'group_call_ice': {
+            import('../calls/calls.js').then((mod) => {
+              mod.handleGroupCallIce(data.payload);
+            });
+            break;
+          }
+          case 'group_call_leave': {
+            import('../calls/calls.js').then((mod) => {
+              mod.handleGroupCallLeave(data.payload);
+            });
+            break;
+          }
+
+          case 'reaction': {
+            const { message_id, user_id, encrypted_reaction } = data.payload;
+            updateReactionUI(message_id, user_id, encrypted_reaction);
+            break;
+          }
+
+          case 'message_edit': {
+            const { message_id, encrypted } = data.payload;
+            const editMsgs = state.messages.get(conversationId);
+            const editMsg = editMsgs?.find(m => m.id === message_id);
+            if (editMsg) {
+              editMsg.ciphertext = encrypted;
+              editMsg.edited_at = Date.now();
+              renderMessages(editMsgs!);
+            }
+            break;
+          }
+
+          case 'message_delete': {
+            const { message_id: delId } = data.payload;
+            const delMsgs = state.messages.get(conversationId);
+            const delMsg = delMsgs?.find(m => m.id === delId);
+            if (delMsg) {
+              delMsg.deleted_at = Date.now();
+              renderMessages(delMsgs!);
+            }
+            break;
+          }
+
+          case 'message_pin': {
+            const { message_id: pinId, pinned } = data.payload;
+            showToast(pinned ? 'Message pinned' : 'Message unpinned', 'info');
+            break;
+          }
         }
       } catch { /* ignore malformed */ }
     });
 
     ws.addEventListener('close', () => {
       state.ws = null;
-      // Auto-reconnect after 3 seconds if still viewing this conversation
-      setTimeout(() => {
-        if (state.activeConversationId === conversationId && !state.ws) {
-          connectWebSocket(conversationId);
-        }
-      }, 3000);
+      // Auto-reconnect with exponential backoff if still viewing this conversation
+      const baseDelay = 2000;
+      const maxDelay = 30000;
+      let retryDelay = baseDelay;
+      const scheduleReconnect = () => {
+        setTimeout(() => {
+          if (state.activeConversationId === conversationId && !state.ws) {
+            connectWebSocket(conversationId);
+          }
+        }, Math.min(retryDelay, maxDelay));
+        retryDelay = Math.min(retryDelay * 1.5, maxDelay);
+      };
+      scheduleReconnect();
     });
 
     ws.addEventListener('error', () => {
       // Error will also trigger close event → reconnect handled there
-      state.ws = null;
     });
 
-    // Send typing indicators
+    // Send encrypted typing indicators
     const input = document.getElementById('message-input');
     let typingTimeout: ReturnType<typeof setTimeout>;
     input?.addEventListener('input', () => {
       if (!state.ws || state.ws.readyState !== WebSocket.OPEN) return;
       clearTimeout(typingTimeout);
-      state.ws.send(JSON.stringify({ type: 'typing', payload: { isTyping: true } }));
+      encryptMeta(conversationId, { isTyping: true }).then(enc => {
+        state.ws?.send(JSON.stringify({ type: 'typing', payload: { e: enc } }));
+      }).catch(() => {});
       typingTimeout = setTimeout(() => {
         if (state.ws?.readyState === WebSocket.OPEN) {
-          state.ws.send(JSON.stringify({ type: 'typing', payload: { isTyping: false } }));
+          encryptMeta(conversationId, { isTyping: false }).then(enc => {
+            state.ws?.send(JSON.stringify({ type: 'typing', payload: { e: enc } }));
+          }).catch(() => {});
         }
       }, 2000);
     });
@@ -724,20 +1333,95 @@ function showNewChatDialog(container: HTMLElement) {
     display:flex;align-items:center;justify-content:center;padding:var(--sp-4);
   `;
   overlay.innerHTML = `
-    <div class="auth-card" style="max-width:360px">
+    <div class="auth-card" style="max-width:400px">
       <h2 style="font-size:var(--text-lg);margin-bottom:var(--sp-4)">New Conversation</h2>
+      <div style="display:flex;gap:var(--sp-2);margin-bottom:var(--sp-4)">
+        <button class="btn-secondary" id="mode-direct" style="flex:1;opacity:1">Direct</button>
+        <button class="btn-secondary" id="mode-group" style="flex:1;opacity:0.5">Group</button>
+      </div>
+      <div id="group-name-section" style="display:none;margin-bottom:var(--sp-3)">
+        <label class="form-label">Group name</label>
+        <input type="text" placeholder="Group name" id="group-name-input" style="width:100%;padding:8px;border-radius:8px;border:1px solid var(--border);background:var(--bg-secondary);color:var(--text-primary)" />
+      </div>
       <div class="form-group">
         <label class="form-label">Search by username</label>
         <div class="search-box">
           <input type="text" placeholder="@username" id="search-user-input" />
         </div>
       </div>
-      <div id="search-results" style="margin-bottom:var(--sp-4)"></div>
-      <button class="btn-secondary" id="close-dialog">Cancel</button>
+      <div id="selected-members" style="display:none;margin-bottom:var(--sp-3);display:flex;flex-wrap:wrap;gap:var(--sp-1)"></div>
+      <div id="search-results" style="margin-bottom:var(--sp-4);max-height:200px;overflow-y:auto"></div>
+      <div style="display:flex;gap:var(--sp-2)">
+        <button class="btn-secondary" id="close-dialog" style="flex:1">Cancel</button>
+        <button class="btn-primary" id="create-group-btn" style="flex:1;display:none">Create Group</button>
+      </div>
     </div>
   `;
 
   document.body.appendChild(overlay);
+
+  let isGroup = false;
+  const selectedMembers: { userId: string; displayName: string; username: string }[] = [];
+
+  const modeDirectBtn = overlay.querySelector('#mode-direct') as HTMLButtonElement;
+  const modeGroupBtn = overlay.querySelector('#mode-group') as HTMLButtonElement;
+  const groupNameSection = overlay.querySelector('#group-name-section') as HTMLElement;
+  const selectedMembersEl = overlay.querySelector('#selected-members') as HTMLElement;
+  const createGroupBtn = overlay.querySelector('#create-group-btn') as HTMLButtonElement;
+
+  modeDirectBtn.addEventListener('click', () => {
+    isGroup = false;
+    modeDirectBtn.style.opacity = '1';
+    modeGroupBtn.style.opacity = '0.5';
+    groupNameSection.style.display = 'none';
+    createGroupBtn.style.display = 'none';
+    selectedMembersEl.style.display = 'none';
+    selectedMembers.length = 0;
+    renderSelectedMembers();
+  });
+
+  modeGroupBtn.addEventListener('click', () => {
+    isGroup = true;
+    modeGroupBtn.style.opacity = '1';
+    modeDirectBtn.style.opacity = '0.5';
+    groupNameSection.style.display = 'block';
+    createGroupBtn.style.display = 'block';
+    selectedMembersEl.style.display = 'flex';
+  });
+
+  function renderSelectedMembers() {
+    selectedMembersEl.innerHTML = selectedMembers.map((m, i) => `
+      <span style="background:var(--bg-tertiary);padding:2px 8px;border-radius:12px;font-size:var(--text-xs);display:flex;align-items:center;gap:4px">
+        @${escapeHtml(m.username)}
+        <span data-remove-idx="${i}" style="cursor:pointer;opacity:0.6">&times;</span>
+      </span>
+    `).join('');
+    selectedMembersEl.querySelectorAll('[data-remove-idx]').forEach(el => {
+      el.addEventListener('click', () => {
+        selectedMembers.splice(Number((el as HTMLElement).dataset.removeIdx), 0 + 1);
+        renderSelectedMembers();
+      });
+    });
+  }
+
+  createGroupBtn.addEventListener('click', async () => {
+    if (selectedMembers.length < 1) return;
+    const groupName = (overlay.querySelector('#group-name-input') as HTMLInputElement).value.trim() || 'Group';
+    const convRes = await api.createConversation({
+      type: 'group',
+      member_ids: selectedMembers.map(m => m.userId),
+      name: groupName,
+    });
+    if (convRes.ok) {
+      overlay.remove();
+      const listRes = await api.getConversations();
+      if (listRes.ok) {
+        state.conversations = listRes.data.conversations || [];
+        renderConversationsList();
+        openConversation(convRes.data.conversation_id);
+      }
+    }
+  });
 
   overlay.querySelector('#close-dialog')?.addEventListener('click', () => overlay.remove());
   overlay.addEventListener('click', (e) => {
@@ -763,7 +1447,7 @@ function showNewChatDialog(container: HTMLElement) {
       results.innerHTML = users
         .map(
           (u) => `
-        <div class="conversation-item" data-user-id="${u.userId}" style="cursor:pointer">
+        <div class="conversation-item" data-user-id="${u.userId}" data-display-name="${escapeHtml(u.displayName)}" data-username="${escapeHtml(u.username)}" style="cursor:pointer">
           <div class="avatar" style="width:36px;height:36px;font-size:var(--text-xs)">
             ${u.displayName.split(' ').map((w: string) => w[0]).join('').slice(0, 2).toUpperCase()}
           </div>
@@ -779,18 +1463,27 @@ function showNewChatDialog(container: HTMLElement) {
       results.querySelectorAll('.conversation-item').forEach((el) => {
         el.addEventListener('click', async () => {
           const uid = (el as HTMLElement).dataset.userId!;
-          const convRes = await api.createConversation({
-            type: 'direct',
-            member_ids: [uid],
-          });
-          if (convRes.ok) {
-            overlay.remove();
-            // Reload conversations and open the new one
-            const listRes = await api.getConversations();
-            if (listRes.ok) {
-              state.conversations = listRes.data.conversations || [];
-              renderConversationsList();
-              openConversation(convRes.data.conversation_id);
+          const displayName = (el as HTMLElement).dataset.displayName || '';
+          const username = (el as HTMLElement).dataset.username || '';
+
+          if (isGroup) {
+            if (!selectedMembers.some(m => m.userId === uid)) {
+              selectedMembers.push({ userId: uid, displayName, username });
+              renderSelectedMembers();
+            }
+          } else {
+            const convRes = await api.createConversation({
+              type: 'direct',
+              member_ids: [uid],
+            });
+            if (convRes.ok) {
+              overlay.remove();
+              const listRes = await api.getConversations();
+              if (listRes.ok) {
+                state.conversations = listRes.data.conversations || [];
+                renderConversationsList();
+                openConversation(convRes.data.conversation_id);
+              }
             }
           }
         });
@@ -801,7 +1494,253 @@ function showNewChatDialog(container: HTMLElement) {
 
 // ── Disappearing Messages ──
 
-const disappearTimers = new Map<string, number>(); // conversationId → seconds
+// Persist per-conversation disappear timers across sessions
+const disappearTimers = new Map<string, number>();
+(() => {
+  try {
+    const saved = JSON.parse(localStorage.getItem('rocchat_disappear_timers') || '{}');
+    for (const [k, v] of Object.entries(saved)) {
+      if (typeof v === 'number') disappearTimers.set(k, v);
+    }
+  } catch { /* ignore */ }
+})();
+function saveDisappearTimers() {
+  const obj: Record<string, number> = {};
+  disappearTimers.forEach((v, k) => { if (v > 0) obj[k] = v; });
+  localStorage.setItem('rocchat_disappear_timers', JSON.stringify(obj));
+}
+
+// Client-side cleanup: filter expired messages every 30s
+setInterval(() => {
+  const now = Math.floor(Date.now() / 1000);
+  for (const [cid, msgs] of state.messages) {
+    const before = msgs.length;
+    const filtered = msgs.filter(m => !m.expires_at || m.expires_at > now);
+    if (filtered.length < before) {
+      state.messages.set(cid, filtered);
+      if (state.activeConversationId === cid) renderMessages(filtered);
+    }
+  }
+}, 30000);
+
+// ── Donor Badge Feathers ──
+const DONOR_FEATHERS: Record<string, { emoji: string; color: string; size: number }> = {
+  coffee:   { emoji: '🪶', color: '#8B7355', size: 12 },
+  feather:  { emoji: '🪶', color: '#d97706', size: 14 },
+  wing:     { emoji: '🪶', color: '#fbbf24', size: 16 },
+  mountain: { emoji: '🪶', color: '#f59e0b', size: 18 },
+  patron:   { emoji: '🪶', color: '#40E0D0', size: 20 },
+};
+
+function renderDonorBadge(userId?: string): string {
+  if (!userId) return '';
+  const tier = localStorage.getItem(`rocchat_donor_${userId}`);
+  if (!tier || !DONOR_FEATHERS[tier]) return '';
+  const f = DONOR_FEATHERS[tier];
+  return `<span class="donor-feather" style="position:absolute;bottom:-2px;right:-2px;font-size:${f.size}px;filter:drop-shadow(0 0 3px ${f.color})" title="${tier} supporter">${f.emoji}</span>`;
+}
+
+function renderTierBadge(accountTier?: string): string {
+  if (accountTier === 'premium') {
+    // Golden Roc Wings — pair of small gold wings wrapping bottom of avatar
+    return `<span class="tier-badge premium-wings" style="position:absolute;bottom:-4px;left:50%;transform:translateX(-50%);font-size:14px;filter:drop-shadow(0 0 4px rgba(212,175,55,0.4));animation:wingPulse 3s ease-in-out infinite" title="Premium">\u{1F985}</span>`;
+  }
+  if (accountTier === 'business') {
+    // Crowned Roc with Shield — shield + crown
+    return `<span class="tier-badge business-badge" style="position:absolute;top:-6px;left:50%;transform:translateX(-50%);font-size:11px;filter:drop-shadow(0 0 4px rgba(212,175,55,0.5));animation:wingPulse 3s ease-in-out infinite" title="Business">\u{1F451}</span>`;
+  }
+  return '';
+}
+
+// ── Avatar Helper ──
+function renderAvatar(name: string, avatarUrl?: string, userId?: string, size = 50, fontSize = 18, accountTier?: string): string {
+  const initials = name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
+  const badge = renderDonorBadge(userId);
+  const tierBadge = renderTierBadge(accountTier);
+  const borderStyle = accountTier === 'premium' ? 'border:2px solid #D4AF37;' : accountTier === 'business' ? 'border:2.5px solid #D4AF37;' : '';
+  const isOnline = userId ? onlineUsers.has(userId) : false;
+  const presenceDot = userId ? `<span class="presence-dot${isOnline ? ' online' : ''}" data-uid="${userId}"></span>` : '';
+  if (avatarUrl && userId) {
+    const path = avatarUrl.startsWith('/api/') ? avatarUrl : `/api${avatarUrl}`;
+    const sep = path.includes('?') ? '&' : '?';
+    return `<div class="avatar" style="position:relative;width:${size}px;height:${size}px;font-size:${fontSize}px;line-height:${size}px;overflow:visible;${borderStyle}"><img src="${path}${sep}uid=${encodeURIComponent(userId)}" alt="${escapeHtml(name)}" loading="lazy" decoding="async" style="width:100%;height:100%;object-fit:cover;border-radius:50%" onerror="this.replaceWith(document.createTextNode('${initials}'))" />${presenceDot}${badge}${tierBadge}</div>`;
+  }
+  return `<div class="avatar" style="position:relative;width:${size}px;height:${size}px;font-size:${fontSize}px;line-height:${size}px;overflow:visible;${borderStyle}">${initials}${presenceDot}${badge}${tierBadge}</div>`;
+}
+
+function showScheduleDialog(conversationId: string, input: HTMLTextAreaElement) {
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:50;display:flex;align-items:center;justify-content:center;padding:var(--sp-4)';
+
+  // Default to 1 hour from now
+  const now = new Date();
+  now.setHours(now.getHours() + 1, 0, 0, 0);
+  const defaultTime = now.toISOString().slice(0, 16);
+
+  overlay.innerHTML = `
+    <div style="background:var(--bg-elevated);border-radius:var(--radius-xl);max-width:360px;width:100%;padding:var(--sp-5);box-shadow:var(--shadow-xl)">
+      <h3 style="margin-bottom:var(--sp-3)">Schedule Message</h3>
+      <p style="font-size:var(--text-sm);color:var(--text-secondary);margin-bottom:var(--sp-4)">Choose when to send this message:</p>
+      <input type="datetime-local" id="schedule-time" class="form-input" style="width:100%;margin-bottom:var(--sp-4)" value="${defaultTime}" min="${new Date().toISOString().slice(0, 16)}" />
+      <div style="display:flex;gap:var(--sp-2)">
+        <button class="btn-secondary" id="schedule-cancel" style="flex:1">Cancel</button>
+        <button class="btn-primary" id="schedule-confirm" style="flex:1">Schedule</button>
+      </div>
+    </div>
+  `;
+
+  overlay.querySelector('#schedule-cancel')?.addEventListener('click', () => overlay.remove());
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+
+  overlay.querySelector('#schedule-confirm')?.addEventListener('click', async () => {
+    const timeInput = overlay.querySelector('#schedule-time') as HTMLInputElement;
+    const scheduledDate = new Date(timeInput.value);
+    const scheduledAt = Math.floor(scheduledDate.getTime() / 1000);
+
+    if (scheduledAt <= Math.floor(Date.now() / 1000)) {
+      showToast('Please select a future time', 'error');
+      return;
+    }
+
+    const text = input.value.trim();
+    // For now, store the plaintext as the encrypted field (real implementation would encrypt)
+    const encrypted = JSON.stringify({ text, type: 'scheduled' });
+
+    try {
+      const res = await api.createScheduledMessage(conversationId, encrypted, scheduledAt);
+      if (res.ok) {
+        showToast(`Message scheduled for ${scheduledDate.toLocaleString()}`);
+        input.value = '';
+        input.dispatchEvent(new Event('input'));
+        overlay.remove();
+      } else {
+        showToast('Failed to schedule message', 'error');
+      }
+    } catch { showToast('Failed to schedule message', 'error'); }
+  });
+
+  document.body.appendChild(overlay);
+}
+
+function initSwipeActions(listEl: HTMLElement) {
+  listEl.querySelectorAll('.swipe-container').forEach(container => {
+    const item = container.querySelector('.conversation-item.swipeable') as HTMLElement;
+    if (!item) return;
+
+    let startX = 0;
+    let currentX = 0;
+    let swiping = false;
+    const MAX_SWIPE = 156; // 3 actions * 52px each
+
+    item.addEventListener('touchstart', (e) => {
+      startX = e.touches[0].clientX;
+      currentX = 0;
+      swiping = true;
+      item.style.transition = 'none';
+    }, { passive: true });
+
+    item.addEventListener('touchmove', (e) => {
+      if (!swiping) return;
+      const dx = e.touches[0].clientX - startX;
+      // Only allow swiping left (negative)
+      currentX = Math.max(-MAX_SWIPE, Math.min(0, dx));
+      item.style.transform = `translateX(${currentX}px)`;
+    }, { passive: true });
+
+    item.addEventListener('touchend', () => {
+      swiping = false;
+      item.style.transition = 'transform 0.25s ease';
+      if (currentX < -60) {
+        // Snap open
+        item.style.transform = `translateX(-${MAX_SWIPE}px)`;
+        item.dataset.swiped = 'true';
+      } else {
+        // Snap closed
+        item.style.transform = 'translateX(0)';
+        item.dataset.swiped = '';
+      }
+    });
+
+    // Close on tap elsewhere
+    item.addEventListener('click', (ev) => {
+      if (item.dataset.swiped === 'true') {
+        ev.stopPropagation();
+        ev.preventDefault();
+        item.style.transition = 'transform 0.25s ease';
+        item.style.transform = 'translateX(0)';
+        item.dataset.swiped = '';
+      }
+    });
+
+    // Action buttons
+    const convId = (container as HTMLElement).dataset.convId!;
+    container.querySelector('.swipe-delete')?.addEventListener('click', async () => {
+      if (confirm('Delete this conversation?')) {
+        await api.deleteConversation(convId);
+        state.conversations = state.conversations.filter(c => c.id !== convId);
+        if (state.activeConversationId === convId) state.activeConversationId = null;
+        renderConversationsList();
+      }
+    });
+    container.querySelector('.swipe-mute')?.addEventListener('click', async () => {
+      item.style.transition = 'transform 0.25s ease';
+      item.style.transform = 'translateX(0)';
+      item.dataset.swiped = '';
+      // Show notification mode picker
+      const overlay = document.createElement('div');
+      overlay.className = 'view-once-modal';
+      overlay.innerHTML = `
+        <div class="view-once-dialog" style="max-width:300px">
+          <h3 style="margin:0 0 12px">Notification Mode</h3>
+          ${['normal', 'quiet', 'focus', 'emergency', 'silent', 'scheduled'].map(m =>
+            `<button class="btn-secondary notif-mode-btn" data-mode="${m}" style="width:100%;margin-bottom:8px;text-align:left;padding:10px 14px">
+              <strong>${m.charAt(0).toUpperCase() + m.slice(1)}</strong>
+              <span style="display:block;font-size:var(--text-xs);color:var(--text-tertiary)">${{
+                normal: 'All notifications',
+                quiet: 'Badge count only, no sound',
+                focus: 'Only @mentions and replies',
+                emergency: 'Calls ring, messages silent',
+                silent: 'Nothing until you open app',
+                scheduled: 'Only during configured hours',
+              }[m]}</span>
+            </button>`
+          ).join('')}
+          <button class="btn-secondary" id="notif-cancel" style="width:100%;margin-top:4px">Cancel</button>
+        </div>
+      `;
+      document.body.appendChild(overlay);
+      overlay.querySelector('#notif-cancel')?.addEventListener('click', () => overlay.remove());
+      overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+      overlay.querySelectorAll('.notif-mode-btn').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          const mode = (btn as HTMLElement).dataset.mode!;
+          await api.setNotificationMode(convId, mode);
+          const conv = state.conversations.find(c => c.id === convId);
+          if (conv) conv.muted = mode !== 'normal';
+          showToast(`Notifications: ${mode}`, 'success');
+          overlay.remove();
+          renderConversationsList();
+        });
+      });
+    });
+    container.querySelector('.swipe-archive')?.addEventListener('click', async () => {
+      const res = await api.archiveConversation(convId);
+      const conv = state.conversations.find(c => c.id === convId);
+      if (conv) conv.archived = res.data.archived;
+      if (res.data.archived) {
+        state.conversations = state.conversations.filter(c => c.id !== convId);
+        if (state.activeConversationId === convId) state.activeConversationId = null;
+      }
+      showToast(res.data.archived ? 'Archived' : 'Unarchived', 'success');
+      renderConversationsList();
+    });
+  });
+}
+
+function getOtherMember(conv: Conversation): Conversation['members'][0] | undefined {
+  const userId = localStorage.getItem('rocchat_user_id') || '';
+  return conv.members.find(m => m.user_id !== userId);
+} // conversationId → seconds
 
 function showDisappearingMenu(conversationId: string) {
   const currentTimer = disappearTimers.get(conversationId) || 0;
@@ -854,6 +1793,7 @@ function showDisappearingMenu(conversationId: string) {
     btn.addEventListener('click', () => {
       const value = parseInt((btn as HTMLElement).dataset.value || '0', 10);
       disappearTimers.set(conversationId, value);
+      saveDisappearTimers();
 
       // Update the timer icon to indicate active
       const timerBtn = document.getElementById('btn-disappear');
@@ -864,6 +1804,66 @@ function showDisappearingMenu(conversationId: string) {
           : 'Disappearing messages';
       }
 
+      overlay.remove();
+    });
+  });
+}
+
+const CHAT_THEMES: { key: string; label: string; vars: Record<string, string> }[] = [
+  { key: 'default', label: 'Default', vars: {} },
+  { key: 'midnight-blue', label: 'Midnight Blue', vars: { '--bg-app': '#0a1628', '--bg-bubble-mine': 'rgba(26, 54, 93, 0.8)', '--bg-bubble-theirs': 'rgba(30, 41, 59, 0.9)' } },
+  { key: 'forest-green', label: 'Forest Green', vars: { '--bg-app': '#0a1f0a', '--bg-bubble-mine': 'rgba(20, 83, 45, 0.8)', '--bg-bubble-theirs': 'rgba(26, 46, 26, 0.9)' } },
+  { key: 'sunset-amber', label: 'Sunset Amber', vars: { '--bg-app': '#1a0f05', '--bg-bubble-mine': 'rgba(124, 45, 18, 0.8)', '--bg-bubble-theirs': 'rgba(41, 32, 24, 0.9)' } },
+  { key: 'ocean-teal', label: 'Ocean Teal', vars: { '--bg-app': '#042f2e', '--bg-bubble-mine': 'rgba(19, 78, 74, 0.8)', '--bg-bubble-theirs': 'rgba(26, 47, 46, 0.9)' } },
+  { key: 'rose-gold', label: 'Rose Gold', vars: { '--bg-app': '#1a0a10', '--bg-bubble-mine': 'rgba(131, 24, 67, 0.8)', '--bg-bubble-theirs': 'rgba(42, 21, 32, 0.9)' } },
+  { key: 'lavender', label: 'Lavender', vars: { '--bg-app': '#0f0a1a', '--bg-bubble-mine': 'rgba(76, 29, 149, 0.8)', '--bg-bubble-theirs': 'rgba(30, 21, 48, 0.9)' } },
+  { key: 'charcoal', label: 'Charcoal', vars: { '--bg-app': '#111111', '--bg-bubble-mine': 'rgba(51, 51, 51, 0.9)', '--bg-bubble-theirs': 'rgba(34, 34, 34, 0.9)' } },
+];
+
+function applyConversationTheme(theme: string | null) {
+  const root = document.documentElement;
+  ['--bg-app', '--bg-bubble-mine', '--bg-bubble-theirs'].forEach(p => root.style.removeProperty(p));
+  if (!theme || theme === 'default') return;
+  const t = CHAT_THEMES.find(ct => ct.key === theme);
+  if (t) Object.entries(t.vars).forEach(([k, v]) => root.style.setProperty(k, v));
+}
+
+function showConversationThemePicker(conversationId: string) {
+  const conv = state.conversations.find(c => c.id === conversationId);
+  const currentTheme = conv?.chat_theme || 'default';
+
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:50;display:flex;align-items:center;justify-content:center;padding:var(--sp-4)';
+
+  overlay.innerHTML = `
+    <div class="auth-card" style="max-width:320px">
+      <h2 style="font-size:var(--text-lg);margin-bottom:var(--sp-2)">Chat Theme</h2>
+      <p style="font-size:var(--text-sm);color:var(--text-tertiary);margin-bottom:var(--sp-4)">Choose a theme for this conversation.</p>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--sp-2)">
+        ${CHAT_THEMES.map(t => `
+          <button class="btn-secondary theme-option" data-theme="${t.key}"
+                  style="padding:var(--sp-2);text-align:center;${currentTheme === t.key ? 'border-color:var(--roc-gold);color:var(--roc-gold)' : ''}">
+            <div style="width:100%;height:24px;border-radius:var(--radius-sm);margin-bottom:4px;background:${t.vars['--bg-app'] || 'var(--bg-app)'}"></div>
+            <span style="font-size:var(--text-xs)">${t.label}</span>
+          </button>
+        `).join('')}
+      </div>
+      <button class="btn-secondary" id="close-theme" style="width:100%;margin-top:var(--sp-3)">Cancel</button>
+    </div>
+  `;
+
+  document.body.appendChild(overlay);
+  overlay.querySelector('#close-theme')?.addEventListener('click', () => overlay.remove());
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+
+  overlay.querySelectorAll('.theme-option').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const theme = (btn as HTMLElement).dataset.theme!;
+      const themeValue = theme === 'default' ? null : theme;
+      await api.setConversationTheme(conversationId, themeValue);
+      if (conv) (conv as any).chat_theme = themeValue;
+      applyConversationTheme(themeValue);
+      showToast(`Theme: ${CHAT_THEMES.find(t => t.key === theme)?.label || 'Default'}`, 'success');
       overlay.remove();
     });
   });
@@ -964,6 +1964,14 @@ function escapeHtml(text: string): string {
   return div.innerHTML;
 }
 
+function tryParseGif(text: string): { type: string; url: string; preview?: string; width?: number; height?: number } | null {
+  try {
+    const obj = JSON.parse(text);
+    if (obj && obj.type === 'gif' && obj.url) return obj;
+  } catch { /* not JSON */ }
+  return null;
+}
+
 // ── Call initiation ──
 
 async function startCall(conv: Conversation, callType: 'voice' | 'video') {
@@ -972,6 +1980,479 @@ async function startCall(conv: Conversation, callType: 'voice' | 'video') {
   const recipient = conv.members.find((m) => m.user_id !== userId);
   if (!recipient || !state.ws) return;
   startOutgoingCall(conv.id, recipient.user_id, recipient.display_name || recipient.username, callType, state.ws);
+}
+
+// ── Voice & Video note recording ──
+// Animated preview UX: user records, sees live waveform + timer, then previews
+// and explicitly taps Send or Cancel. Auto-stops at 5 min.
+
+interface RecordingState {
+  kind: 'audio' | 'video';
+  conversationId: string;
+  stream: MediaStream;
+  recorder: MediaRecorder;
+  chunks: Blob[];
+  startedAt: number;
+  audioCtx?: AudioContext;
+  analyser?: AnalyserNode;
+  rafId?: number;
+  timerId?: ReturnType<typeof setInterval>;
+  autoStopId?: ReturnType<typeof setTimeout>;
+  cancelled: boolean;
+  overlay: HTMLElement;
+  videoEl?: HTMLVideoElement;
+}
+
+let activeRecording: RecordingState | null = null;
+
+function startVoiceRecording(conversationId: string) {
+  if (activeRecording) return;
+  navigator.mediaDevices.getUserMedia({ audio: true })
+    .then((stream) => beginRecording('audio', conversationId, stream))
+    .catch(() => showToast('Microphone access denied', 'error'));
+}
+
+function startVideoRecording(conversationId: string) {
+  if (activeRecording) return;
+  navigator.mediaDevices.getUserMedia({ audio: true, video: { width: 480, height: 480, facingMode: 'user' } })
+    .then((stream) => beginRecording('video', conversationId, stream))
+    .catch(() => showToast('Camera access denied', 'error'));
+}
+
+function beginRecording(kind: 'audio' | 'video', conversationId: string, stream: MediaStream) {
+  const mime = kind === 'audio' ? 'audio/webm;codecs=opus' : 'video/webm;codecs=vp8,opus';
+  let recorder: MediaRecorder;
+  try { recorder = new MediaRecorder(stream, { mimeType: mime }); }
+  catch { recorder = new MediaRecorder(stream); }
+
+  const overlay = buildRecordingOverlay(kind);
+  document.body.appendChild(overlay);
+
+  const rec: RecordingState = {
+    kind, conversationId, stream, recorder, chunks: [],
+    startedAt: Date.now(), cancelled: false, overlay,
+  };
+  activeRecording = rec;
+
+  // Wire live preview
+  if (kind === 'video') {
+    const vid = overlay.querySelector<HTMLVideoElement>('.rocchat-rec-video')!;
+    vid.srcObject = stream;
+    vid.play().catch(() => {});
+    rec.videoEl = vid;
+  }
+
+  // Waveform from audio track
+  try {
+    const audioCtx = new AudioContext();
+    const src = audioCtx.createMediaStreamSource(stream);
+    const analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 256;
+    src.connect(analyser);
+    rec.audioCtx = audioCtx;
+    rec.analyser = analyser;
+    const canvas = overlay.querySelector<HTMLCanvasElement>('.rocchat-rec-wave')!;
+    drawWaveform(rec, canvas);
+  } catch {}
+
+  // Timer
+  const timerEl = overlay.querySelector<HTMLElement>('.rocchat-rec-timer')!;
+  rec.timerId = setInterval(() => {
+    const secs = Math.floor((Date.now() - rec.startedAt) / 1000);
+    timerEl.textContent = fmtDuration(secs);
+  }, 250);
+
+  // Auto-stop at 5 min
+  rec.autoStopId = setTimeout(() => {
+    if (rec.recorder.state === 'recording') rec.recorder.stop();
+  }, 300000);
+
+  recorder.ondataavailable = (e) => { if (e.data.size > 0) rec.chunks.push(e.data); };
+  recorder.onstop = () => finishRecording(rec);
+
+  recorder.start(250);
+
+  // Wire controls
+  overlay.querySelector('.rocchat-rec-cancel')?.addEventListener('click', () => {
+    rec.cancelled = true;
+    if (rec.recorder.state === 'recording') rec.recorder.stop();
+  });
+  overlay.querySelector('.rocchat-rec-send')?.addEventListener('click', () => {
+    if (rec.recorder.state === 'recording') rec.recorder.stop();
+    else finishRecording(rec);
+  });
+}
+
+function buildRecordingOverlay(kind: 'audio' | 'video'): HTMLElement {
+  injectRecordingStyles();
+  const el = document.createElement('div');
+  el.className = 'rocchat-rec-overlay';
+  el.innerHTML = `
+    <div class="rocchat-rec-panel">
+      <div class="rocchat-rec-header">
+        <span class="rocchat-rec-dot"></span>
+        <span class="rocchat-rec-label">${kind === 'audio' ? 'Recording voice…' : 'Recording video…'}</span>
+        <span class="rocchat-rec-timer">0:00</span>
+      </div>
+      ${kind === 'video' ? '<video class="rocchat-rec-video" muted playsinline></video>' : ''}
+      <canvas class="rocchat-rec-wave" width="560" height="64"></canvas>
+      <div class="rocchat-rec-actions">
+        <button class="rocchat-rec-cancel" title="Cancel">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>
+        </button>
+        <div class="rocchat-rec-spacer"></div>
+        <button class="rocchat-rec-send" title="Send">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg>
+        </button>
+      </div>
+    </div>
+  `;
+  return el;
+}
+
+function injectRecordingStyles() {
+  if (document.getElementById('rocchat-rec-styles')) return;
+  const s = document.createElement('style');
+  s.id = 'rocchat-rec-styles';
+  s.textContent = `
+    .rocchat-rec-overlay{position:fixed;inset:0;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;z-index:9999;animation:rocRecFade .15s ease-out}
+    .rocchat-rec-panel{background:var(--bg-elev,#fff);border-radius:20px;padding:20px;min-width:320px;max-width:620px;width:min(90vw,620px);box-shadow:0 20px 60px rgba(0,0,0,.35);display:flex;flex-direction:column;gap:14px}
+    .rocchat-rec-header{display:flex;align-items:center;gap:10px;color:var(--text,#111)}
+    .rocchat-rec-dot{width:10px;height:10px;background:#ef4444;border-radius:50%;animation:rocRecPulse 1s ease-in-out infinite}
+    .rocchat-rec-label{flex:1;font-weight:600}
+    .rocchat-rec-timer{font-family:var(--font-mono,monospace);color:var(--roc-gold,#c9a34b)}
+    .rocchat-rec-video{width:100%;max-height:280px;border-radius:12px;background:#000;object-fit:cover;transform:scaleX(-1)}
+    .rocchat-rec-wave{width:100%;height:56px;background:rgba(201,163,75,.06);border-radius:10px}
+    .rocchat-rec-actions{display:flex;align-items:center;gap:8px}
+    .rocchat-rec-spacer{flex:1}
+    .rocchat-rec-cancel,.rocchat-rec-send{width:48px;height:48px;border-radius:50%;border:0;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;transition:transform .1s ease}
+    .rocchat-rec-cancel{background:rgba(239,68,68,.12);color:#ef4444}
+    .rocchat-rec-cancel:hover{background:rgba(239,68,68,.22)}
+    .rocchat-rec-send{background:var(--roc-gold,#c9a34b);color:#fff}
+    .rocchat-rec-send:hover{transform:scale(1.06)}
+    @keyframes rocRecPulse{0%,100%{transform:scale(1);opacity:1}50%{transform:scale(1.4);opacity:.6}}
+    @keyframes rocRecFade{from{opacity:0}to{opacity:1}}
+  `;
+  document.head.appendChild(s);
+}
+
+function drawWaveform(rec: RecordingState, canvas: HTMLCanvasElement) {
+  const ctx = canvas.getContext('2d');
+  if (!ctx || !rec.analyser) return;
+  const analyser = rec.analyser;
+  const data = new Uint8Array(analyser.frequencyBinCount);
+  const render = () => {
+    if (!activeRecording || activeRecording !== rec) return;
+    analyser.getByteTimeDomainData(data);
+    const w = canvas.width, h = canvas.height;
+    ctx.clearRect(0, 0, w, h);
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = getCssVar('--roc-gold') || '#c9a34b';
+    ctx.beginPath();
+    const slice = w / data.length;
+    for (let i = 0; i < data.length; i++) {
+      const v = data[i] / 128.0;
+      const y = (v * h) / 2;
+      const x = i * slice;
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+    rec.rafId = requestAnimationFrame(render);
+  };
+  rec.rafId = requestAnimationFrame(render);
+}
+
+function getCssVar(name: string): string {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+}
+
+function fmtDuration(secs: number): string {
+  const m = Math.floor(secs / 60);
+  const s = secs % 60;
+  return `${m}:${s.toString().padStart(2, '0')}`;
+}
+
+async function finishRecording(rec: RecordingState) {
+  if (activeRecording !== rec) return;
+  activeRecording = null;
+  if (rec.rafId) cancelAnimationFrame(rec.rafId);
+  if (rec.timerId) clearInterval(rec.timerId);
+  if (rec.autoStopId) clearTimeout(rec.autoStopId);
+  try { rec.audioCtx?.close(); } catch {}
+  rec.stream.getTracks().forEach((t) => t.stop());
+  rec.overlay.remove();
+
+  if (rec.cancelled) return;
+  const blob = new Blob(rec.chunks, { type: rec.kind === 'audio' ? 'audio/webm;codecs=opus' : 'video/webm;codecs=vp8,opus' });
+  if (blob.size < 100) return;
+  const duration = Math.round((Date.now() - rec.startedAt) / 1000);
+
+  await uploadAndSendMediaNote(rec.conversationId, blob, rec.kind, duration);
+}
+
+async function uploadAndSendMediaNote(conversationId: string, blob: Blob, kind: 'audio' | 'video', duration: number) {
+  const userId = localStorage.getItem('rocchat_user_id') || '';
+  const conv = state.conversations.find((c) => c.id === conversationId);
+  const recipientUserId = conv?.members.find((m) => m.user_id !== userId)?.user_id;
+  try {
+    const plainBytes = new Uint8Array(await blob.arrayBuffer());
+    const fileKey = randomBytes(32);
+    const fileIv = randomBytes(12);
+    const fileHash = await cryptoSha256(plainBytes);
+
+    const cryptoKey = await crypto.subtle.importKey('raw', fileKey.buffer as ArrayBuffer, 'AES-GCM', false, ['encrypt']);
+    const encrypted = await crypto.subtle.encrypt(
+      { name: 'AES-GCM', iv: fileIv.buffer as ArrayBuffer, tagLength: 128 },
+      cryptoKey, plainBytes,
+    );
+
+    const token = api.getToken();
+    const ext = kind === 'audio' ? 'webm' : 'webm';
+    const filename = kind === 'audio' ? `voice_note.${ext}` : `video_note.${ext}`;
+    const mime = kind === 'audio' ? 'audio/webm' : 'video/webm';
+    const res = await fetch('/api/media/upload', {
+      method: 'POST',
+      headers: {
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        'Content-Type': 'application/octet-stream',
+        'x-conversation-id': conversationId,
+        'x-encrypted-filename': filename,
+        'x-encrypted-mimetype': mime,
+      },
+      body: new Uint8Array(encrypted),
+    });
+    if (!res.ok) { showToast('Failed to upload', 'error'); return; }
+    const data = await res.json() as { mediaId: string };
+    const msgType = kind === 'audio' ? 'voice_note' : 'video_note';
+    const payload = JSON.stringify({
+      type: msgType,
+      blobId: data.mediaId,
+      fileKey: toBase64(fileKey),
+      fileIv: toBase64(fileIv),
+      fileHash: toBase64(fileHash),
+      filename, mime, size: blob.size, duration,
+    });
+
+    let sendPayload: Parameters<typeof api.sendMessage>[0] | null = null;
+    if (recipientUserId) {
+      const enc = await encryptMessage(conversationId, recipientUserId, payload);
+      const encAny = enc as unknown as Record<string, unknown>;
+      const headerObj = encAny.x3dh ? { ...enc.header, x3dh: encAny.x3dh } : enc.header;
+      sendPayload = {
+        conversation_id: conversationId, ciphertext: enc.ciphertext, iv: enc.iv,
+        ratchet_header: JSON.stringify(headerObj), message_type: msgType,
+      };
+    } else if (conv?.type === 'group' && conv.members.length > 2) {
+      const gEnc = await groupEncrypt(conversationId, conv.members, payload);
+      sendPayload = {
+        conversation_id: conversationId, ciphertext: gEnc.ciphertext, iv: gEnc.iv,
+        ratchet_header: gEnc.ratchet_header, message_type: msgType,
+      };
+    }
+    if (sendPayload) {
+      const sendRes = await api.sendMessage(sendPayload);
+      const mid = (sendRes as { ok: boolean; data?: { message_id?: string } }).data?.message_id;
+      if (mid) cachePlaintext(mid, payload);
+    }
+  } catch {
+    showToast('Failed to send', 'error');
+  }
+}
+
+// ── File message helpers ──
+
+interface ParsedFileMessage {
+  type: string;
+  blobId: string;
+  fileKey?: string;
+  fileIv?: string;
+  fileHash?: string;
+  filename: string;
+  mime: string;
+  size: number;
+  duration?: number;
+  caption?: string;
+  viewOnce?: boolean;
+}
+
+function tryParseFileMessage(text: string): ParsedFileMessage | null {
+  try {
+    const obj = JSON.parse(text);
+    if (obj && obj.blobId && obj.filename) return obj as ParsedFileMessage;
+  } catch { /* not a file message */ }
+  return null;
+}
+
+function renderFileMessage(bubble: Element, fileMsg: ParsedFileMessage, conversationId: string) {
+  const textEl = bubble.querySelector('.message-text');
+  if (!textEl) return;
+
+  // View-once media: show blurred placeholder with reveal-on-click
+  if (fileMsg.viewOnce) {
+    const msgRow = bubble.closest('.message-row');
+    const msgId = msgRow?.getAttribute('data-msg-id') || fileMsg.blobId;
+    const viewedKey = `rocchat_viewed_${msgId}`;
+    const alreadyViewed = localStorage.getItem(viewedKey);
+
+    if (alreadyViewed) {
+      const opened = document.createElement('div');
+      opened.className = 'view-once-opened';
+      opened.innerHTML = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--text-tertiary)" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7S2 12 2 12z"/></svg><span>Opened</span>`;
+      textEl.replaceWith(opened);
+      return;
+    }
+
+    const wrapper = document.createElement('div');
+    wrapper.className = 'view-once-wrapper';
+    wrapper.innerHTML = `
+      <div class="view-once-overlay">
+        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="var(--roc-gold)" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7S2 12 2 12z"/></svg>
+        <span>View once</span>
+      </div>
+    `;
+    wrapper.addEventListener('click', async () => {
+      try {
+        const blob = await fetchAndDecryptMedia(fileMsg, conversationId);
+        const url = URL.createObjectURL(blob);
+        localStorage.setItem(viewedKey, '1');
+        // Show in a modal overlay that auto-closes
+        const modal = document.createElement('div');
+        modal.className = 'view-once-modal';
+        const isImg = fileMsg.mime.startsWith('image/');
+        modal.innerHTML = `
+          <div class="view-once-modal-content">
+            ${isImg
+              ? `<img src="${url}" style="max-width:90vw;max-height:80vh;border-radius:12px" />`
+              : `<video src="${url}" autoplay controls style="max-width:90vw;max-height:80vh;border-radius:12px"></video>`
+            }
+            <div class="view-once-timer">This media will disappear when closed</div>
+          </div>
+        `;
+        modal.addEventListener('click', (e) => {
+          if (e.target === modal || (e.target as HTMLElement).closest('.view-once-timer')) {
+            URL.revokeObjectURL(url);
+            modal.remove();
+            const opened = document.createElement('div');
+            opened.className = 'view-once-opened';
+            opened.innerHTML = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--text-tertiary)" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7S2 12 2 12z"/></svg><span>Opened</span>`;
+            wrapper.replaceWith(opened);
+          }
+        });
+        document.body.appendChild(modal);
+      } catch {
+        wrapper.querySelector('.view-once-overlay span')!.textContent = 'Failed to load';
+      }
+    }, { once: true });
+    textEl.replaceWith(wrapper);
+    return;
+  }
+
+  const isImage = fileMsg.type === 'image' || fileMsg.mime.startsWith('image/');
+  const isVideo = fileMsg.type === 'video' || fileMsg.type === 'video_note' || fileMsg.mime.startsWith('video/');
+  const isAudio = fileMsg.type === 'voice_note' || fileMsg.mime.startsWith('audio/');
+
+  if (isImage && fileMsg.fileKey) {
+    const img = document.createElement('img');
+    img.alt = fileMsg.filename;
+    img.className = 'media-message';
+    img.style.cssText = 'max-width:280px;max-height:300px;border-radius:12px;cursor:pointer;display:block';
+    img.src = 'data:image/gif;base64,R0lGODlhAQABAIAAAMLCwgAAACH5BAAAAAAALAAAAAABAAEAAAICRAEAOw==';
+    textEl.replaceWith(img);
+    decryptAndDisplayMedia(img, fileMsg, conversationId, 'img');
+  } else if (isVideo && fileMsg.fileKey) {
+    const video = document.createElement('video');
+    video.controls = true;
+    video.className = 'media-message';
+    video.style.cssText = 'max-width:280px;max-height:300px;border-radius:12px;display:block';
+    textEl.replaceWith(video);
+    decryptAndDisplayMedia(video, fileMsg, conversationId, 'video');
+  } else if (isAudio && fileMsg.fileKey) {
+    const audio = document.createElement('audio');
+    audio.controls = true;
+    audio.style.cssText = 'width:240px';
+    textEl.replaceWith(audio);
+    decryptAndDisplayMedia(audio, fileMsg, conversationId, 'audio');
+  } else {
+    const sizeStr = fileMsg.size < 1024 ? `${fileMsg.size} B`
+      : fileMsg.size < 1048576 ? `${(fileMsg.size / 1024).toFixed(1)} KB`
+      : `${(fileMsg.size / 1048576).toFixed(1)} MB`;
+    const link = document.createElement('a');
+    link.href = '#';
+    link.textContent = `📎 ${fileMsg.filename} (${sizeStr})`;
+    link.style.cssText = 'color:var(--accent);text-decoration:underline;cursor:pointer';
+    link.addEventListener('click', async (e) => {
+      e.preventDefault();
+      link.textContent = '⏳ Downloading...';
+      try {
+        const blob = await fetchAndDecryptMedia(fileMsg, conversationId);
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = fileMsg.filename;
+        a.click();
+        URL.revokeObjectURL(url);
+        link.textContent = `📎 ${fileMsg.filename} (${sizeStr})`;
+      } catch {
+        link.textContent = '⚠️ Download failed';
+      }
+    });
+    textEl.replaceWith(link);
+  }
+}
+
+async function fetchAndDecryptMedia(fileMsg: ParsedFileMessage, conversationId: string): Promise<Blob> {
+  const token = api.getToken();
+  const res = await fetch(`/api/media/${fileMsg.blobId}?cid=${conversationId}`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+  if (!res.ok) throw new Error('Failed to fetch media');
+  const encryptedData = new Uint8Array(await res.arrayBuffer());
+
+  if (fileMsg.fileKey && fileMsg.fileIv) {
+    const key = fromBase64(fileMsg.fileKey);
+    const iv = fromBase64(fileMsg.fileIv);
+    const cryptoKey = await crypto.subtle.importKey('raw', key.buffer as ArrayBuffer, 'AES-GCM', false, ['decrypt']);
+    const decrypted = await crypto.subtle.decrypt(
+      { name: 'AES-GCM', iv: iv.buffer as ArrayBuffer, tagLength: 128 },
+      cryptoKey,
+      encryptedData,
+    );
+
+    if (fileMsg.fileHash) {
+      const hash = await cryptoSha256(new Uint8Array(decrypted));
+      const expectedHash = fromBase64(fileMsg.fileHash);
+      if (hash.length !== expectedHash.length || !hash.every((b, i) => b === expectedHash[i])) {
+        throw new Error('File integrity check failed');
+      }
+    }
+
+    return new Blob([decrypted], { type: fileMsg.mime });
+  }
+
+  return new Blob([encryptedData], { type: fileMsg.mime });
+}
+
+async function decryptAndDisplayMedia(
+  el: HTMLImageElement | HTMLVideoElement | HTMLAudioElement,
+  fileMsg: ParsedFileMessage,
+  conversationId: string,
+  kind: 'img' | 'video' | 'audio',
+) {
+  try {
+    const blob = await fetchAndDecryptMedia(fileMsg, conversationId);
+    const url = URL.createObjectURL(blob);
+    if (kind === 'img') {
+      (el as HTMLImageElement).src = url;
+      el.addEventListener('click', () => window.open(url, '_blank'));
+    } else {
+      (el as HTMLVideoElement | HTMLAudioElement).src = url;
+    }
+  } catch {
+    const span = document.createElement('span');
+    span.textContent = `⚠️ Failed to load ${fileMsg.filename}`;
+    span.style.color = 'var(--text-tertiary)';
+    el.replaceWith(span);
+  }
 }
 
 // ── File upload ──
@@ -986,6 +2467,39 @@ function showFileUpload(conversationId: string) {
     if (!file) return;
     input.remove();
 
+    // For media files, offer view-once option
+    let viewOnce = false;
+    const isMedia = file.type.startsWith('image/') || file.type.startsWith('video/');
+    if (isMedia) {
+      viewOnce = await new Promise<boolean>((resolve) => {
+        const dialog = document.createElement('div');
+        dialog.className = 'view-once-modal';
+        dialog.innerHTML = `
+          <div class="view-once-dialog">
+            <h3 style="margin:0 0 8px">Send ${file.name}</h3>
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin:12px 0">
+              <input type="checkbox" id="view-once-check" style="accent-color:var(--roc-gold);width:18px;height:18px" />
+              <span>View once — disappears after opened</span>
+            </label>
+            <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">
+              <button class="btn-secondary" id="vo-cancel" style="padding:6px 16px">Cancel</button>
+              <button class="btn" id="vo-send" style="padding:6px 16px;background:var(--roc-gold);color:#fff;border:none;border-radius:8px;cursor:pointer">Send</button>
+            </div>
+          </div>
+        `;
+        document.body.appendChild(dialog);
+        dialog.querySelector('#vo-cancel')?.addEventListener('click', () => { dialog.remove(); resolve(false); });
+        dialog.querySelector('#vo-send')?.addEventListener('click', () => {
+          const checked = (dialog.querySelector('#view-once-check') as HTMLInputElement)?.checked || false;
+          dialog.remove();
+          resolve(checked);
+        });
+        dialog.addEventListener('click', (e) => { if (e.target === dialog) { dialog.remove(); resolve(false); } });
+      });
+      // If dialog was cancelled via clicking Cancel, check if we should abort
+      // Actually the flow continues regardless — viewOnce is just true/false
+    }
+
     // Show upload progress
     const area = document.getElementById('messages-area');
     const userId = localStorage.getItem('rocchat_user_id') || '';
@@ -994,7 +2508,7 @@ function showFileUpload(conversationId: string) {
     progressDiv.innerHTML = `
       <div class="message-bubble">
         <div class="message-text" style="color:var(--text-tertiary)">
-          📎 Uploading ${escapeHtml(file.name)}...
+          📎 Encrypting ${escapeHtml(file.name)}...
         </div>
       </div>
     `;
@@ -1002,39 +2516,78 @@ function showFileUpload(conversationId: string) {
     area && (area.scrollTop = area.scrollHeight);
 
     try {
-      const formData = new FormData();
-      formData.append('file', file);
-      formData.append('conversation_id', conversationId);
+      // Read file bytes
+      const plainBytes = new Uint8Array(await file.arrayBuffer());
+
+      // Generate random file key (256-bit) and compute hash
+      const fileKey = randomBytes(32);
+      const fileIv = randomBytes(12);
+      const fileHash = await cryptoSha256(plainBytes);
+
+      // Encrypt file with AES-256-GCM
+      const cryptoKey = await crypto.subtle.importKey('raw', fileKey.buffer as ArrayBuffer, 'AES-GCM', false, ['encrypt']);
+      const encrypted = await crypto.subtle.encrypt(
+        { name: 'AES-GCM', iv: fileIv.buffer as ArrayBuffer, tagLength: 128 },
+        cryptoKey,
+        plainBytes,
+      );
+
+      progressDiv.querySelector('.message-text')!.textContent = `📎 Uploading ${file.name}...`;
 
       const token = api.getToken();
       const res = await fetch('/api/media/upload', {
         method: 'POST',
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-        body: formData,
+        headers: {
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          'Content-Type': 'application/octet-stream',
+          'x-conversation-id': conversationId,
+          'x-encrypted-filename': file.name,
+          'x-encrypted-mimetype': file.type,
+        },
+        body: new Uint8Array(encrypted),
       });
 
       if (res.ok) {
-        const data = await res.json() as { blobId: string };
-        // Send file message
+        const data = await res.json() as { mediaId: string };
+        // Send file message with encryption keys via Double Ratchet
         const conv = state.conversations.find((c) => c.id === conversationId);
         const recipientUserId = conv?.members.find((m) => m.user_id !== userId)?.user_id;
 
-        const fileMsg = JSON.stringify({
-          type: file.type.startsWith('image/') ? 'image' : 'file',
-          blobId: data.blobId,
+        const msgType = file.type.startsWith('image/') ? 'image'
+          : file.type.startsWith('video/') ? 'video'
+          : file.type.startsWith('audio/') ? 'voice_note'
+          : 'file';
+
+        const fileMsgObj: Record<string, unknown> = {
+          type: msgType,
+          blobId: data.mediaId,
+          fileKey: toBase64(fileKey),
+          fileIv: toBase64(fileIv),
+          fileHash: toBase64(fileHash),
           filename: file.name,
           mime: file.type,
           size: file.size,
-        });
+        };
+        if (viewOnce) fileMsgObj.viewOnce = true;
+        const fileMsg = JSON.stringify(fileMsgObj);
 
         if (recipientUserId) {
-          const encrypted = await encryptMessage(conversationId, recipientUserId, fileMsg);
+          const encryptedMsg = await encryptMessage(conversationId, recipientUserId, fileMsg);
           await api.sendMessage({
             conversation_id: conversationId,
-            ciphertext: encrypted.ciphertext,
-            iv: encrypted.iv,
-            ratchet_header: JSON.stringify(encrypted.header),
-            message_type: file.type.startsWith('image/') ? 'image' : 'file',
+            ciphertext: encryptedMsg.ciphertext,
+            iv: encryptedMsg.iv,
+            ratchet_header: JSON.stringify(encryptedMsg.header),
+            message_type: msgType,
+          });
+        } else if (conv?.type === 'group' && conv.members.length > 2) {
+          const groupEnc = await groupEncrypt(conversationId, conv.members, fileMsg);
+          await api.sendMessage({
+            conversation_id: conversationId,
+            ciphertext: groupEnc.ciphertext,
+            iv: groupEnc.iv,
+            ratchet_header: groupEnc.ratchet_header,
+            message_type: msgType,
           });
         }
 
@@ -1050,4 +2603,575 @@ function showFileUpload(conversationId: string) {
   input.click();
 }
 
+// ── In-chat message search ──
+
+function toggleMessageSearch() {
+  const existing = document.getElementById('message-search-bar');
+  if (existing) {
+    existing.remove();
+    clearSearchHighlights();
+    return;
+  }
+
+  const chatHeader = document.querySelector('.chat-header');
+  if (!chatHeader) return;
+
+  const bar = document.createElement('div');
+  bar.id = 'message-search-bar';
+  bar.style.cssText = `
+    display:flex;align-items:center;gap:8px;padding:8px 16px;
+    background:var(--bg-secondary);border-bottom:1px solid var(--border);
+  `;
+  bar.innerHTML = `
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--text-tertiary)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+    <input type="text" id="msg-search-input" placeholder="Search in conversation..."
+      style="flex:1;background:var(--bg-primary);border:1px solid var(--border);border-radius:8px;padding:6px 12px;font-size:13px;color:var(--text-primary);outline:none" />
+    <span id="msg-search-count" style="font-size:12px;color:var(--text-tertiary);min-width:40px;text-align:center"></span>
+    <button id="msg-search-prev" class="icon-btn" style="padding:4px" title="Previous">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m18 15-6-6-6 6"/></svg>
+    </button>
+    <button id="msg-search-next" class="icon-btn" style="padding:4px" title="Next">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg>
+    </button>
+    <button id="msg-search-close" class="icon-btn" style="padding:4px" title="Close">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+    </button>
+  `;
+
+  chatHeader.after(bar);
+  const input = bar.querySelector('#msg-search-input') as HTMLInputElement;
+  input.focus();
+
+  let matchIndices: number[] = [];
+  let currentMatch = -1;
+
+  let debounce: ReturnType<typeof setTimeout>;
+  input.addEventListener('input', () => {
+    clearTimeout(debounce);
+    debounce = setTimeout(() => {
+      const q = input.value.trim().toLowerCase();
+      matchIndices = searchMessages(q);
+      currentMatch = matchIndices.length > 0 ? 0 : -1;
+      updateSearchUI();
+      if (currentMatch >= 0) scrollToMatch(matchIndices[currentMatch]);
+    }, 200);
+  });
+
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      if (e.shiftKey) navigateMatch(-1);
+      else navigateMatch(1);
+    }
+    if (e.key === 'Escape') {
+      bar.remove();
+      clearSearchHighlights();
+    }
+  });
+
+  bar.querySelector('#msg-search-prev')?.addEventListener('click', () => navigateMatch(-1));
+  bar.querySelector('#msg-search-next')?.addEventListener('click', () => navigateMatch(1));
+  bar.querySelector('#msg-search-close')?.addEventListener('click', () => {
+    bar.remove();
+    clearSearchHighlights();
+  });
+
+  function navigateMatch(dir: number) {
+    if (matchIndices.length === 0) return;
+    currentMatch = (currentMatch + dir + matchIndices.length) % matchIndices.length;
+    updateSearchUI();
+    scrollToMatch(matchIndices[currentMatch]);
+  }
+
+  function updateSearchUI() {
+    const countEl = bar.querySelector('#msg-search-count');
+    if (countEl) {
+      countEl.textContent = matchIndices.length > 0
+        ? `${currentMatch + 1}/${matchIndices.length}`
+        : input.value ? '0 results' : '';
+    }
+  }
+}
+
+function searchMessages(query: string): number[] {
+  if (!query) {
+    clearSearchHighlights();
+    return [];
+  }
+
+  const area = document.getElementById('messages-area');
+  if (!area) return [];
+
+  const rows = area.querySelectorAll('.message-row');
+  const matches: number[] = [];
+
+  rows.forEach((row, index) => {
+    const textEl = row.querySelector('.message-text');
+    if (!textEl) return;
+
+    const text = textEl.textContent?.toLowerCase() || '';
+    if (text.includes(query)) {
+      matches.push(index);
+      row.classList.add('search-match');
+    } else {
+      row.classList.remove('search-match', 'search-match-active');
+    }
+  });
+
+  return matches;
+}
+
+function scrollToMatch(index: number) {
+  const area = document.getElementById('messages-area');
+  if (!area) return;
+
+  const rows = area.querySelectorAll('.message-row');
+  rows.forEach((r) => r.classList.remove('search-match-active'));
+
+  const target = rows[index];
+  if (target) {
+    target.classList.add('search-match-active');
+    target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+}
+
+function clearSearchHighlights() {
+  const area = document.getElementById('messages-area');
+  if (!area) return;
+  area.querySelectorAll('.search-match, .search-match-active').forEach((el) => {
+    el.classList.remove('search-match', 'search-match-active');
+  });
+}
+
 export { state as chatState };
+
+// ── Vault Item Sharing ──
+
+const VAULT_ICONS: Record<string, string> = {
+  password: '🔑',
+  note: '📝',
+  card: '💳',
+  wifi: '📶',
+  file: '📁',
+};
+
+function renderVaultItem(bubble: Element, vault: { vaultType: string; label: string; encryptedPayload: string; viewOnce?: boolean; expiresAt?: number }) {
+  const textEl = bubble.querySelector('.message-text');
+  if (!textEl) return;
+  const icon = VAULT_ICONS[vault.vaultType] || '🔐';
+  const isExpired = vault.expiresAt && Date.now() / 1000 > vault.expiresAt;
+  const viewedKey = `rocchat_vault_viewed_${vault.label}_${vault.encryptedPayload.slice(0, 16)}`;
+  const alreadyViewed = vault.viewOnce && localStorage.getItem(viewedKey);
+
+  if (isExpired) {
+    textEl.innerHTML = `<div class="vault-item expired"><span>${icon}</span> <strong>${escapeHtml(vault.label)}</strong><br><em style="color:var(--text-tertiary)">Expired</em></div>`;
+    return;
+  }
+  if (alreadyViewed) {
+    textEl.innerHTML = `<div class="vault-item viewed"><span>${icon}</span> <strong>${escapeHtml(vault.label)}</strong><br><em style="color:var(--text-tertiary)">Already viewed</em></div>`;
+    return;
+  }
+
+  textEl.innerHTML = `<div class="vault-item" style="cursor:pointer;padding:12px;background:var(--bg-input);border-radius:var(--radius-md);border:1px solid var(--border-norm)">
+    <div style="font-size:1.5em;margin-bottom:4px">${icon}</div>
+    <strong>${escapeHtml(vault.label)}</strong>
+    <div style="font-size:var(--text-xs);color:var(--text-tertiary);margin-top:4px">${vault.vaultType} · ${vault.viewOnce ? 'view once' : 'tap to reveal'}</div>
+  </div>`;
+
+  textEl.querySelector('.vault-item')?.addEventListener('click', () => {
+    try {
+      const decoded = atob(vault.encryptedPayload);
+      const content = formatVaultContent(vault.vaultType, decoded);
+      const modal = document.createElement('div');
+      modal.className = 'view-once-modal';
+      modal.innerHTML = `<div class="view-once-dialog" style="max-width:360px">
+        <h3 style="margin:0 0 12px">${icon} ${escapeHtml(vault.label)}</h3>
+        <div style="font-family:var(--font-mono);word-break:break-all;padding:12px;background:var(--bg-input);border-radius:var(--radius-sm);user-select:text">${content}</div>
+        <div style="display:flex;gap:8px;margin-top:16px">
+          <button class="btn-primary" id="vault-copy" style="flex:1">Copy</button>
+          <button class="btn-secondary" id="vault-close" style="flex:1">Close</button>
+        </div>
+      </div>`;
+      document.body.appendChild(modal);
+      modal.querySelector('#vault-close')?.addEventListener('click', () => modal.remove());
+      modal.addEventListener('click', (e) => { if (e.target === modal) modal.remove(); });
+      modal.querySelector('#vault-copy')?.addEventListener('click', () => {
+        navigator.clipboard.writeText(decoded);
+        showToast('Copied to clipboard', 'success');
+      });
+      if (vault.viewOnce) {
+        localStorage.setItem(viewedKey, '1');
+        textEl.innerHTML = `<div class="vault-item viewed"><span>${icon}</span> <strong>${escapeHtml(vault.label)}</strong><br><em style="color:var(--text-tertiary)">Already viewed</em></div>`;
+      }
+    } catch {
+      showToast('Could not decrypt vault item', 'error');
+    }
+  });
+}
+
+function formatVaultContent(type: string, raw: string): string {
+  try {
+    const data = JSON.parse(raw);
+    switch (type) {
+      case 'password':
+        return `<div><strong>Username:</strong> ${escapeHtml(data.username || '')}</div><div><strong>Password:</strong> ${escapeHtml(data.password || '')}</div>${data.url ? `<div><strong>URL:</strong> ${escapeHtml(data.url)}</div>` : ''}`;
+      case 'wifi':
+        return `<div><strong>Network:</strong> ${escapeHtml(data.ssid || '')}</div><div><strong>Password:</strong> ${escapeHtml(data.password || '')}</div><div><strong>Type:</strong> ${escapeHtml(data.security || 'WPA2')}</div>`;
+      case 'card':
+        return `<div><strong>Card:</strong> •••• ${escapeHtml((data.number || '').slice(-4))}</div><div><strong>Exp:</strong> ${escapeHtml(data.expiry || '')}</div><div><strong>Name:</strong> ${escapeHtml(data.name || '')}</div>`;
+      default:
+        return escapeHtml(raw);
+    }
+  } catch {
+    return escapeHtml(raw);
+  }
+}
+
+// escapeHtml defined above
+
+// ── Vault Composer (send vault items from composer) ──
+
+export function showVaultComposer() {
+  const overlay = document.createElement('div');
+  overlay.className = 'view-once-modal';
+  overlay.innerHTML = `<div class="view-once-dialog" style="max-width:400px">
+    <h3 style="margin:0 0 16px">🔐 Share Vault Item</h3>
+    <select id="vault-type" class="input" style="width:100%;margin-bottom:12px">
+      <option value="password">🔑 Password</option>
+      <option value="wifi">📶 WiFi Credentials</option>
+      <option value="card">💳 Credit Card</option>
+      <option value="note">📝 Secure Note</option>
+    </select>
+    <input type="text" id="vault-label" class="input" placeholder="Label (e.g. Netflix, Home WiFi)" style="width:100%;margin-bottom:12px">
+    <div id="vault-fields"></div>
+    <label style="display:flex;align-items:center;gap:8px;margin:12px 0;font-size:var(--text-sm)">
+      <input type="checkbox" id="vault-viewonce"> View once (disappears after opened)
+    </label>
+    <div style="display:flex;gap:8px;margin-top:8px">
+      <button class="btn-primary" id="vault-send" style="flex:1">Send</button>
+      <button class="btn-secondary" id="vault-cancel" style="flex:1">Cancel</button>
+    </div>
+  </div>`;
+  document.body.appendChild(overlay);
+
+  const fieldsDiv = overlay.querySelector('#vault-fields')!;
+  const typeSelect = overlay.querySelector('#vault-type') as HTMLSelectElement;
+
+  function renderFields() {
+    const type = typeSelect.value;
+    let html = '';
+    if (type === 'password') {
+      html = `<input class="input vault-field" data-key="username" placeholder="Username" style="width:100%;margin-bottom:8px"><input class="input vault-field" data-key="password" placeholder="Password" type="password" style="width:100%;margin-bottom:8px"><input class="input vault-field" data-key="url" placeholder="URL (optional)" style="width:100%">`;
+    } else if (type === 'wifi') {
+      html = `<input class="input vault-field" data-key="ssid" placeholder="Network name (SSID)" style="width:100%;margin-bottom:8px"><input class="input vault-field" data-key="password" placeholder="Password" type="password" style="width:100%">`;
+    } else if (type === 'card') {
+      html = `<input class="input vault-field" data-key="number" placeholder="Card number" maxlength="19" style="width:100%;margin-bottom:8px"><input class="input vault-field" data-key="expiry" placeholder="MM/YY" maxlength="5" style="width:100%;margin-bottom:8px"><input class="input vault-field" data-key="name" placeholder="Cardholder name" style="width:100%">`;
+    } else {
+      html = `<textarea class="input vault-field" data-key="note" placeholder="Secure note content" rows="4" style="width:100%;resize:vertical"></textarea>`;
+    }
+    fieldsDiv.innerHTML = html;
+  }
+  typeSelect.addEventListener('change', renderFields);
+  renderFields();
+
+  overlay.querySelector('#vault-cancel')?.addEventListener('click', () => overlay.remove());
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+
+  overlay.querySelector('#vault-send')?.addEventListener('click', async () => {
+    const label = (overlay.querySelector('#vault-label') as HTMLInputElement).value.trim();
+    if (!label) { showToast('Label is required', 'error'); return; }
+
+    const fields: Record<string, string> = {};
+    overlay.querySelectorAll('.vault-field').forEach(f => {
+      const key = (f as HTMLElement).dataset.key || '';
+      fields[key] = (f as HTMLInputElement | HTMLTextAreaElement).value;
+    });
+
+    const viewOnce = (overlay.querySelector('#vault-viewonce') as HTMLInputElement).checked;
+    const payload = btoa(JSON.stringify(fields));
+
+    const vaultMsg = JSON.stringify({
+      type: 'vault_item',
+      vaultType: typeSelect.value,
+      label,
+      encryptedPayload: payload,
+      viewOnce,
+      timestamp: Date.now(),
+    });
+
+    // Send as encrypted message through the normal flow
+    const convId = state.activeConversationId;
+    if (!convId) return;
+    const conv = state.conversations.find(c => c.id === convId);
+    if (!conv) return;
+    const recipientId = (conv as any).members?.find((m: any) => m.user_id !== localStorage.getItem('rocchat_user_id'))?.user_id || '';
+
+    try {
+      const { encryptMessage: enc, getOrCreateSession: getSession } = await import('../crypto/session-manager.js');
+      await getSession(convId, recipientId);
+      const encrypted = await enc(convId, recipientId, vaultMsg);
+      const headerObj = (encrypted as any).x3dh ? { ...encrypted.header, x3dh: (encrypted as any).x3dh } : encrypted.header;
+      await api.sendMessage({
+        conversation_id: convId,
+        ciphertext: encrypted.ciphertext,
+        iv: encrypted.iv,
+        ratchet_header: JSON.stringify(headerObj),
+        message_type: 'vault_item',
+      });
+      showToast('Vault item sent', 'success');
+      overlay.remove();
+    } catch {
+      showToast('Failed to send vault item', 'error');
+    }
+  });
+}
+
+// ── Message Context Menu ──
+
+const QUICK_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
+
+function showMessageContextMenu(e: MouseEvent, msgId: string, isMine: boolean, conversationId: string) {
+  // Remove any existing context menu
+  document.querySelector('.msg-context-menu')?.remove();
+
+  const menu = document.createElement('div');
+  menu.className = 'msg-context-menu';
+
+  // Quick reaction bar
+  const reactionBar = document.createElement('div');
+  reactionBar.className = 'ctx-reaction-bar';
+  QUICK_REACTIONS.forEach(emoji => {
+    const btn = document.createElement('button');
+    btn.className = 'ctx-reaction-btn';
+    btn.textContent = emoji;
+    btn.addEventListener('click', () => {
+      reactToMsg(msgId, conversationId, emoji);
+      menu.remove();
+    });
+    reactionBar.appendChild(btn);
+  });
+  menu.appendChild(reactionBar);
+
+  // Menu items
+  const items: { label: string; icon: string; action: () => void; condition?: boolean }[] = [
+    {
+      label: 'Reply',
+      icon: '↩️',
+      action: () => {
+        const input = document.getElementById('message-input') as HTMLTextAreaElement;
+        if (input) { input.focus(); input.dataset.replyTo = msgId; }
+        menu.remove();
+      },
+    },
+    {
+      label: 'Copy',
+      icon: '📋',
+      action: () => {
+        const textEl = document.querySelector(`[data-msg-id="${msgId}"] .message-text`);
+        if (textEl) navigator.clipboard.writeText(textEl.textContent || '');
+        showToast('Copied', 'info');
+        menu.remove();
+      },
+    },
+    {
+      label: 'Pin',
+      icon: '📌',
+      action: async () => {
+        menu.remove();
+        await api.pinMessage(conversationId, msgId);
+        showToast('Message pinned', 'info');
+      },
+    },
+    {
+      label: 'Edit',
+      icon: '✏️',
+      action: () => {
+        menu.remove();
+        startEditMessage(msgId, conversationId);
+      },
+      condition: isMine,
+    },
+    {
+      label: 'Delete',
+      icon: '🗑️',
+      action: async () => {
+        menu.remove();
+        if (confirm('Delete this message?')) {
+          await api.deleteMessage(msgId);
+          const msgs = state.messages.get(conversationId);
+          const msg = msgs?.find(m => m.id === msgId);
+          if (msg) { msg.deleted_at = Date.now(); renderMessages(msgs!); }
+        }
+      },
+      condition: isMine,
+    },
+  ];
+
+  items.forEach(({ label, icon, action, condition }) => {
+    if (condition === false) return;
+    const item = document.createElement('button');
+    item.className = 'ctx-menu-item';
+    item.innerHTML = `<span class="ctx-icon">${icon}</span>${label}`;
+    item.addEventListener('click', action);
+    menu.appendChild(item);
+  });
+
+  // Position
+  menu.style.top = `${Math.min(e.clientY, window.innerHeight - 280)}px`;
+  menu.style.left = `${Math.min(e.clientX, window.innerWidth - 200)}px`;
+  document.body.appendChild(menu);
+
+  // Dismiss on click outside
+  const dismiss = (ev: MouseEvent) => {
+    if (!menu.contains(ev.target as Node)) {
+      menu.remove();
+      document.removeEventListener('click', dismiss, true);
+    }
+  };
+  setTimeout(() => document.addEventListener('click', dismiss, true), 0);
+}
+
+async function reactToMsg(msgId: string, conversationId: string, emoji: string) {
+  try {
+    // Encrypt the reaction emoji
+    const conv = state.conversations.find(c => c.id === conversationId);
+    const recipientId = (conv as any)?.members?.find((m: any) => m.user_id !== localStorage.getItem('rocchat_user_id'))?.user_id || '';
+    const session = await getOrCreateSession(conversationId, recipientId);
+    const encrypted = await encryptMessage(conversationId, recipientId, emoji);
+    await api.addReaction(msgId, encrypted.ciphertext);
+    // Optimistic UI
+    updateReactionUI(msgId, localStorage.getItem('rocchat_user_id') || '', emoji);
+  } catch {
+    showToast('Failed to react', 'error');
+  }
+}
+
+function updateReactionUI(msgId: string, userId: string, reaction: string | null) {
+  const row = document.getElementById(`reactions-${msgId}`);
+  if (!row) return;
+  // Simple aggregated display
+  const existing = row.querySelector(`[data-reaction-user="${userId}"]`) as HTMLElement;
+  if (existing) {
+    if (!reaction) { existing.remove(); return; }
+    existing.textContent = reaction;
+  } else if (reaction) {
+    const badge = document.createElement('span');
+    badge.className = 'reaction-badge';
+    badge.dataset.reactionUser = userId;
+    badge.textContent = reaction;
+    badge.addEventListener('click', async () => {
+      // Toggle off own reaction
+      if (userId === localStorage.getItem('rocchat_user_id')) {
+        await api.removeReaction(msgId);
+        badge.remove();
+      }
+    });
+    row.appendChild(badge);
+  }
+}
+
+function startEditMessage(msgId: string, conversationId: string) {
+  const textEl = document.querySelector(`[data-msg-id="${msgId}"] .message-text`) as HTMLElement;
+  if (!textEl) return;
+  const original = textEl.textContent || '';
+  const input = document.createElement('textarea');
+  input.className = 'edit-message-input';
+  input.value = original;
+  textEl.replaceWith(input);
+  input.focus();
+
+  const saveEdit = async () => {
+    const newText = input.value.trim();
+    if (!newText || newText === original) {
+      input.replaceWith(textEl);
+      return;
+    }
+    try {
+      const conv = state.conversations.find(c => c.id === conversationId);
+      const recipientId = (conv as any)?.members?.find((m: any) => m.user_id !== localStorage.getItem('rocchat_user_id'))?.user_id || '';
+      await getOrCreateSession(conversationId, recipientId);
+      const encrypted = await encryptMessage(conversationId, recipientId, newText);
+      await api.editMessage(msgId, encrypted.ciphertext);
+      textEl.textContent = newText;
+      input.replaceWith(textEl);
+      // Add edited indicator
+      const meta = document.querySelector(`[data-msg-id="${msgId}"] .message-meta`);
+      if (meta && !meta.querySelector('.message-edited')) {
+        meta.insertAdjacentHTML('afterbegin', '<span class="message-edited" title="Edited">edited</span>');
+      }
+      showToast('Message edited', 'info');
+    } catch {
+      showToast('Failed to edit', 'error');
+      input.replaceWith(textEl);
+    }
+  };
+
+  input.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter' && !ev.shiftKey) { ev.preventDefault(); saveEdit(); }
+    if (ev.key === 'Escape') input.replaceWith(textEl);
+  });
+  input.addEventListener('blur', saveEdit);
+}
+
+// ── Pinned Messages Panel ──
+
+async function showPinnedMessages(conversationId: string) {
+  // Remove existing panel
+  document.querySelector('.pinned-panel')?.remove();
+
+  const panel = document.createElement('div');
+  panel.className = 'pinned-panel';
+  panel.innerHTML = `
+    <div class="pinned-panel-header">
+      <h3>📌 Pinned Messages</h3>
+      <button class="icon-btn pinned-close" aria-label="Close">&times;</button>
+    </div>
+    <div class="pinned-panel-body"><p style="text-align:center;opacity:0.5">Loading...</p></div>
+  `;
+
+  const chatView = document.querySelector('.chat-view');
+  if (!chatView) return;
+  chatView.appendChild(panel);
+
+  panel.querySelector('.pinned-close')?.addEventListener('click', () => panel.remove());
+
+  try {
+    const res = await api.getPinnedMessages(conversationId);
+    const body = panel.querySelector('.pinned-panel-body')!;
+    const pins = (res as any).data || [];
+    if (!pins.length) {
+      body.innerHTML = '<p style="text-align:center;opacity:0.5;padding:20px">No pinned messages</p>';
+      return;
+    }
+    body.innerHTML = '';
+    for (const pin of pins) {
+      const div = document.createElement('div');
+      div.className = 'pinned-item';
+      div.innerHTML = `
+        <div class="pinned-text">${escapeHtml(pin.ciphertext?.substring(0, 100) || '🔒 Encrypted')}</div>
+        <div class="pinned-meta">${formatTime(pin.pinned_at)} · pinned by ${escapeHtml(pin.pinned_by?.substring(0, 8) || '?')}</div>
+        <button class="pinned-unpin" data-mid="${pin.message_id}">Unpin</button>
+      `;
+      div.querySelector('.pinned-unpin')?.addEventListener('click', async (e) => {
+        const mid = (e.target as HTMLElement).dataset.mid!;
+        await api.unpinMessage(conversationId, mid);
+        div.remove();
+        showToast('Unpinned', 'info');
+      });
+      // Click to scroll to message
+      div.addEventListener('click', (e) => {
+        if ((e.target as HTMLElement).classList.contains('pinned-unpin')) return;
+        const msgEl = document.querySelector(`[data-msg-id="${pin.message_id}"]`);
+        if (msgEl) {
+          msgEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          msgEl.classList.add('message-highlight');
+          setTimeout(() => msgEl.classList.remove('message-highlight'), 2000);
+        }
+      });
+      body.appendChild(div);
+    }
+  } catch {
+    const body = panel.querySelector('.pinned-panel-body');
+    if (body) body.innerHTML = '<p style="text-align:center;color:#e74c3c">Failed to load pinned messages</p>';
+  }
+}

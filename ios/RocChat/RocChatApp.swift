@@ -16,7 +16,10 @@ struct RocChatApp: App {
                 } else if authVM.isAuthenticated {
                     MainTabView()
                         .environmentObject(authVM)
-                        .onAppear { requestPushNotifications() }
+                        .onAppear {
+                            requestPushNotifications()
+                            Task { await KeyRotationManager.shared.performMaintenance() }
+                        }
                 } else {
                     AuthView()
                         .environmentObject(authVM)

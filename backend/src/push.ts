@@ -76,7 +76,39 @@ export async function sendPushNotification(
   env: Env,
   recipientUserId: string,
   senderName: string,
+  senderUserId?: string,
 ): Promise<void> {
+  // Check quiet hours
+  const userConfig = await env.DB.prepare(
+    'SELECT quiet_start, quiet_end, dnd_exceptions FROM users WHERE id = ?'
+  ).bind(recipientUserId).first<{ quiet_start: string | null; quiet_end: string | null; dnd_exceptions: string | null }>();
+
+  if (userConfig?.quiet_start && userConfig?.quiet_end) {
+    // Check if sender is in DND exceptions
+    const exceptions: string[] = userConfig.dnd_exceptions ? JSON.parse(userConfig.dnd_exceptions) : [];
+    const isException = senderUserId ? exceptions.includes(senderUserId) : false;
+
+    if (!isException) {
+      // Check if current time is within quiet hours (UTC)
+      const now = new Date();
+      const currentMinutes = now.getUTCHours() * 60 + now.getUTCMinutes();
+      const [startH, startM] = userConfig.quiet_start.split(':').map(Number);
+      const [endH, endM] = userConfig.quiet_end.split(':').map(Number);
+      const startMinutes = startH * 60 + startM;
+      const endMinutes = endH * 60 + endM;
+
+      let inQuietHours: boolean;
+      if (startMinutes <= endMinutes) {
+        inQuietHours = currentMinutes >= startMinutes && currentMinutes < endMinutes;
+      } else {
+        // Wraps midnight (e.g., 22:00 to 07:00)
+        inQuietHours = currentMinutes >= startMinutes || currentMinutes < endMinutes;
+      }
+
+      if (inQuietHours) return; // Skip notification during quiet hours
+    }
+  }
+
   const devices = await env.DB.prepare(
     'SELECT push_token, push_platform FROM devices WHERE user_id = ? AND push_token IS NOT NULL',
   )
@@ -151,14 +183,16 @@ async function sendAPNs(
 }
 
 /**
- * Send push via ntfy.sh — free, open-source, no account required.
- * The topic is a unique per-user string registered by the Android app.
+ * Send push via ntfy — self-hostable, open-source, no corporate dependency.
+ * Default: self-hosted ntfy instance. Configure NTFY_URL env var.
  */
 async function sendNtfy(
   topic: string,
   senderName: string,
+  ntfyUrl?: string,
 ): Promise<void> {
-  const resp = await fetch(`https://ntfy.sh/${topic}`, {
+  const base = ntfyUrl || 'https://ntfy.roc.family';
+  const resp = await fetch(`${base}/${topic}`, {
     method: 'POST',
     headers: {
       'Title': 'RocChat',
@@ -176,12 +210,123 @@ async function sendNtfy(
 
 async function sendWebPush(
   env: Env,
-  subscription: string,
+  subscriptionJson: string,
   senderName: string,
 ): Promise<void> {
-  // Web Push uses the Push API with VAPID
-  // For now, log — full web push requires VAPID key generation
-  console.log('Web push not yet implemented for subscription:', subscription.substring(0, 20));
+  // Web Push via VAPID (RFC 8292)
+  // subscription is stored as JSON: { endpoint, keys: { p256dh, auth } }
+  let sub: { endpoint: string; keys: { p256dh: string; auth: string } };
+  try {
+    sub = JSON.parse(subscriptionJson);
+  } catch {
+    console.error('Invalid web push subscription JSON');
+    return;
+  }
+
+  const vapidPublicKey = await env.KV.get('vapid_public_key');
+  const vapidPrivateKey = await env.KV.get('vapid_private_key');
+  if (!vapidPublicKey || !vapidPrivateKey) {
+    console.warn('VAPID keys not configured — skipping web push');
+    return;
+  }
+
+  const payload = JSON.stringify({
+    title: 'RocChat',
+    body: `New message from ${senderName}`,
+    icon: '/icon-192.png',
+    badge: '/icon-192.png',
+    tag: 'rocchat-message',
+  });
+
+  // Build VAPID JWT
+  const audience = new URL(sub.endpoint).origin;
+  const vapidJwt = await buildVapidJwt(vapidPrivateKey, vapidPublicKey, audience);
+
+  // Encrypt payload using Web Push encryption (simplified: aes128gcm)
+  // For Workers, use raw fetch with encrypted payload
+  const authBytes = base64UrlDecode(sub.keys.auth);
+  const p256dhBytes = base64UrlDecode(sub.keys.p256dh);
+
+  // Generate local ECDH key pair
+  const localKeyPair = await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveBits']) as CryptoKeyPair;
+  const localPublicRaw = new Uint8Array(await crypto.subtle.exportKey('raw', localKeyPair.publicKey) as ArrayBuffer);
+
+  // Derive shared secret
+  const userPublicKey = await crypto.subtle.importKey('raw', p256dhBytes, { name: 'ECDH', namedCurve: 'P-256' }, false, []);
+  const sharedBits = new Uint8Array(await crypto.subtle.deriveBits({ name: 'ECDH', public: userPublicKey } as unknown as SubtleCryptoDeriveKeyAlgorithm, localKeyPair.privateKey, 256));
+
+  // HKDF for content encryption key
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const encoder = new TextEncoder();
+  const authInfo = encoder.encode('Content-Encoding: auth\0');
+  const ikmMaterial = await crypto.subtle.importKey('raw', sharedBits, 'HKDF', false, ['deriveBits']);
+  const prk = new Uint8Array(await crypto.subtle.deriveBits({ name: 'HKDF', hash: 'SHA-256', salt: authBytes, info: authInfo }, ikmMaterial, 256));
+
+  const cekInfo = buildInfo('aesgcm', p256dhBytes, localPublicRaw);
+  const prkKey = await crypto.subtle.importKey('raw', prk, 'HKDF', false, ['deriveBits']);
+  const cekBits = new Uint8Array(await crypto.subtle.deriveBits({ name: 'HKDF', hash: 'SHA-256', salt, info: cekInfo }, prkKey, 128));
+  const nonceInfo = buildInfo('nonce', p256dhBytes, localPublicRaw);
+  const nonceBits = new Uint8Array(await crypto.subtle.deriveBits({ name: 'HKDF', hash: 'SHA-256', salt, info: nonceInfo }, prkKey, 96));
+
+  const cek = await crypto.subtle.importKey('raw', cekBits, 'AES-GCM', false, ['encrypt']);
+  const padded = new Uint8Array([0, 0, ...encoder.encode(payload)]); // 2-byte padding
+  const encrypted = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv: nonceBits }, cek, padded));
+
+  // Build body: salt(16) + rs(4) + idlen(1) + keyid(65) + ciphertext
+  const rs = new Uint8Array(4);
+  new DataView(rs.buffer).setUint32(0, 4096);
+  const body = new Uint8Array(16 + 4 + 1 + localPublicRaw.length + encrypted.length);
+  body.set(salt, 0);
+  body.set(rs, 16);
+  body[20] = localPublicRaw.length;
+  body.set(localPublicRaw, 21);
+  body.set(encrypted, 21 + localPublicRaw.length);
+
+  const resp = await fetch(sub.endpoint, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/octet-stream',
+      'Content-Encoding': 'aes128gcm',
+      'TTL': '86400',
+      'Authorization': `vapid t=${vapidJwt}, k=${vapidPublicKey}`,
+    },
+    body,
+  });
+
+  if (!resp.ok) {
+    const err = await resp.text();
+    console.error('Web push error:', resp.status, err);
+  }
+}
+
+function base64UrlDecode(s: string): Uint8Array {
+  const b = atob(s.replace(/-/g, '+').replace(/_/g, '/') + '=='.slice(0, (4 - s.length % 4) % 4));
+  return Uint8Array.from(b, c => c.charCodeAt(0));
+}
+
+function buildInfo(type: string, clientPublic: Uint8Array, serverPublic: Uint8Array): Uint8Array {
+  const enc = new TextEncoder();
+  const label = enc.encode(`Content-Encoding: ${type}\0P-256\0`);
+  const info = new Uint8Array(label.length + 2 + clientPublic.length + 2 + serverPublic.length);
+  let offset = 0;
+  info.set(label, offset); offset += label.length;
+  new DataView(info.buffer).setUint16(offset, clientPublic.length); offset += 2;
+  info.set(clientPublic, offset); offset += clientPublic.length;
+  new DataView(info.buffer).setUint16(offset, serverPublic.length); offset += 2;
+  info.set(serverPublic, offset);
+  return info;
+}
+
+async function buildVapidJwt(privateKeyB64: string, publicKeyB64: string, audience: string): Promise<string> {
+  const header = { typ: 'JWT', alg: 'ES256' };
+  const claims = { aud: audience, exp: Math.floor(Date.now() / 1000) + 86400, sub: 'mailto:push@rocchat.app' };
+  const enc = (o: unknown) => btoa(JSON.stringify(o)).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
+  const input = `${enc(header)}.${enc(claims)}`;
+  const keyData = base64UrlDecode(privateKeyB64);
+  const key = await crypto.subtle.importKey('pkcs8', keyData, { name: 'ECDSA', namedCurve: 'P-256' }, false, ['sign']);
+  const sig = new Uint8Array(await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, key, new TextEncoder().encode(input)));
+  const sigB64 = btoa(String.fromCharCode(...sig)).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
+  return `${input}.${sigB64}`;
 }
 
 async function generateAPNsJWT(

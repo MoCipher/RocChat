@@ -42,6 +42,7 @@ object APIClient {
         authHash: String,
         salt: String,
         identityKey: String,
+        identityDHKey: String = "",
         identityPrivateEncrypted: String,
         signedPreKeyPublic: String,
         signedPreKeyPrivateEncrypted: String,
@@ -54,12 +55,13 @@ object APIClient {
             put("auth_hash", authHash)
             put("salt", salt)
             put("identity_key", identityKey)
+            if (identityDHKey.isNotEmpty()) put("identity_dh_key", identityDHKey)
             put("identity_private_encrypted", identityPrivateEncrypted)
             put("signed_pre_key_public", signedPreKeyPublic)
             put("signed_pre_key_private_encrypted", signedPreKeyPrivateEncrypted)
             put("signed_pre_key_signature", signedPreKeySignature)
             put("one_time_pre_keys", JSONArray(oneTimePreKeys))
-            put("turnstile_token", "")
+
         }
         return post("/auth/register", body)
     }
@@ -70,6 +72,7 @@ object APIClient {
         val userId: String,
         val username: String,
         val displayName: String,
+        val avatarUrl: String?,
     )
 
     data class Conversation(
@@ -78,13 +81,17 @@ object APIClient {
         val name: String?,
         val members: List<ConversationMember>,
         val lastMessageAt: String?,
+        val muted: Boolean,
+        val archived: Boolean,
     )
 
     suspend fun getConversations(): List<Conversation> {
         val json = get("/messages/conversations")
         val arr = json.optJSONArray("conversations") ?: return emptyList()
-        return (0 until arr.length()).map { i ->
+        return (0 until arr.length()).mapNotNull { i ->
             val c = arr.getJSONObject(i)
+            val archived = c.optBoolean("archived", false)
+            if (archived) return@mapNotNull null
             val membersArr = c.optJSONArray("members") ?: JSONArray()
             Conversation(
                 id = c.getString("id"),
@@ -96,9 +103,12 @@ object APIClient {
                         userId = m.getString("user_id"),
                         username = m.optString("username", ""),
                         displayName = m.optString("display_name", ""),
+                        avatarUrl = m.optString("avatar_url", null),
                     )
                 },
                 lastMessageAt = c.optString("last_message_at", null),
+                muted = c.optBoolean("muted", false),
+                archived = archived,
             )
         }
     }
@@ -112,6 +122,7 @@ object APIClient {
         val ratchetHeader: String,
         val messageType: String,
         val createdAt: String,
+        val expiresAt: Long? = null,
     )
 
     suspend fun getMessages(conversationId: String): List<ChatMessage> {
@@ -128,6 +139,7 @@ object APIClient {
                 ratchetHeader = m.optString("ratchet_header", ""),
                 messageType = m.optString("message_type", "text"),
                 createdAt = m.optString("created_at", ""),
+                expiresAt = if (m.has("expires_at") && !m.isNull("expires_at")) m.getLong("expires_at") else null,
             )
         }
     }
@@ -159,6 +171,18 @@ object APIClient {
         }
         val json = post("/messages/conversations", body)
         return json.getString("conversation_id")
+    }
+
+    suspend fun deleteConversation(conversationId: String): JSONObject = delete("/messages/conversations/$conversationId")
+
+    suspend fun muteConversation(conversationId: String): Boolean {
+        val json = post("/messages/conversations/$conversationId/mute", JSONObject())
+        return json.optBoolean("muted", false)
+    }
+
+    suspend fun archiveConversation(conversationId: String): Boolean {
+        val json = post("/messages/conversations/$conversationId/archive", JSONObject())
+        return json.optBoolean("archived", false)
     }
 
     // ── Contacts ──
@@ -199,9 +223,54 @@ object APIClient {
 
     // ── HTTP Helpers ──
 
+    suspend fun uploadAvatar(data: ByteArray): JSONObject = withContext(Dispatchers.IO) {
+        val conn = (URL("$BASE_URL/me/avatar").openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            sessionToken?.let { setRequestProperty("Authorization", "Bearer $it") }
+            setRequestProperty("Content-Type", "image/jpeg")
+            doOutput = true
+            connectTimeout = 30_000
+            readTimeout = 30_000
+        }
+        try {
+            conn.outputStream.use { it.write(data) }
+            val code = conn.responseCode
+            val body = (if (code in 200..299) conn.inputStream else conn.errorStream)
+                ?.bufferedReader()?.use { it.readText() } ?: "{}"
+            if (code !in 200..299) throw IOException("HTTP $code: $body")
+            JSONObject(body)
+        } finally {
+            conn.disconnect()
+        }
+    }
+
+    suspend fun uploadMedia(conversationId: String, data: ByteArray, filename: String, mimeType: String): String = withContext(Dispatchers.IO) {
+        val conn = (URL("$BASE_URL/media/upload").openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            sessionToken?.let { setRequestProperty("Authorization", "Bearer $it") }
+            setRequestProperty("Content-Type", "application/octet-stream")
+            setRequestProperty("x-conversation-id", conversationId)
+            setRequestProperty("x-encrypted-filename", filename)
+            setRequestProperty("x-encrypted-mimetype", mimeType)
+            doOutput = true
+            connectTimeout = 30_000
+            readTimeout = 30_000
+        }
+        try {
+            conn.outputStream.use { it.write(data) }
+            val code = conn.responseCode
+            val body = (if (code in 200..299) conn.inputStream else conn.errorStream)
+                ?.bufferedReader()?.use { it.readText() } ?: "{}"
+            if (code !in 200..299) throw IOException("HTTP $code: $body")
+            JSONObject(body).getString("mediaId")
+        } finally {
+            conn.disconnect()
+        }
+    }
+
     suspend fun postPublic(path: String, body: JSONObject): JSONObject = post(path, body)
 
-    private suspend fun get(path: String): JSONObject = withContext(Dispatchers.IO) {
+    suspend fun get(path: String): JSONObject = withContext(Dispatchers.IO) {
         val conn = (URL("$BASE_URL$path").openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
             sessionToken?.let { setRequestProperty("Authorization", "Bearer $it") }
@@ -219,7 +288,59 @@ object APIClient {
         }
     }
 
-    private suspend fun post(path: String, body: JSONObject, method: String = "POST"): JSONObject =
+    suspend fun getArray(path: String): JSONArray = withContext(Dispatchers.IO) {
+        val conn = (URL("$BASE_URL$path").openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"
+            sessionToken?.let { setRequestProperty("Authorization", "Bearer $it") }
+            connectTimeout = 15_000
+            readTimeout = 15_000
+        }
+        try {
+            val code = conn.responseCode
+            val body = (if (code in 200..299) conn.inputStream else conn.errorStream)
+                ?.bufferedReader()?.use { it.readText() } ?: "[]"
+            if (code !in 200..299) throw IOException("HTTP $code: $body")
+            JSONArray(body)
+        } finally {
+            conn.disconnect()
+        }
+    }
+
+    suspend fun getRawBytes(path: String): ByteArray = withContext(Dispatchers.IO) {
+        val conn = (URL("$BASE_URL$path").openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"
+            sessionToken?.let { setRequestProperty("Authorization", "Bearer $it") }
+            connectTimeout = 15_000
+            readTimeout = 30_000
+        }
+        try {
+            val code = conn.responseCode
+            if (code !in 200..299) throw IOException("HTTP $code")
+            conn.inputStream.readBytes()
+        } finally {
+            conn.disconnect()
+        }
+    }
+
+    suspend fun delete(path: String): JSONObject = withContext(Dispatchers.IO) {
+        val conn = (URL("$BASE_URL$path").openConnection() as HttpURLConnection).apply {
+            requestMethod = "DELETE"
+            sessionToken?.let { setRequestProperty("Authorization", "Bearer $it") }
+            connectTimeout = 15_000
+            readTimeout = 15_000
+        }
+        try {
+            val code = conn.responseCode
+            val body = (if (code in 200..299) conn.inputStream else conn.errorStream)
+                ?.bufferedReader()?.use { it.readText() } ?: "{}"
+            if (code !in 200..299) throw IOException("HTTP $code: $body")
+            JSONObject(body)
+        } finally {
+            conn.disconnect()
+        }
+    }
+
+    suspend fun post(path: String, body: JSONObject, method: String = "POST"): JSONObject =
         withContext(Dispatchers.IO) {
             val conn = (URL("$BASE_URL$path").openConnection() as HttpURLConnection).apply {
                 requestMethod = if (method == "PATCH") "POST" else method

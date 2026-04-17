@@ -3,6 +3,7 @@
  */
 
 import * as api from '../api.js';
+import { generateQRCodeSVG } from '../auth/qr-login.js';
 
 function showToast(message: string, type: 'success' | 'error' = 'success') {
   let container = document.getElementById('toast-container');
@@ -33,31 +34,64 @@ export function renderSettings(container: HTMLElement) {
   container.innerHTML = `
     <div class="panel-list" style="width:100%;max-width:640px;border-right:none">
       <div class="panel-header">
-        <h2>Settings</h2>
+        <h2>Profile</h2>
       </div>
       <div class="settings-view" id="settings-view">
 
-        <div class="settings-section">
-          <h3>Account</h3>
-          <div class="setting-row">
-            <div>
-              <div class="setting-label" id="setting-username">@loading...</div>
-              <div class="setting-desc">Your username</div>
+        <div class="settings-section profile-hero" style="padding:var(--sp-6) var(--sp-4);border-radius:20px;margin:var(--sp-3);position:relative;overflow:hidden;background:linear-gradient(135deg, rgba(212,175,55,0.22) 0%, rgba(20,147,160,0.18) 55%, rgba(0,0,0,0.05) 100%)">
+          <div aria-hidden="true" style="position:absolute;inset:0;pointer-events:none;opacity:0.08;display:flex;justify-content:space-between;align-items:center;padding:0 12px">
+            <span style="font-size:96px;line-height:1;transform:rotate(-16deg)">🕊️</span>
+            <span style="font-size:72px;line-height:1;transform:scaleX(-1) rotate(-16deg)">🕊️</span>
+          </div>
+          <div style="position:relative;display:flex;flex-direction:column;align-items:center;gap:var(--sp-3)">
+            <div id="profile-avatar-wrapper" style="position:relative;cursor:pointer;padding:4px;border-radius:50%;background:conic-gradient(from 0deg, var(--roc-gold), #1493a0, var(--roc-gold))" title="Change profile photo">
+              <div class="avatar" id="profile-avatar" style="width:104px;height:104px;font-size:40px;line-height:104px;border:3px solid var(--bg-elevated)"></div>
+              <div style="position:absolute;bottom:4px;right:4px;width:34px;height:34px;border-radius:50%;background:var(--roc-gold);display:flex;align-items:center;justify-content:center;box-shadow:var(--shadow-md);border:2px solid var(--bg-elevated)">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+              </div>
+              <input type="file" id="avatar-input" accept="image/jpeg,image/png,image/webp" style="display:none" />
+            </div>
+            <div style="text-align:center">
+              <div style="font-weight:700;font-size:var(--text-xl)" id="setting-display-name">Loading...</div>
+              <div style="color:var(--text-tertiary);font-size:var(--text-sm)" id="setting-username">@loading...</div>
+            </div>
+            <div style="display:inline-flex;align-items:center;gap:6px;padding:5px 12px;border-radius:999px;background:rgba(212,175,55,0.12);border:1px solid rgba(212,175,55,0.4);color:var(--roc-gold);font-size:var(--text-xs);font-weight:600">
+              🕊️ Voice of Freedom 🇵🇸
+            </div>
+            <div style="display:flex;gap:var(--sp-2);margin-top:var(--sp-1)">
+              <button class="btn-secondary" style="font-size:var(--text-xs);padding:var(--sp-1) var(--sp-3)" id="edit-name-btn">
+                <i data-lucide="pencil" style="width:12px;height:12px"></i> Edit Name
+              </button>
+              <button class="btn-secondary" style="font-size:var(--text-xs);padding:var(--sp-1) var(--sp-3);color:var(--danger);border-color:var(--danger);display:none" id="remove-avatar-btn">
+                <i data-lucide="trash-2" style="width:12px;height:12px"></i> Remove Photo
+              </button>
             </div>
           </div>
-          <div class="setting-row">
-            <div>
-              <div class="setting-label" id="setting-display-name">Loading...</div>
-              <div class="setting-desc">Display name</div>
-            </div>
-            <button class="icon-btn" title="Edit" id="edit-name-btn">
-              <i data-lucide="pencil" style="width:16px;height:16px"></i>
+        </div>
+
+        <div class="settings-section">
+          <h3>My QR Code</h3>
+          <div style="display:flex;flex-direction:column;align-items:center;gap:var(--sp-3)">
+            <div id="my-qr-code" style="background:white;padding:12px;border-radius:16px;display:inline-block"></div>
+            <div class="setting-desc" style="text-align:center">Others can scan this to add you on RocChat</div>
+            <button class="btn-secondary" id="btn-scan-qr" style="font-size:var(--text-sm);padding:var(--sp-2) var(--sp-4)">
+              📷 Scan QR Code
             </button>
           </div>
         </div>
 
         <div class="settings-section">
           <h3>Privacy</h3>
+          <div class="setting-row" style="background:linear-gradient(135deg,rgba(212,175,55,0.08),rgba(64,224,208,0.06));border-radius:var(--radius-lg);padding:var(--sp-3);margin-bottom:var(--sp-2)">
+            <div>
+              <div class="setting-label" style="font-size:var(--text-base);font-weight:700">👻 Ghost Mode</div>
+              <div class="setting-desc">Hide all activity: no read receipts, no typing, no online status, messages auto-expire 24h</div>
+            </div>
+            <label class="toggle">
+              <input type="checkbox" id="toggle-ghost-mode" />
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
           <div class="setting-row">
             <div>
               <div class="setting-label">Discoverable by username</div>
@@ -140,7 +174,18 @@ export function renderSettings(container: HTMLElement) {
               <option value="auto">Auto</option>
               <option value="light">Light</option>
               <option value="dark">Dark</option>
+              <option value="scheduled">Scheduled</option>
             </select>
+          </div>
+          <div id="scheduled-theme-config" style="display:none;margin-top:var(--sp-3);padding:var(--sp-3);background:var(--bg-primary);border-radius:var(--radius)">
+            <div style="font-size:var(--text-sm);color:var(--text-secondary);margin-bottom:var(--sp-2)">Dark mode schedule</div>
+            <div style="display:flex;gap:var(--sp-3);align-items:center">
+              <label style="font-size:var(--text-sm);color:var(--text-tertiary)">Dark from</label>
+              <input type="time" id="theme-dark-start" value="20:00" style="background:var(--bg-primary);border:1px solid var(--border);border-radius:var(--radius);padding:4px 8px;color:var(--text-primary);font-size:var(--text-sm)" />
+              <label style="font-size:var(--text-sm);color:var(--text-tertiary)">to</label>
+              <input type="time" id="theme-dark-end" value="07:00" style="background:var(--bg-primary);border:1px solid var(--border);border-radius:var(--radius);padding:4px 8px;color:var(--text-primary);font-size:var(--text-sm)" />
+              <button class="btn btn-outline" id="save-theme-schedule" style="font-size:var(--text-xs);padding:4px 12px">Save</button>
+            </div>
           </div>
         </div>
 
@@ -166,10 +211,227 @@ export function renderSettings(container: HTMLElement) {
         </div>
 
         <div class="settings-section">
+          <h3>Quiet Hours</h3>
+          <div class="setting-row">
+            <div>
+              <div class="setting-label">Scheduled Quiet Hours</div>
+              <div class="setting-desc">Mute all notifications during these hours</div>
+            </div>
+          </div>
+          <div style="display:flex;gap:var(--sp-3);align-items:center;margin-top:var(--sp-2)">
+            <label style="font-size:var(--text-sm);color:var(--text-secondary)">From</label>
+            <input type="time" id="quiet-start" style="background:var(--bg-primary);border:1px solid var(--border);border-radius:var(--radius);padding:4px 8px;color:var(--text-primary);font-size:var(--text-sm)" />
+            <label style="font-size:var(--text-sm);color:var(--text-secondary)">To</label>
+            <input type="time" id="quiet-end" style="background:var(--bg-primary);border:1px solid var(--border);border-radius:var(--radius);padding:4px 8px;color:var(--text-primary);font-size:var(--text-sm)" />
+            <button class="btn btn-outline" id="save-quiet-hours" style="font-size:var(--text-xs);padding:4px 12px">Save</button>
+            <button class="btn-secondary" id="clear-quiet-hours" style="font-size:var(--text-xs);padding:4px 12px">Clear</button>
+          </div>
+          <div class="setting-row" style="margin-top:var(--sp-3)">
+            <div>
+              <div class="setting-label">DND Exceptions</div>
+              <div class="setting-desc">These contacts will always notify, even during quiet hours</div>
+            </div>
+          </div>
+          <div id="dnd-exceptions-list" style="margin-top:var(--sp-2)">
+            <div style="font-size:var(--text-xs);color:var(--text-tertiary)">Loading...</div>
+          </div>
+          <div style="display:flex;gap:var(--sp-2);margin-top:var(--sp-2)">
+            <input type="text" id="dnd-exception-input" placeholder="@username" style="flex:1;background:var(--bg-primary);border:1px solid var(--border);border-radius:var(--radius);padding:6px 10px;color:var(--text-primary);font-size:var(--text-sm)" />
+            <button class="btn btn-outline" id="add-dnd-exception" style="font-size:var(--text-xs);padding:4px 12px">Add</button>
+          </div>
+        </div>
+
+        <div class="settings-section">
           <h3>Devices</h3>
           <div id="devices-list">
             <div class="skeleton-line" style="height:40px;margin-bottom:var(--sp-2)"></div>
             <div class="skeleton-line" style="height:40px;margin-bottom:var(--sp-2)"></div>
+          </div>
+          <div class="setting-row" style="margin-top:var(--sp-3)">
+            <div>
+              <div class="setting-label">Device Verification</div>
+              <div class="setting-desc">Generate a 6-digit code to verify a new device</div>
+            </div>
+            <button class="btn btn-outline" id="btn-device-verify">Generate Code</button>
+          </div>
+          <div id="device-verify-display" style="display:none;margin-top:var(--sp-3);padding:var(--sp-4);background:var(--bg-primary);border-radius:var(--radius);text-align:center">
+            <div style="font-size:var(--text-xs);color:var(--text-tertiary);margin-bottom:var(--sp-2)">Enter this code on your new device</div>
+            <div id="device-verify-code" style="font-family:var(--font-mono);font-size:32px;letter-spacing:8px;font-weight:700;color:var(--turquoise)"></div>
+            <div id="device-verify-timer" style="font-size:var(--text-xs);color:var(--text-tertiary);margin-top:var(--sp-2)"></div>
+          </div>
+          <div class="setting-row" style="margin-top:var(--sp-2)">
+            <div>
+              <div class="setting-label">Enter Verification Code</div>
+              <div class="setting-desc">Verify this device with a code from another device</div>
+            </div>
+            <div style="display:flex;gap:var(--sp-2);align-items:center">
+              <input type="text" id="device-verify-input" maxlength="6" pattern="[0-9]{6}"
+                placeholder="000000" style="width:100px;font-family:var(--font-mono);font-size:var(--text-base);text-align:center;letter-spacing:4px;background:var(--bg-primary);border:1px solid var(--border);border-radius:var(--radius);padding:6px;color:var(--text-primary)" />
+              <button class="btn btn-outline" id="btn-device-confirm">Verify</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="settings-section">
+          <h3>⭐ Premium Features <span style="font-size:var(--text-xs);color:var(--roc-gold);font-weight:400">FREE for all</span></h3>
+          <div class="setting-row">
+            <div>
+              <div class="setting-label">Chat Themes</div>
+              <div class="setting-desc">Pick a color theme for your chat backgrounds</div>
+            </div>
+            <select class="form-input" style="width:auto;padding:var(--sp-2) var(--sp-3)" id="chat-theme-select">
+              <option value="default">Default</option>
+              <option value="midnight">Midnight Blue</option>
+              <option value="forest">Forest Green</option>
+              <option value="sunset">Sunset Amber</option>
+              <option value="ocean">Ocean Teal</option>
+              <option value="rose">Rose Gold</option>
+              <option value="lavender">Lavender</option>
+              <option value="charcoal">Charcoal</option>
+            </select>
+          </div>
+          <div class="setting-row">
+            <div>
+              <div class="setting-label">Scheduled Messages</div>
+              <div class="setting-desc">View and manage messages scheduled to send later</div>
+            </div>
+            <button class="btn-secondary" style="font-size:var(--text-xs);padding:var(--sp-1) var(--sp-3)" id="view-scheduled-btn">
+              View
+            </button>
+          </div>
+          <div class="setting-row">
+            <div>
+              <div class="setting-label">Chat Folders</div>
+              <div class="setting-desc">Organize your conversations into custom folders</div>
+            </div>
+            <button class="btn-secondary" style="font-size:var(--text-xs);padding:var(--sp-1) var(--sp-3)" id="manage-folders-btn">
+              Manage
+            </button>
+          </div>
+          <div class="setting-row">
+            <div>
+              <div class="setting-label">Saved Contacts</div>
+              <div class="setting-desc">Manage your saved contacts and nicknames</div>
+            </div>
+            <button class="btn-secondary" style="font-size:var(--text-xs);padding:var(--sp-1) var(--sp-3)" id="manage-contacts-btn">
+              Manage
+            </button>
+          </div>
+          <div class="setting-row">
+            <div>
+              <div class="setting-label">Invite Link</div>
+              <div class="setting-desc">Share a link so others can add you on RocChat</div>
+            </div>
+            <button class="btn btn-outline" id="btn-invite-link">Generate Link</button>
+          </div>
+          <div id="invite-link-display" style="display:none;margin-top:var(--sp-2);padding:var(--sp-3);background:var(--bg-primary);border-radius:var(--radius);word-break:break-all">
+            <div style="display:flex;align-items:center;gap:var(--sp-2)">
+              <code id="invite-link-text" style="flex:1;font-size:var(--text-xs);color:var(--turquoise)"></code>
+              <button class="btn-secondary" id="btn-copy-invite" style="font-size:var(--text-xs);padding:var(--sp-1) var(--sp-2);white-space:nowrap">Copy</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="settings-section">
+          <h3>🏢 RocChat Business</h3>
+          <div id="business-section">
+            <div class="setting-row">
+              <div>
+                <div class="setting-label">Organization Management</div>
+                <div class="setting-desc">Admin dashboard, team management, compliance tools, custom branding, SSO, API access and more.</div>
+              </div>
+            </div>
+            <div id="business-content">
+              <div class="setting-row" style="flex-direction:column;gap:var(--sp-3)">
+                <div style="background:var(--bg-tertiary);border-radius:var(--radius-lg);padding:var(--sp-4);width:100%">
+                  <div style="font-weight:600;margin-bottom:var(--sp-2)">Business Plan — $3.99/user/month</div>
+                  <ul style="font-size:var(--text-sm);color:var(--text-secondary);list-style:none;padding:0;margin:0;display:grid;gap:var(--sp-1)">
+                    <li>🏢 Admin dashboard & user management</li>
+                    <li>🏢 Groups up to 5,000 members</li>
+                    <li>🏢 Organization directory</li>
+                    <li>🏢 Role-based access control</li>
+                    <li>🏢 Remote device wipe</li>
+                    <li>🏢 Compliance export & audit logs</li>
+                    <li>🏢 Message retention policies</li>
+                    <li>🏢 Custom branding</li>
+                    <li>🏢 SSO (SAML/OIDC)</li>
+                    <li>🏢 API & webhook access</li>
+                    <li>🏢 Priority support (24h SLA)</li>
+                  </ul>
+                  <div style="margin-top:var(--sp-3);font-size:var(--text-xs);color:var(--text-tertiary)">
+                    Volume: 5-25 users $3.99 · 26-100 $2.99 · 101-500 $1.99 · 500+ custom
+                  </div>
+                </div>
+                <button class="btn-primary" id="upgrade-business-btn" style="width:100%">
+                  Upgrade to Business
+                </button>
+              </div>
+            </div>
+            <div id="business-dashboard" style="display:none">
+              <div id="org-list"></div>
+              <button class="btn-secondary" id="create-org-btn" style="margin-top:var(--sp-2);font-size:var(--text-sm)">
+                + Create Organization
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div class="settings-section">
+          <h3>Import Chat History</h3>
+          <div class="setting-row">
+            <div>
+              <div class="setting-label">📥 Import from WhatsApp, Telegram, or Signal</div>
+              <div class="setting-desc">Upload an exported .txt or .json chat file. Messages are re-encrypted with your RocChat keys before storage.</div>
+            </div>
+          </div>
+          <div style="display:flex;gap:var(--sp-2);margin-top:var(--sp-2);flex-wrap:wrap">
+            <button class="btn-secondary import-btn" data-source="whatsapp" style="font-size:var(--text-sm)">📱 WhatsApp (.txt)</button>
+            <button class="btn-secondary import-btn" data-source="telegram" style="font-size:var(--text-sm)">✈️ Telegram (.json)</button>
+            <button class="btn-secondary import-btn" data-source="signal" style="font-size:var(--text-sm)">🔒 Signal (.json)</button>
+          </div>
+          <input type="file" id="import-file-input" accept=".txt,.json,.zip" style="display:none">
+          <div id="import-status" style="margin-top:var(--sp-2);font-size:var(--text-xs);color:var(--text-tertiary)"></div>
+        </div>
+
+        <div class="settings-section">
+          <h3>Support RocChat</h3>
+          <div class="setting-row">
+            <div>
+              <div class="setting-label">💛 All premium features are free forever</div>
+              <div class="setting-desc">RocChat is built on the belief that privacy shouldn't cost extra. Business features support team/enterprise needs. If you'd like to support development, donations are welcome.</div>
+            </div>
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:var(--sp-2);margin-top:var(--sp-3)" id="donation-tiers">
+            <button class="btn-secondary donation-btn" data-amount="3" style="font-size:var(--text-sm);padding:var(--sp-2)">
+              ☕ $3<br><span style="font-size:var(--text-xs);color:var(--text-tertiary)">Buy Roc a Coffee</span>
+            </button>
+            <button class="btn-secondary donation-btn" data-amount="5" style="font-size:var(--text-sm);padding:var(--sp-2)">
+              🪶 $5<br><span style="font-size:var(--text-xs);color:var(--text-tertiary)">Feather Supporter</span>
+            </button>
+            <button class="btn-secondary donation-btn" data-amount="10" style="font-size:var(--text-sm);padding:var(--sp-2)">
+              🦅 $10<br><span style="font-size:var(--text-xs);color:var(--text-tertiary)">Wing Supporter</span>
+            </button>
+            <button class="btn-secondary donation-btn" data-amount="25" style="font-size:var(--text-sm);padding:var(--sp-2)">
+              🏔️ $25<br><span style="font-size:var(--text-xs);color:var(--text-tertiary)">Mountain Guardian</span>
+            </button>
+            <button class="btn-secondary donation-btn" data-amount="50" style="font-size:var(--text-sm);padding:var(--sp-2)">
+              👑 $50<br><span style="font-size:var(--text-xs);color:var(--text-tertiary)">Roc Patron</span>
+            </button>
+            <button class="btn-secondary donation-btn" data-amount="custom" style="font-size:var(--text-sm);padding:var(--sp-2)">
+              💎 Custom<br><span style="font-size:var(--text-xs);color:var(--text-tertiary)">Your amount</span>
+            </button>
+          </div>
+          <div style="display:flex;gap:var(--sp-2);flex-wrap:wrap;margin-top:var(--sp-3)">
+            <button class="btn-secondary" id="donate-crypto-btn" style="font-size:var(--text-sm)">🪙 Donate With Crypto</button>
+          </div>
+          <div id="donor-badge-status" style="margin-top:var(--sp-3);padding:var(--sp-3);border-radius:var(--radius-lg);background:var(--bg-tertiary)">
+            <div style="font-size:var(--text-sm);font-weight:600;margin-bottom:var(--sp-1)">Your Donor Badge</div>
+            <div id="donor-badge-display" style="font-size:var(--text-xs);color:var(--text-tertiary)">Loading...</div>
+          </div>
+          <div style="margin-top:var(--sp-3);display:flex;gap:var(--sp-3);flex-wrap:wrap">
+            <a href="#/canary" style="font-size:var(--text-xs);color:var(--turquoise);text-decoration:none">🐦 View Warrant Canary</a>
+            <a href="#/transparency" style="font-size:var(--text-xs);color:var(--turquoise);text-decoration:none">📜 Transparency Report</a>
+            <a href="#/supporters" style="font-size:var(--text-xs);color:var(--turquoise);text-decoration:none">🪶 Supporters Wall</a>
           </div>
         </div>
 
@@ -178,8 +440,27 @@ export function renderSettings(container: HTMLElement) {
           <div class="setting-row">
             <div>
               <div class="setting-label">RocChat v0.1.0</div>
-              <div class="setting-desc">Part of the Roc Family (RocMail · RocPass · RocChat)</div>
+              <div class="setting-desc">Part of the Roc Family (RocMail · RocPass · RocChat) — Free &amp; open for everyone.</div>
             </div>
+          </div>
+        </div>
+
+        <div class="settings-section" style="border:1px solid var(--roc-gold,#D4AF37);border-radius:var(--radius-lg);padding:var(--sp-4);background:rgba(212,175,55,0.05)">
+          <h3 style="color:var(--roc-gold,#D4AF37)">🪶 The Roc Family Manifesto</h3>
+          <div style="font-size:var(--text-sm);color:var(--text-secondary);line-height:1.7">
+            <p><strong>We are the voice of freedom. We are the voice of the people.</strong></p>
+            <p>The Roc Family ecosystem exists for one purpose: to give people secure, private communication without dependence on any corporation, government, or surveillance apparatus.</p>
+            <p style="margin-top:var(--sp-2)"><strong>Our principles:</strong></p>
+            <ul style="margin:var(--sp-2) 0;padding-left:var(--sp-4)">
+              <li>🔒 <strong>Zero third-party dependencies</strong> — No Google, no Apple services, no Stripe, no Cloudflare CAPTCHA, no corporate APIs. Every component is self-hosted or open-source.</li>
+              <li>🕊️ <strong>No complicity in oppression</strong> — We do not support, partner with, or depend on entities that participate in the oppression of people anywhere in the world.</li>
+              <li>✊ <strong>Privacy is a human right</strong> — End-to-end encryption by default. We cannot read your messages. We will never sell your data. There is no data to sell.</li>
+              <li>🌍 <strong>Free for everyone, forever</strong> — No paywalls, no premium tiers that gate security features. All features are free. Donations via cryptocurrency only — no corporate payment processors.</li>
+              <li>🛡️ <strong>Proof-of-work, not surveillance</strong> — We use mathematical proof-of-work instead of corporate CAPTCHAs that track you.</li>
+              <li>📡 <strong>Self-sovereign infrastructure</strong> — Self-hosted STUN/TURN servers, self-hosted push notifications, self-hosted fonts and icons. No phone call touches Google's servers.</li>
+              <li>🏴 <strong>Transparency</strong> — Open-source code, public warrant canary, regular transparency reports. If we are ever compromised, you will know.</li>
+            </ul>
+            <p style="margin-top:var(--sp-2);font-style:italic;color:var(--roc-gold,#D4AF37)">Built with love, for the people. 🇵🇸</p>
           </div>
         </div>
 
@@ -196,14 +477,226 @@ export function renderSettings(container: HTMLElement) {
   loadProfile();
   loadDevices();
 
+  // Device verification — generate code
+  document.getElementById('btn-device-verify')?.addEventListener('click', async () => {
+    const btn = document.getElementById('btn-device-verify') as HTMLButtonElement;
+    btn.disabled = true;
+    btn.textContent = 'Generating...';
+    try {
+      const res = await api.initiateDeviceVerification();
+      if (res.ok) {
+        const display = document.getElementById('device-verify-display')!;
+        const codeEl = document.getElementById('device-verify-code')!;
+        const timerEl = document.getElementById('device-verify-timer')!;
+        display.style.display = 'block';
+        codeEl.textContent = res.data.code.replace(/(\d{3})(\d{3})/, '$1 $2');
+        let remaining = res.data.expires_in;
+        const updateTimer = () => {
+          const m = Math.floor(remaining / 60);
+          const s = remaining % 60;
+          timerEl.textContent = `Expires in ${m}:${s.toString().padStart(2, '0')}`;
+          if (remaining <= 0) {
+            display.style.display = 'none';
+            btn.disabled = false;
+            btn.textContent = 'Generate Code';
+          }
+          remaining--;
+        };
+        updateTimer();
+        const interval = setInterval(() => {
+          updateTimer();
+          if (remaining < 0) clearInterval(interval);
+        }, 1000);
+      }
+    } catch { /* */ }
+    btn.disabled = false;
+    btn.textContent = 'Generate Code';
+  });
+
+  // Device verification — confirm code
+  document.getElementById('btn-device-confirm')?.addEventListener('click', async () => {
+    const input = document.getElementById('device-verify-input') as HTMLInputElement;
+    const code = input.value.replace(/\s/g, '');
+    if (code.length !== 6) { showToast('Enter a 6-digit code', 'error'); return; }
+    try {
+      const res = await api.confirmDeviceVerification(code);
+      if (res.ok && res.data.verified) {
+        showToast('Device verified successfully!');
+        input.value = '';
+      } else {
+        showToast('Invalid or expired code', 'error');
+      }
+    } catch {
+      showToast('Verification failed', 'error');
+    }
+  });
+
   // Theme selector
   const themeSelect = document.getElementById('theme-select') as HTMLSelectElement;
   const savedTheme = localStorage.getItem('rocchat_theme') || 'auto';
   themeSelect.value = savedTheme;
+  const schedConfig = document.getElementById('scheduled-theme-config');
+  if (savedTheme === 'scheduled' && schedConfig) schedConfig.style.display = 'block';
+  // Load saved schedule times
+  const savedDarkStart = localStorage.getItem('rocchat_theme_dark_start') || '20:00';
+  const savedDarkEnd = localStorage.getItem('rocchat_theme_dark_end') || '07:00';
+  const darkStartInput = document.getElementById('theme-dark-start') as HTMLInputElement;
+  const darkEndInput = document.getElementById('theme-dark-end') as HTMLInputElement;
+  if (darkStartInput) darkStartInput.value = savedDarkStart;
+  if (darkEndInput) darkEndInput.value = savedDarkEnd;
+
   themeSelect.addEventListener('change', () => {
     const theme = themeSelect.value;
     localStorage.setItem('rocchat_theme', theme);
+    if (schedConfig) schedConfig.style.display = theme === 'scheduled' ? 'block' : 'none';
     applyTheme(theme);
+  });
+
+  document.getElementById('save-theme-schedule')?.addEventListener('click', () => {
+    const start = (document.getElementById('theme-dark-start') as HTMLInputElement)?.value || '20:00';
+    const end = (document.getElementById('theme-dark-end') as HTMLInputElement)?.value || '07:00';
+    localStorage.setItem('rocchat_theme_dark_start', start);
+    localStorage.setItem('rocchat_theme_dark_end', end);
+    applyTheme('scheduled');
+    showToast('Theme schedule saved');
+  });
+
+  // QR Code generation
+  const username = localStorage.getItem('rocchat_username') || '';
+  const identityKey = localStorage.getItem('rocchat_identity_public') || '';
+  if (username && identityKey) {
+    const qrData = JSON.stringify({ u: username, k: identityKey, v: 1 });
+    const qrEl = document.getElementById('my-qr-code');
+    if (qrEl) qrEl.innerHTML = generateQRCodeSVG(qrData, 200);
+  }
+
+  // QR Scanner
+  document.getElementById('btn-scan-qr')?.addEventListener('click', async () => {
+    const overlay = document.createElement('div');
+    overlay.className = 'view-once-modal';
+    overlay.innerHTML = `
+      <div class="view-once-dialog" style="max-width:400px;text-align:center">
+        <h3 style="margin:0 0 12px">Scan QR Code</h3>
+        <video id="qr-video" style="width:100%;max-height:300px;border-radius:12px;background:#000" autoplay playsinline></video>
+        <p id="qr-status" style="margin:12px 0 0;font-size:var(--text-sm);color:var(--text-tertiary)">Point camera at a RocChat QR code</p>
+        <button class="btn-secondary" id="qr-close" style="margin-top:12px">Close</button>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+
+    const video = overlay.querySelector('#qr-video') as HTMLVideoElement;
+    const status = overlay.querySelector('#qr-status') as HTMLElement;
+    let stream: MediaStream | null = null;
+    let scanning = true;
+
+    const cleanup = () => {
+      scanning = false;
+      stream?.getTracks().forEach(t => t.stop());
+      overlay.remove();
+    };
+
+    overlay.querySelector('#qr-close')?.addEventListener('click', cleanup);
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) cleanup(); });
+
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+      video.srcObject = stream;
+
+      // Use BarcodeDetector if available, otherwise canvas-based scanning
+      const hasBarcodeDetector = 'BarcodeDetector' in window;
+      if (hasBarcodeDetector) {
+        const detector = new (window as any).BarcodeDetector({ formats: ['qr_code'] });
+        const scan = async () => {
+          if (!scanning) return;
+          try {
+            const barcodes = await detector.detect(video);
+            if (barcodes.length > 0) {
+              await handleQrResult(barcodes[0].rawValue, status, cleanup);
+              return;
+            }
+          } catch {}
+          requestAnimationFrame(scan);
+        };
+        video.onloadeddata = () => scan();
+      } else {
+        // Fallback: manual canvas scanning loop
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d')!;
+        const scanLoop = () => {
+          if (!scanning || video.videoWidth === 0) { requestAnimationFrame(scanLoop); return; }
+          canvas.width = video.videoWidth;
+          canvas.height = video.videoHeight;
+          ctx.drawImage(video, 0, 0);
+          // No jsQR library — prompt user to paste the QR data
+          status.innerHTML = 'Camera scanning not supported in this browser.<br>Paste QR text: <input id="qr-paste" style="margin-top:8px;padding:4px 8px;border:1px solid var(--border-norm);border-radius:6px" placeholder="Paste QR data..." />';
+          const pasteInput = status.querySelector('#qr-paste');
+          pasteInput?.addEventListener('change', async (e) => {
+            await handleQrResult((e.target as HTMLInputElement).value, status, cleanup);
+          });
+        };
+        video.onloadeddata = () => scanLoop();
+      }
+    } catch {
+      status.textContent = 'Camera access denied. Check permissions.';
+    }
+  });
+
+  async function handleQrResult(raw: string, statusEl: HTMLElement, cleanup: () => void) {
+    try {
+      const data = JSON.parse(raw);
+      if (data.u && data.k) {
+        statusEl.textContent = `Found @${data.u}! Adding contact...`;
+        const res = await api.searchUsers(data.u);
+        if (res.ok && res.data.results?.length > 0) {
+          const user = res.data.results[0];
+          const convRes = await api.createConversation({ type: 'direct', member_ids: [user.userId] });
+          if (convRes.ok) {
+            cleanup();
+            showToast(`Added @${data.u}!`, 'success');
+            return;
+          }
+        }
+        statusEl.textContent = `User @${data.u} not found`;
+      } else {
+        statusEl.textContent = 'Not a valid RocChat QR code';
+      }
+    } catch {
+      statusEl.textContent = 'Invalid QR code data';
+    }
+  }
+
+  // Ghost Mode toggle
+  document.getElementById('toggle-ghost-mode')?.addEventListener('change', async (e) => {
+    const checked = (e.target as HTMLInputElement).checked;
+    if (checked) {
+      // Enable ghost mode: disable receipts, typing, hide online, set 24h disappear
+      await saveSetting(() => api.updateSettings({
+        show_read_receipts: 0,
+        show_typing_indicator: 0,
+        show_online_to: 'nobody',
+        default_disappear_timer: 86400,
+      }));
+      (document.getElementById('toggle-receipts') as HTMLInputElement).checked = false;
+      (document.getElementById('toggle-typing') as HTMLInputElement).checked = false;
+      (document.getElementById('online-visibility') as HTMLSelectElement).value = 'nobody';
+      (document.getElementById('default-disappear') as HTMLSelectElement).value = '86400';
+      localStorage.setItem('rocchat_ghost_mode', '1');
+      showToast('Ghost Mode enabled', 'success');
+    } else {
+      // Restore defaults
+      await saveSetting(() => api.updateSettings({
+        show_read_receipts: 1,
+        show_typing_indicator: 1,
+        show_online_to: 'everyone',
+        default_disappear_timer: 0,
+      }));
+      (document.getElementById('toggle-receipts') as HTMLInputElement).checked = true;
+      (document.getElementById('toggle-typing') as HTMLInputElement).checked = true;
+      (document.getElementById('online-visibility') as HTMLSelectElement).value = 'everyone';
+      (document.getElementById('default-disappear') as HTMLSelectElement).value = '0';
+      localStorage.removeItem('rocchat_ghost_mode');
+      showToast('Ghost Mode disabled', 'success');
+    }
   });
 
   // Discoverable toggle
@@ -243,17 +736,973 @@ export function renderSettings(container: HTMLElement) {
   });
 
   // Logout
-  document.getElementById('logout-btn')?.addEventListener('click', () => {
+  document.getElementById('logout-btn')?.addEventListener('click', async () => {
+    try { await api.logout(); } catch { /* continue with local cleanup */ }
     api.setToken(null);
     localStorage.removeItem('rocchat_user_id');
     localStorage.removeItem('rocchat_keys');
     localStorage.removeItem('rocchat_identity_pub');
+    localStorage.removeItem('rocchat_identity_priv');
+    localStorage.removeItem('rocchat_identity_dh');
+    localStorage.removeItem('rocchat_spk_pub');
+    sessionStorage.clear();
     location.reload();
   });
 
   if (typeof (window as any).lucide !== 'undefined') {
     (window as any).lucide.createIcons();
   }
+
+  // Edit display name
+  document.getElementById('edit-name-btn')?.addEventListener('click', () => {
+    const nameEl = document.getElementById('setting-display-name');
+    const current = nameEl?.textContent || '';
+    const newName = prompt('Enter new display name:', current);
+    if (newName && newName.trim() && newName.trim() !== current) {
+      saveSetting(async () => {
+        await api.updateSettings({ display_name: newName.trim() });
+        if (nameEl) nameEl.textContent = newName.trim();
+      });
+    }
+  });
+
+  // Avatar upload
+  document.getElementById('profile-avatar-wrapper')?.addEventListener('click', () => {
+    document.getElementById('avatar-input')?.click();
+  });
+
+  document.getElementById('avatar-input')?.addEventListener('change', async (e) => {
+    const file = (e.target as HTMLInputElement).files?.[0];
+    if (!file) return;
+    if (file.size > 5 * 1024 * 1024) { showToast('Image too large (max 5MB)', 'error'); return; }
+    try {
+      const res = await api.uploadAvatar(file);
+      if (res.ok) {
+        showToast('Profile photo updated');
+        loadProfile();
+      } else {
+        showToast('Failed to upload photo', 'error');
+      }
+    } catch { showToast('Upload failed', 'error'); }
+  });
+
+  // Remove avatar
+  document.getElementById('remove-avatar-btn')?.addEventListener('click', async () => {
+    if (!confirm('Remove your profile photo?')) return;
+    try {
+      const res = await api.deleteAvatar();
+      if (res.ok) {
+        showToast('Photo removed');
+        loadProfile();
+      }
+    } catch { showToast('Failed to remove photo', 'error'); }
+  });
+
+  // ── Chat Theme ──
+  const chatThemeSelect = document.getElementById('chat-theme-select') as HTMLSelectElement;
+  const savedChatTheme = localStorage.getItem('rocchat_chat_theme') || 'default';
+  chatThemeSelect.value = savedChatTheme;
+  chatThemeSelect.addEventListener('change', () => {
+    localStorage.setItem('rocchat_chat_theme', chatThemeSelect.value);
+    applyChatTheme(chatThemeSelect.value);
+    showToast('Chat theme updated');
+  });
+
+  // ── Scheduled Messages ──
+  document.getElementById('view-scheduled-btn')?.addEventListener('click', () => showScheduledMessages());
+
+  // ── Chat Folders ──
+  document.getElementById('manage-folders-btn')?.addEventListener('click', () => showFoldersManager());
+
+  // ── Saved Contacts ──
+  document.getElementById('manage-contacts-btn')?.addEventListener('click', () => showContactsManager());
+
+  // ── Invite Link ──
+  document.getElementById('btn-invite-link')?.addEventListener('click', async () => {
+    const btn = document.getElementById('btn-invite-link') as HTMLButtonElement;
+    btn.disabled = true;
+    btn.textContent = 'Generating…';
+    try {
+      const res = await api.getInviteLink();
+      const link = res.data.link;
+      const display = document.getElementById('invite-link-display')!;
+      const text = document.getElementById('invite-link-text')!;
+      text.textContent = link;
+      display.style.display = 'block';
+      btn.textContent = 'Regenerate';
+    } catch {
+      showToast('Failed to generate invite link', 'error');
+      btn.textContent = 'Generate Link';
+    }
+    btn.disabled = false;
+  });
+
+  document.getElementById('btn-copy-invite')?.addEventListener('click', async () => {
+    const link = document.getElementById('invite-link-text')?.textContent;
+    if (!link) return;
+    try {
+      if (navigator.share) {
+        await navigator.share({ title: 'Add me on RocChat', url: link });
+      } else {
+        await navigator.clipboard.writeText(link);
+        showToast('Invite link copied!', 'success');
+      }
+    } catch {
+      await navigator.clipboard.writeText(link);
+      showToast('Invite link copied!', 'success');
+    }
+  });
+
+  // ── Business ──
+  document.getElementById('upgrade-business-btn')?.addEventListener('click', async () => {
+    try {
+      const res = await api.createCryptoCheckout('business');
+      if (res.data.wallet_address) {
+        showToast(`Send ${res.data.amount_crypto} ${res.data.crypto_symbol} to ${res.data.wallet_address} (memo: ${res.data.memo})`, 'success');
+      } else {
+        showToast('Business tier not configured yet. Contact sales@mocipher.com for early access.', 'error');
+      }
+    } catch {
+      showToast('Business tier not available yet. Contact sales@mocipher.com for early access.', 'error');
+    }
+  });
+  document.getElementById('create-org-btn')?.addEventListener('click', () => {
+    const name = prompt('Organization name:');
+    if (name && name.trim()) {
+      api.createOrganization(name.trim()).then(res => {
+        if (res.ok) {
+          showToast('Organization created');
+          loadBusinessDashboard();
+        } else {
+          showToast('Failed to create organization', 'error');
+        }
+      });
+    }
+  });
+
+  // Chat import buttons
+  let importSource = '';
+  const importFileInput = document.getElementById('import-file-input') as HTMLInputElement;
+  const importStatus = document.getElementById('import-status')!;
+
+  document.querySelectorAll('.import-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      importSource = (btn as HTMLElement).dataset.source || '';
+      importFileInput.click();
+    });
+  });
+
+  importFileInput?.addEventListener('change', async () => {
+    const file = importFileInput.files?.[0];
+    if (!file || !importSource) return;
+    importStatus.textContent = `Parsing ${importSource} export...`;
+
+    try {
+      const text = await file.text();
+      let parsed: Array<{ sender_name: string; body: string; timestamp: string }> = [];
+
+      if (importSource === 'whatsapp') {
+        // WhatsApp .txt format: "MM/DD/YY, HH:MM - Sender: Message"
+        const lines = text.split('\n');
+        for (const line of lines) {
+          const match = line.match(/^(\d{1,2}\/\d{1,2}\/\d{2,4},?\s+\d{1,2}:\d{2}(?:\s*[AP]M)?)\s*-\s*([^:]+):\s*(.+)$/);
+          if (match) {
+            parsed.push({ timestamp: match[1], sender_name: match[2].trim(), body: match[3] });
+          }
+        }
+      } else if (importSource === 'telegram') {
+        // Telegram JSON: { messages: [{ from, text, date }] }
+        const data = JSON.parse(text);
+        const msgs = data.messages || data;
+        for (const m of (Array.isArray(msgs) ? msgs : [])) {
+          if (typeof m.text === 'string' && m.text) {
+            parsed.push({ sender_name: m.from || m.from_id || 'Unknown', body: m.text, timestamp: m.date || '' });
+          }
+        }
+      } else if (importSource === 'signal') {
+        // Signal JSON backup
+        const data = JSON.parse(text);
+        const msgs = data.messages || data;
+        for (const m of (Array.isArray(msgs) ? msgs : [])) {
+          if (m.body) {
+            parsed.push({ sender_name: m.source || m.conversationId || 'Unknown', body: m.body, timestamp: m.sent_at || m.timestamp || '' });
+          }
+        }
+      }
+
+      if (parsed.length === 0) {
+        importStatus.textContent = 'No messages found in file. Check the file format.';
+        return;
+      }
+
+      // Pick conversation to import into
+      const convName = prompt(`Found ${parsed.length} messages. Enter conversation name to import into:`);
+      if (!convName) { importStatus.textContent = ''; return; }
+
+      // Create or find conversation
+      const convRes = await api.createConversation({ type: 'direct', member_ids: [], name: convName });
+      const convId = convRes.data?.conversation_id;
+      if (!convId) { importStatus.textContent = 'Failed to create conversation'; return; }
+
+      // Batch upload (chunks of 500)
+      let total = 0;
+      for (let i = 0; i < parsed.length; i += 500) {
+        const batch = parsed.slice(i, i + 500);
+        const res = await api.importMessages(importSource, convId, batch);
+        total += res.data?.imported || 0;
+        importStatus.textContent = `Imported ${total} of ${parsed.length} messages...`;
+      }
+      importStatus.textContent = `✅ Imported ${total} messages from ${importSource}`;
+      showToast(`Imported ${total} messages`, 'success');
+    } catch (err) {
+      importStatus.textContent = 'Import failed — check file format';
+      showToast('Import failed', 'error');
+    }
+    importFileInput.value = '';
+  });
+
+  // Donation buttons — crypto checkout only
+  document.querySelectorAll('.donation-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const amount = (btn as HTMLElement).dataset.amount;
+      let donationAmount = 5;
+      if (amount === 'custom') {
+        const custom = prompt('Enter donation amount ($):');
+        if (!custom || parseFloat(custom) <= 0) return;
+        donationAmount = parseFloat(custom);
+      } else {
+        donationAmount = parseFloat(amount || '5');
+      }
+      try {
+        const res = await api.createCryptoCheckout('donation', donationAmount);
+        if (res.data.wallet_address) {
+          showToast(`Send ${res.data.amount_crypto} ${res.data.crypto_symbol} to ${res.data.wallet_address} (memo: ${res.data.memo})`, 'success');
+        } else {
+          showToast('Crypto donations not configured yet', 'error');
+        }
+      } catch {
+        showToast('Payment not available yet', 'error');
+      }
+    });
+  });
+
+  document.getElementById('donate-crypto-btn')?.addEventListener('click', async () => {
+    const amountRaw = prompt('Donation amount in USD (example: 5):', '5');
+    if (!amountRaw) return;
+    const amount = parseFloat(amountRaw);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      showToast('Invalid amount', 'error');
+      return;
+    }
+    const recurring = confirm('Make this a recurring supporter donation?');
+    try {
+      const res = await api.createCryptoCheckout('donation', amount, recurring);
+      if (!res.ok) {
+        showToast('Crypto checkout unavailable', 'error');
+        return;
+      }
+      const txHash = prompt(
+        `Send ${res.data.amount_crypto} ${res.data.crypto_symbol} to:\n${res.data.wallet_address}\nMemo: ${res.data.memo}\n\nAfter sending, paste transaction hash:`
+      );
+      if (!txHash) return;
+      const confirmRes = await api.confirmCryptoCheckout(res.data.id, txHash.trim());
+      if (confirmRes.ok) {
+        showToast('Crypto donation confirmed. Thank you!');
+        loadDonorBadge();
+      } else {
+        showToast('Could not confirm payment', 'error');
+      }
+    } catch {
+      showToast('Crypto checkout failed', 'error');
+    }
+  });
+
+  // No Apple IAP or Google Play verification — crypto donations only.
+
+  // Check if user has business tier and show dashboard
+  loadBusinessState();
+  loadDonorBadge();
+  loadQuietHours();
+
+  // Quiet hours event handlers
+  document.getElementById('save-quiet-hours')?.addEventListener('click', async () => {
+    const start = (document.getElementById('quiet-start') as HTMLInputElement)?.value;
+    const end = (document.getElementById('quiet-end') as HTMLInputElement)?.value;
+    if (!start || !end) { showToast('Set both start and end times', 'error'); return; }
+    try {
+      await api.put('/features/quiet-hours', { quiet_start: start, quiet_end: end });
+      showToast('Quiet hours saved');
+    } catch { showToast('Failed to save', 'error'); }
+  });
+
+  document.getElementById('clear-quiet-hours')?.addEventListener('click', async () => {
+    try {
+      await api.del('/features/quiet-hours');
+      (document.getElementById('quiet-start') as HTMLInputElement).value = '';
+      (document.getElementById('quiet-end') as HTMLInputElement).value = '';
+      showToast('Quiet hours cleared');
+    } catch { showToast('Failed to clear', 'error'); }
+  });
+
+  document.getElementById('add-dnd-exception')?.addEventListener('click', async () => {
+    const input = document.getElementById('dnd-exception-input') as HTMLInputElement;
+    const username = input.value.trim().replace('@', '');
+    if (!username) return;
+    try {
+      const searchRes = await api.searchUsers(username);
+      if (!searchRes.ok || !(searchRes.data as { results: Array<{ userId: string }> }).results?.length) {
+        showToast('User not found', 'error'); return;
+      }
+      const userId = (searchRes.data as { results: Array<{ userId: string }> }).results[0].userId;
+      const current = await api.get('/features/quiet-hours');
+      const exceptions: string[] = (current.data as { dnd_exceptions: string[] }).dnd_exceptions || [];
+      if (!exceptions.includes(userId)) {
+        exceptions.push(userId);
+        await api.put('/features/quiet-hours', { dnd_exceptions: exceptions });
+      }
+      input.value = '';
+      loadQuietHours();
+      showToast('Exception added');
+    } catch { showToast('Failed to add exception', 'error'); }
+  });
+}
+
+async function loadDonorBadge() {
+  const display = document.getElementById('donor-badge-display');
+  if (!display) return;
+  try {
+    const res = await api.get('/features/donor');
+    const donor = (res.data as { tier?: string; recurring?: boolean; donor_since?: number | null });
+    const tier = donor?.tier;
+    const tierNames: Record<string, string> = {
+      coffee: '☕ Coffee — Bronze Feather',
+      feather: '🪶 Feather — Amber Feather',
+      wing: '🦅 Wing — Golden Feather',
+      mountain: '🏔️ Mountain — Radiant Feather',
+      patron: '👑 Patron — Turquoise-tipped Feather',
+    };
+    if (tier && tierNames[tier]) {
+      const userId = localStorage.getItem('rocchat_user_id') || '';
+      localStorage.setItem(`rocchat_donor_${userId}`, tier);
+      const recurringLine = donor.recurring ? '<br><span style="color:var(--turquoise)">Recurring supporter</span>' : '';
+      const sinceLine = donor.donor_since ? `<br><span style="color:var(--text-tertiary)">Supporting since ${new Date(donor.donor_since * 1000).toLocaleDateString()}</span>` : '';
+      display.innerHTML = `<span style="font-size:var(--text-sm)">${tierNames[tier]}</span>${recurringLine}${sinceLine}<br><span style="color:var(--text-tertiary)">Your feather badge is shown on your avatar</span>`;
+    } else {
+      display.textContent = 'No active badge — donate to earn your Roc Feather!';
+    }
+  } catch {
+    display.textContent = 'Could not load badge status';
+  }
+}
+
+async function loadQuietHours() {
+  try {
+    const res = await api.get('/features/quiet-hours');
+    const data = res.data as { quiet_start: string | null; quiet_end: string | null; dnd_exceptions: string[] };
+    if (data.quiet_start) (document.getElementById('quiet-start') as HTMLInputElement).value = data.quiet_start;
+    if (data.quiet_end) (document.getElementById('quiet-end') as HTMLInputElement).value = data.quiet_end;
+    const listEl = document.getElementById('dnd-exceptions-list');
+    if (!listEl) return;
+    if (!data.dnd_exceptions?.length) {
+      listEl.innerHTML = '<div style="font-size:var(--text-xs);color:var(--text-tertiary)">No exceptions set</div>';
+      return;
+    }
+    listEl.innerHTML = data.dnd_exceptions.map(uid =>
+      `<div style="display:flex;align-items:center;gap:var(--sp-2);padding:4px 0">
+        <span style="font-size:var(--text-sm);color:var(--text-primary)">${uid.slice(0, 8)}...</span>
+        <button class="btn-secondary remove-dnd-exception" data-uid="${uid}" style="font-size:var(--text-xs);padding:2px 8px;color:var(--danger)">Remove</button>
+      </div>`
+    ).join('');
+    listEl.querySelectorAll('.remove-dnd-exception').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const uid = (btn as HTMLElement).dataset.uid!;
+        const current = await api.get('/features/quiet-hours');
+        const exceptions: string[] = ((current.data as { dnd_exceptions: string[] }).dnd_exceptions || []).filter(e => e !== uid);
+        await api.put('/features/quiet-hours', { dnd_exceptions: exceptions });
+        loadQuietHours();
+      });
+    });
+  } catch {
+    const listEl = document.getElementById('dnd-exceptions-list');
+    if (listEl) listEl.innerHTML = '<div style="font-size:var(--text-xs);color:var(--text-tertiary)">Could not load</div>';
+  }
+}
+
+function applyChatTheme(theme: string) {
+  const root = document.documentElement;
+  // Maps to actual CSS custom properties used in message bubbles and chat background
+  const themes: Record<string, Record<string, string>> = {
+    default: {},
+    midnight: { '--bg-app': '#0a1628', '--bg-bubble-mine': 'rgba(26, 54, 93, 0.8)', '--bg-bubble-theirs': 'rgba(30, 41, 59, 0.9)' },
+    forest: { '--bg-app': '#0a1f0a', '--bg-bubble-mine': 'rgba(20, 83, 45, 0.8)', '--bg-bubble-theirs': 'rgba(26, 46, 26, 0.9)' },
+    sunset: { '--bg-app': '#1a0f05', '--bg-bubble-mine': 'rgba(124, 45, 18, 0.8)', '--bg-bubble-theirs': 'rgba(41, 32, 24, 0.9)' },
+    ocean: { '--bg-app': '#042f2e', '--bg-bubble-mine': 'rgba(19, 78, 74, 0.8)', '--bg-bubble-theirs': 'rgba(26, 47, 46, 0.9)' },
+    rose: { '--bg-app': '#1a0a10', '--bg-bubble-mine': 'rgba(131, 24, 67, 0.8)', '--bg-bubble-theirs': 'rgba(42, 21, 32, 0.9)' },
+    lavender: { '--bg-app': '#0f0a1a', '--bg-bubble-mine': 'rgba(76, 29, 149, 0.8)', '--bg-bubble-theirs': 'rgba(30, 21, 48, 0.9)' },
+    charcoal: { '--bg-app': '#111111', '--bg-bubble-mine': 'rgba(51, 51, 51, 0.9)', '--bg-bubble-theirs': 'rgba(34, 34, 34, 0.9)' },
+  };
+  // Reset
+  ['--bg-app', '--bg-bubble-mine', '--bg-bubble-theirs'].forEach(p => root.style.removeProperty(p));
+  const t = themes[theme];
+  if (t) Object.entries(t).forEach(([k, v]) => root.style.setProperty(k, v));
+}
+
+async function showScheduledMessages() {
+  const overlay = createOverlay();
+  overlay.querySelector('.overlay-body')!.innerHTML = '<div style="text-align:center;padding:var(--sp-4)">Loading...</div>';
+
+  try {
+    const res = await api.getScheduledMessages();
+    const msgs = res.ok ? (res.data as unknown as { id: string; conversation_id: string; scheduled_at: number }[]) : [];
+    const body = overlay.querySelector('.overlay-body')!;
+    if (msgs.length === 0) {
+      body.innerHTML = `
+        <div style="text-align:center;padding:var(--sp-8);color:var(--text-tertiary)">
+          <div style="font-size:48px;margin-bottom:var(--sp-3)">📋</div>
+          <p>No scheduled messages</p>
+          <p style="font-size:var(--text-xs);margin-top:var(--sp-2)">Use the clock icon in the composer to schedule a message</p>
+        </div>
+      `;
+    } else {
+      body.innerHTML = msgs.map(m => `
+        <div class="setting-row" style="padding:var(--sp-3)">
+          <div>
+            <div class="setting-label">Message to ${m.conversation_id.slice(0, 8)}...</div>
+            <div class="setting-desc">Scheduled for ${new Date(m.scheduled_at * 1000).toLocaleString()}</div>
+          </div>
+          <button class="btn-secondary" style="font-size:var(--text-xs);color:var(--danger);border-color:var(--danger);padding:var(--sp-1) var(--sp-2)" data-cancel-scheduled="${m.id}">Cancel</button>
+        </div>
+      `).join('');
+      body.querySelectorAll('[data-cancel-scheduled]').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          const id = (btn as HTMLElement).dataset.cancelScheduled!;
+          await api.deleteScheduledMessage(id);
+          showToast('Scheduled message cancelled');
+          showScheduledMessages();
+        });
+      });
+    }
+  } catch { showToast('Failed to load scheduled messages', 'error'); }
+}
+
+async function showFoldersManager() {
+  const overlay = createOverlay();
+  overlay.querySelector('.overlay-body')!.innerHTML = '<div style="text-align:center;padding:var(--sp-4)">Loading...</div>';
+
+  try {
+    const res = await api.getChatFolders();
+    const folders = res.ok ? (res.data as unknown as api.ChatFolder[]) : [];
+    const body = overlay.querySelector('.overlay-body')!;
+
+    body.innerHTML = `
+      ${folders.length === 0 ? `
+        <div style="text-align:center;padding:var(--sp-6);color:var(--text-tertiary)">
+          <div style="font-size:48px;margin-bottom:var(--sp-3)">📁</div>
+          <p>No folders yet</p>
+        </div>
+      ` : folders.map(f => `
+        <div class="setting-row" style="padding:var(--sp-3)">
+          <div>
+            <div class="setting-label">${f.icon} ${escHtml(f.name)}</div>
+            <div class="setting-desc">${f.conversation_ids.length} conversation${f.conversation_ids.length !== 1 ? 's' : ''}</div>
+          </div>
+          <button class="btn-secondary" style="font-size:var(--text-xs);color:var(--danger);border-color:var(--danger);padding:var(--sp-1) var(--sp-2)" data-delete-folder="${f.id}">Delete</button>
+        </div>
+      `).join('')}
+      <div style="padding:var(--sp-3)">
+        <button class="btn-secondary" id="overlay-create-folder" style="width:100%">+ Create Folder</button>
+      </div>
+    `;
+
+    body.querySelectorAll('[data-delete-folder]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const id = (btn as HTMLElement).dataset.deleteFolder!;
+        if (confirm('Delete this folder?')) {
+          await api.deleteChatFolder(id);
+          showToast('Folder deleted');
+          showFoldersManager();
+        }
+      });
+    });
+
+    body.querySelector('#overlay-create-folder')?.addEventListener('click', () => {
+      const name = prompt('Folder name:');
+      if (name && name.trim()) {
+        const icon = prompt('Folder icon (emoji):', '📁') || '📁';
+        api.createChatFolder(name.trim(), icon).then(res => {
+          if (res.ok) {
+            showToast('Folder created');
+            showFoldersManager();
+          }
+        });
+      }
+    });
+  } catch { showToast('Failed to load folders', 'error'); }
+}
+
+async function showContactsManager() {
+  const overlay = createOverlay();
+  overlay.querySelector('.overlay-body')!.innerHTML = '<div style="text-align:center;padding:var(--sp-4)">Loading...</div>';
+
+  try {
+    const res = await api.getSavedContacts();
+    const contacts = res.ok ? (res.data as unknown as api.SavedContact[]) : [];
+    const body = overlay.querySelector('.overlay-body')!;
+    const uid = localStorage.getItem('rocchat_user_id') || '';
+
+    body.innerHTML = `
+      ${contacts.length === 0 ? `
+        <div style="text-align:center;padding:var(--sp-6);color:var(--text-tertiary)">
+          <div style="font-size:48px;margin-bottom:var(--sp-3)">👤</div>
+          <p>No saved contacts</p>
+          <p style="font-size:var(--text-xs);margin-top:var(--sp-2)">Contacts are saved when you start conversations</p>
+        </div>
+      ` : contacts.map(c => {
+        const name = c.nickname || c.display_name || c.username;
+        const initials = name.split(' ').map((w: string) => w[0]).join('').slice(0, 2).toUpperCase();
+        let avatarHtml: string;
+        if (c.avatar_url) {
+          const path = (c.avatar_url as string).startsWith('/api/') ? c.avatar_url : `/api${c.avatar_url}`;
+          const sep = path.includes('?') ? '&' : '?';
+          avatarHtml = `<div class="avatar" style="width:40px;height:40px;font-size:14px"><img src="${path}${sep}uid=${encodeURIComponent(c.contact_id)}" loading="lazy" decoding="async" style="width:100%;height:100%;border-radius:50%;object-fit:cover" onerror="this.parentElement.textContent='${initials}'" /></div>`;
+        } else {
+          avatarHtml = `<div class="avatar" style="width:40px;height:40px;font-size:14px">${initials}</div>`;
+        }
+        return `
+          <div class="setting-row" style="padding:var(--sp-3)">
+            <div style="display:flex;align-items:center;gap:var(--sp-3)">
+              ${avatarHtml}
+              <div>
+                <div class="setting-label">${escHtml(name)}</div>
+                <div class="setting-desc">@${escHtml(c.username)}</div>
+              </div>
+            </div>
+            <button class="btn-secondary" style="font-size:var(--text-xs);color:var(--danger);border-color:var(--danger);padding:var(--sp-1) var(--sp-2)" data-remove-contact="${c.contact_id}">Remove</button>
+          </div>
+        `;
+      }).join('')}
+    `;
+
+    body.querySelectorAll('[data-remove-contact]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const id = (btn as HTMLElement).dataset.removeContact!;
+        if (confirm('Remove this contact?')) {
+          await api.removeSavedContact(id);
+          showToast('Contact removed');
+          showContactsManager();
+        }
+      });
+    });
+  } catch { showToast('Failed to load contacts', 'error'); }
+}
+
+function createOverlay(): HTMLElement {
+  // Remove existing overlay
+  document.querySelector('.settings-overlay')?.remove();
+
+  const overlay = document.createElement('div');
+  overlay.className = 'settings-overlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:50;display:flex;align-items:center;justify-content:center;padding:var(--sp-4)';
+
+  overlay.innerHTML = `
+    <div style="background:var(--bg-elevated);border-radius:var(--radius-xl);max-width:480px;width:100%;max-height:80vh;display:flex;flex-direction:column;box-shadow:var(--shadow-xl)">
+      <div style="display:flex;justify-content:flex-end;padding:var(--sp-3)">
+        <button class="icon-btn overlay-close" style="width:32px;height:32px" aria-label="Close">✕</button>
+      </div>
+      <div class="overlay-body" style="overflow-y:auto;padding:0 var(--sp-4) var(--sp-4)"></div>
+    </div>
+  `;
+
+  overlay.querySelector('.overlay-close')?.addEventListener('click', () => overlay.remove());
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+  document.body.appendChild(overlay);
+  return overlay;
+}
+
+async function loadBusinessState() {
+  try {
+    const res = await api.getMe();
+    if (!res.ok) return;
+    const user = res.data as unknown as Record<string, unknown>;
+    const tier = (user.account_tier as string) || 'premium';
+
+    if (tier === 'business') {
+      // Show dashboard, hide upgrade prompt
+      const content = document.getElementById('business-content');
+      const dashboard = document.getElementById('business-dashboard');
+      if (content) content.style.display = 'none';
+      if (dashboard) dashboard.style.display = 'block';
+      loadBusinessDashboard();
+    }
+  } catch { /* silent */ }
+}
+
+async function loadBusinessDashboard() {
+  const orgList = document.getElementById('org-list');
+  if (!orgList) return;
+
+  try {
+    const res = await api.getOrganizations();
+    const orgs = res.ok ? (res.data as unknown as api.Organization[]) : [];
+
+    if (orgs.length === 0) {
+      orgList.innerHTML = `
+        <div style="text-align:center;padding:var(--sp-4);color:var(--text-tertiary)">
+          <p>No organizations yet. Create one to get started.</p>
+        </div>
+      `;
+    } else {
+      orgList.innerHTML = orgs.map(o => `
+        <div class="setting-row" style="padding:var(--sp-3);cursor:pointer" data-org-id="${o.id}">
+          <div>
+            <div class="setting-label" style="display:flex;align-items:center;gap:var(--sp-2)">
+              <span style="width:28px;height:28px;border-radius:var(--radius-md);background:${escHtml(o.accent_color)};display:flex;align-items:center;justify-content:center;font-size:12px;color:white;font-weight:700">${escHtml(o.name[0])}</span>
+              ${escHtml(o.name)}
+            </div>
+            <div class="setting-desc">Role: ${escHtml(o.role)} · Created ${new Date(o.created_at * 1000).toLocaleDateString()}</div>
+          </div>
+        </div>
+      `).join('');
+
+      orgList.querySelectorAll('[data-org-id]').forEach(el => {
+        el.addEventListener('click', () => {
+          const orgId = (el as HTMLElement).dataset.orgId!;
+          showOrgDashboard(orgId);
+        });
+      });
+    }
+  } catch { showToast('Failed to load organizations', 'error'); }
+}
+
+async function showOrgDashboard(orgId: string) {
+  const overlay = createOverlay();
+  overlay.querySelector('.overlay-body')!.innerHTML = '<div style="text-align:center;padding:var(--sp-4)">Loading...</div>';
+
+  try {
+    const res = await api.getOrganization(orgId);
+    if (!res.ok) { showToast('Failed to load org', 'error'); return; }
+    const org = res.data as unknown as api.Organization & { members: api.OrgMember[] };
+    const body = overlay.querySelector('.overlay-body')!;
+
+    body.innerHTML = `
+      <h3 style="margin-bottom:var(--sp-3)">${escHtml(org.name)}</h3>
+
+      <div style="margin-bottom:var(--sp-4)">
+        <div style="font-weight:600;margin-bottom:var(--sp-2)">Members (${org.members.length})</div>
+        ${org.members.map(m => {
+          const name = m.display_name || m.username;
+          const initials = name.split(' ').map((w: string) => w[0]).join('').slice(0, 2).toUpperCase();
+          let avatarHtml: string;
+          if (m.avatar_url) {
+            const path = (m.avatar_url as string).startsWith('/api/') ? m.avatar_url : `/api${m.avatar_url}`;
+            const sep = path.includes('?') ? '&' : '?';
+            avatarHtml = `<div class="avatar" style="width:32px;height:32px;font-size:12px"><img src="${path}${sep}uid=${encodeURIComponent(m.user_id)}" loading="lazy" decoding="async" style="width:100%;height:100%;border-radius:50%;object-fit:cover" onerror="this.parentElement.textContent='${initials}'" /></div>`;
+          } else {
+            avatarHtml = `<div class="avatar" style="width:32px;height:32px;font-size:12px">${initials}</div>`;
+          }
+          return `
+            <div class="setting-row" style="padding:var(--sp-2)">
+              <div style="display:flex;align-items:center;gap:var(--sp-2)">
+                ${avatarHtml}
+                <div>
+                  <div style="font-size:var(--text-sm);font-weight:500">${escHtml(name)}</div>
+                  <div style="font-size:var(--text-xs);color:var(--text-tertiary)">${escHtml(m.role)}</div>
+                </div>
+              </div>
+              ${m.role !== 'owner' ? `<button class="btn-secondary" style="font-size:var(--text-xs);color:var(--danger);border-color:var(--danger);padding:2px 8px" data-remove-member="${m.user_id}">Remove</button>` : ''}
+            </div>
+          `;
+        }).join('')}
+      </div>
+
+      <div style="display:grid;gap:var(--sp-2)">
+        <button class="btn-secondary" id="org-add-member">+ Add Member</button>
+        <button class="btn-secondary" id="org-bulk-add">👥 Bulk Provision Users</button>
+        <button class="btn-secondary" id="org-sso">🔐 SSO Configuration</button>
+        <button class="btn-secondary" id="org-export">📊 Compliance Export</button>
+        <button class="btn-secondary" id="org-retention">⏱ Retention Policy</button>
+        <button class="btn-secondary" id="org-wipe" style="color:var(--danger);border-color:var(--danger)">🗑 Remote Device Wipe</button>
+        <button class="btn-secondary" id="org-directory">🔍 User Directory</button>
+        <button class="btn-secondary" id="org-api-keys">🔑 API Keys</button>
+        <button class="btn-secondary" id="org-webhooks">🔗 Webhooks</button>
+      </div>
+    `;
+
+    // Remove member
+    body.querySelectorAll('[data-remove-member]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const uid = (btn as HTMLElement).dataset.removeMember!;
+        if (confirm('Remove this member?')) {
+          await api.removeOrgMember(orgId, uid);
+          showToast('Member removed');
+          showOrgDashboard(orgId);
+        }
+      });
+    });
+
+    // Add member
+    body.querySelector('#org-add-member')?.addEventListener('click', async () => {
+      const username = prompt('Enter username to add:');
+      if (!username) return;
+      const searchRes = await api.searchUsers(username.trim());
+      if (!searchRes.ok || !(searchRes.data as unknown as { results: api.UserResult[] }).results?.length) {
+        showToast('User not found', 'error');
+        return;
+      }
+      const user = (searchRes.data as unknown as { results: api.UserResult[] }).results[0];
+      const addRes = await api.addOrgMember(orgId, user.userId);
+      if (addRes.ok) {
+        showToast(`${user.displayName || user.username} added`);
+        showOrgDashboard(orgId);
+      } else {
+        showToast('Failed to add member', 'error');
+      }
+    });
+
+    // Bulk provision
+    body.querySelector('#org-bulk-add')?.addEventListener('click', async () => {
+      const input = prompt('Enter usernames to add (comma-separated):');
+      if (!input) return;
+      const usernames = input.split(',').map(u => u.trim()).filter(Boolean);
+      if (usernames.length === 0) return;
+      if (usernames.length > 200) {
+        showToast('Maximum 200 users per bulk operation', 'error');
+        return;
+      }
+      const users = usernames.map(username => ({ username, role: 'member' }));
+      const res = await api.bulkAddOrgMembers(orgId, users);
+      if (res.ok) {
+        const data = res.data as unknown as { added: number; total: number };
+        showToast(`Added ${data.added} of ${data.total} users`);
+        showOrgDashboard(orgId);
+      } else {
+        showToast('Bulk provision failed', 'error');
+      }
+    });
+
+    // SSO configuration
+    body.querySelector('#org-sso')?.addEventListener('click', async () => {
+      const ssoRes = await api.getSsoConfig(orgId);
+      const current = ssoRes.ok ? (ssoRes.data as unknown as { provider: string; issuer_url: string; client_id: string; redirect_uri: string; enabled: number }) : { provider: 'oidc', issuer_url: '', client_id: '', redirect_uri: '', enabled: 0 };
+
+      const ssoOverlay = createOverlay();
+      ssoOverlay.querySelector('.overlay-body')!.innerHTML = `
+        <h3 style="margin-bottom:var(--sp-3)">SSO Configuration</h3>
+        <div style="display:grid;gap:var(--sp-3)">
+          <div>
+            <label class="setting-label" style="display:block;margin-bottom:4px">Provider</label>
+            <select class="form-input" id="sso-provider" style="width:100%">
+              <option value="oidc" ${current.provider === 'oidc' ? 'selected' : ''}>OpenID Connect (OIDC)</option>
+              <option value="saml" ${current.provider === 'saml' ? 'selected' : ''}>SAML 2.0</option>
+            </select>
+          </div>
+          <div>
+            <label class="setting-label" style="display:block;margin-bottom:4px">Issuer URL</label>
+            <input class="form-input" id="sso-issuer" style="width:100%" placeholder="https://accounts.google.com" value="${escHtml(current.issuer_url)}" />
+          </div>
+          <div>
+            <label class="setting-label" style="display:block;margin-bottom:4px">Client ID</label>
+            <input class="form-input" id="sso-client-id" style="width:100%" placeholder="your-client-id" value="${escHtml(current.client_id)}" />
+          </div>
+          <div>
+            <label class="setting-label" style="display:block;margin-bottom:4px">Client Secret</label>
+            <input class="form-input" id="sso-client-secret" type="password" style="width:100%" placeholder="your-client-secret" />
+          </div>
+          <div>
+            <label class="setting-label" style="display:block;margin-bottom:4px">Redirect URI</label>
+            <input class="form-input" id="sso-redirect" style="width:100%" placeholder="https://chat.mocipher.com/sso/callback" value="${escHtml(current.redirect_uri)}" />
+          </div>
+          <label style="display:flex;align-items:center;gap:var(--sp-2);cursor:pointer">
+            <input type="checkbox" id="sso-enabled" ${current.enabled ? 'checked' : ''} />
+            <span>Enable SSO</span>
+          </label>
+          <div style="display:flex;gap:var(--sp-2)">
+            <button class="btn-primary" id="sso-save" style="flex:1">Save</button>
+            <button class="btn-secondary" id="sso-remove" style="flex:1;color:var(--danger);border-color:var(--danger)">Remove</button>
+          </div>
+        </div>
+      `;
+
+      ssoOverlay.querySelector('#sso-save')?.addEventListener('click', async () => {
+        const issuerUrl = (ssoOverlay.querySelector('#sso-issuer') as HTMLInputElement).value.trim();
+        const clientId = (ssoOverlay.querySelector('#sso-client-id') as HTMLInputElement).value.trim();
+        const clientSecret = (ssoOverlay.querySelector('#sso-client-secret') as HTMLInputElement).value.trim();
+        const redirectUri = (ssoOverlay.querySelector('#sso-redirect') as HTMLInputElement).value.trim();
+        const provider = (ssoOverlay.querySelector('#sso-provider') as HTMLSelectElement).value;
+        const enabled = (ssoOverlay.querySelector('#sso-enabled') as HTMLInputElement).checked;
+
+        if (!issuerUrl || !clientId || !clientSecret || !redirectUri) {
+          showToast('All fields are required', 'error');
+          return;
+        }
+        const saveRes = await api.setSsoConfig(orgId, { provider, issuer_url: issuerUrl, client_id: clientId, client_secret: clientSecret, redirect_uri: redirectUri, enabled });
+        if (saveRes.ok) {
+          showToast('SSO configuration saved');
+          ssoOverlay.remove();
+        } else {
+          showToast('Failed to save SSO config', 'error');
+        }
+      });
+
+      ssoOverlay.querySelector('#sso-remove')?.addEventListener('click', async () => {
+        if (!confirm('Remove SSO configuration?')) return;
+        await api.deleteSsoConfig(orgId);
+        showToast('SSO configuration removed');
+        ssoOverlay.remove();
+      });
+    });
+
+    // Compliance export
+    body.querySelector('#org-export')?.addEventListener('click', async () => {
+      const exportRes = await api.getComplianceExport(orgId);
+      if (exportRes.ok) {
+        const blob = new Blob([JSON.stringify(exportRes.data, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `rocchat-export-${orgId.slice(0, 8)}-${Date.now()}.json`;
+        a.click();
+        URL.revokeObjectURL(url);
+        showToast('Export downloaded');
+      }
+    });
+
+    // Retention policy
+    body.querySelector('#org-retention')?.addEventListener('click', async () => {
+      const retRes = await api.getRetentionPolicy(orgId);
+      const current = retRes.ok ? (retRes.data as unknown as { max_age_days: number; auto_delete: number }) : { max_age_days: 365, auto_delete: 0 };
+      const days = prompt(`Message retention (days, current: ${current.max_age_days}):`, String(current.max_age_days));
+      if (!days) return;
+      const autoDelete = confirm('Auto-delete messages older than this?');
+      await api.setRetentionPolicy(orgId, parseInt(days, 10), autoDelete);
+      showToast('Retention policy updated');
+    });
+
+    // Remote wipe
+    body.querySelector('#org-wipe')?.addEventListener('click', async () => {
+      const username = prompt('Username of user to wipe device:');
+      if (!username) return;
+      const searchRes = await api.searchUsers(username.trim());
+      if (!searchRes.ok || !(searchRes.data as unknown as { results: api.UserResult[] }).results?.length) {
+        showToast('User not found', 'error');
+        return;
+      }
+      const user = (searchRes.data as unknown as { results: api.UserResult[] }).results[0];
+      const deviceId = prompt('Device ID to wipe:');
+      if (!deviceId) return;
+      if (!confirm(`WIPE device ${deviceId} for ${user.username}? This cannot be undone.`)) return;
+      const wipeRes = await api.wipeDevice(orgId, user.userId, deviceId);
+      if (wipeRes.ok) {
+        showToast('Device wiped successfully');
+      } else {
+        showToast('Failed to wipe device', 'error');
+      }
+    });
+
+    // Org directory
+    body.querySelector('#org-directory')?.addEventListener('click', async () => {
+      const q = prompt('Search members (leave blank to show all):') || '';
+      const res = await api.searchOrgDirectory(orgId, q);
+      const members = (res.data || []) as Record<string, string>[];
+      const list = members.map(m =>
+        `${m.display_name || m.username} (@${m.username}) — ${m.role}`
+      ).join('\n');
+      alert(list || 'No members found');
+    });
+
+    // API Keys
+    body.querySelector('#org-api-keys')?.addEventListener('click', async () => {
+      const overlay = createOverlay();
+      const ob = overlay.querySelector('.overlay-body')!;
+      const renderKeys = async () => {
+        const res = await api.listApiKeys(orgId);
+        const keys = (res.data || []) as Record<string, string>[];
+        ob.innerHTML = `
+          <h3 style="margin-bottom:var(--sp-3)">🔑 API Keys</h3>
+          <div style="display:grid;gap:var(--sp-2);margin-bottom:var(--sp-3)">
+            ${keys.map((k: any) => `
+              <div style="display:flex;justify-content:space-between;align-items:center;padding:var(--sp-2);background:var(--bg-tertiary);border-radius:8px">
+                <div>
+                  <div style="font-size:14px;font-weight:600">${escHtml(k.name)}</div>
+                  <div style="font-size:12px;color:var(--text-tertiary)">${escHtml(k.key_prefix)}... · ${k.scopes}</div>
+                </div>
+                <button class="btn-secondary revoke-key" data-kid="${k.id}" style="font-size:12px;color:var(--danger);border-color:var(--danger)">Revoke</button>
+              </div>
+            `).join('') || '<p style="color:var(--text-tertiary)">No API keys yet</p>'}
+          </div>
+          <button class="btn-primary" id="create-api-key" style="width:100%">+ Create New Key</button>
+        `;
+        ob.querySelectorAll('.revoke-key').forEach(btn => {
+          btn.addEventListener('click', async () => {
+            const kid = (btn as HTMLElement).dataset.kid!;
+            if (confirm('Revoke this API key? This cannot be undone.')) {
+              await api.revokeApiKey(orgId, kid);
+              showToast('Key revoked');
+              renderKeys();
+            }
+          });
+        });
+        ob.querySelector('#create-api-key')?.addEventListener('click', async () => {
+          const name = prompt('Key name (e.g. "Production Integration"):');
+          if (!name) return;
+          const res2 = await api.createApiKey(orgId, name);
+          const data = res2.data;
+          if (data?.key) {
+            prompt(`Copy your API key now — it won't be shown again:`, data.key);
+          }
+          renderKeys();
+        });
+      };
+      renderKeys();
+    });
+
+    // Webhooks
+    body.querySelector('#org-webhooks')?.addEventListener('click', async () => {
+      const overlay = createOverlay();
+      const ob = overlay.querySelector('.overlay-body')!;
+      const renderHooks = async () => {
+        const res = await api.listWebhooks(orgId);
+        const hooks = (res.data || []) as Record<string, string>[];
+        ob.innerHTML = `
+          <h3 style="margin-bottom:var(--sp-3)">🔗 Webhooks</h3>
+          <div style="display:grid;gap:var(--sp-2);margin-bottom:var(--sp-3)">
+            ${hooks.map((h: any) => `
+              <div style="display:flex;justify-content:space-between;align-items:center;padding:var(--sp-2);background:var(--bg-tertiary);border-radius:8px">
+                <div>
+                  <div style="font-size:13px;font-weight:600;word-break:break-all">${escHtml(h.url)}</div>
+                  <div style="font-size:11px;color:var(--text-tertiary)">${h.events}</div>
+                </div>
+                <button class="btn-secondary remove-hook" data-hid="${h.id}" style="font-size:12px;color:var(--danger);border-color:var(--danger)">Remove</button>
+              </div>
+            `).join('') || '<p style="color:var(--text-tertiary)">No webhooks registered</p>'}
+          </div>
+          <button class="btn-primary" id="create-webhook" style="width:100%">+ Add Webhook</button>
+        `;
+        ob.querySelectorAll('.remove-hook').forEach(btn => {
+          btn.addEventListener('click', async () => {
+            const hid = (btn as HTMLElement).dataset.hid!;
+            if (confirm('Remove this webhook?')) {
+              await api.deleteWebhook(orgId, hid);
+              showToast('Webhook removed');
+              renderHooks();
+            }
+          });
+        });
+        ob.querySelector('#create-webhook')?.addEventListener('click', async () => {
+          const url2 = prompt('Webhook URL (must start with https://):');
+          if (!url2) return;
+          const res2 = await api.createWebhook(orgId, url2);
+          const data = res2.data;
+          if (data?.signing_secret) {
+            prompt(`Save your signing secret — it won't be shown again:`, data.signing_secret);
+          }
+          renderHooks();
+        });
+      };
+      renderHooks();
+    });
+
+  } catch { showToast('Failed to load organization', 'error'); }
 }
 
 async function loadProfile() {
@@ -261,15 +1710,38 @@ async function loadProfile() {
     const res = await api.getMe();
     if (res.ok) {
       const user = res.data as unknown as Record<string, unknown>;
+      // Cache display name & avatar for sidebar
+      if (user.display_name) localStorage.setItem('rocchat_display_name', user.display_name as string);
+      else if (user.username) localStorage.setItem('rocchat_display_name', user.username as string);
+      if (user.avatar_url) localStorage.setItem('rocchat_avatar_url', user.avatar_url as string);
+      else localStorage.removeItem('rocchat_avatar_url');
       const usernameEl = document.getElementById('setting-username');
       const nameEl = document.getElementById('setting-display-name');
       const keyEl = document.getElementById('identity-key-display');
       const toggle = document.getElementById('toggle-discoverable') as HTMLInputElement;
+      const avatarEl = document.getElementById('profile-avatar');
+      const removeBtn = document.getElementById('remove-avatar-btn') as HTMLElement;
 
       if (usernameEl) usernameEl.textContent = `@${user.username}`;
       if (nameEl) nameEl.textContent = (user.display_name as string) || (user.username as string);
       if (keyEl) keyEl.textContent = (user.identity_key as string) || 'Not available';
       if (toggle) toggle.checked = !!user.discoverable;
+
+      // Avatar
+      if (avatarEl) {
+        const displayName = (user.display_name as string) || (user.username as string) || '?';
+        const initials = displayName.split(' ').map((w: string) => w[0]).join('').slice(0, 2).toUpperCase();
+        if (user.avatar_url) {
+          const uid = user.id || localStorage.getItem('rocchat_user_id') || '';
+          const avatarPath = (user.avatar_url as string).startsWith('/api/') ? (user.avatar_url as string) : `${api.getApiBase()}${user.avatar_url}`;
+          const sep = avatarPath.includes('?') ? '&' : '?';
+          avatarEl.innerHTML = `<img src="${avatarPath}${sep}uid=${encodeURIComponent(uid as string)}" alt="${escHtml(displayName)}" style="width:100%;height:100%;object-fit:cover;border-radius:50%" />`;
+          if (removeBtn) removeBtn.style.display = 'inline-flex';
+        } else {
+          avatarEl.textContent = initials;
+          if (removeBtn) removeBtn.style.display = 'none';
+        }
+      }
 
       // Privacy settings
       const receipts = document.getElementById('toggle-receipts') as HTMLInputElement;
@@ -282,6 +1754,13 @@ async function loadProfile() {
       if (whoAdd && user.who_can_add) whoAdd.value = user.who_can_add as string;
       const disappear = document.getElementById('default-disappear') as HTMLSelectElement;
       if (disappear) disappear.value = String(user.default_disappear_timer || 0);
+
+      // Ghost Mode: detect if all ghost settings are active
+      const ghostToggle = document.getElementById('toggle-ghost-mode') as HTMLInputElement;
+      if (ghostToggle) {
+        const isGhost = user.show_read_receipts === 0 && user.show_typing_indicator === 0 && user.show_online_to === 'nobody';
+        ghostToggle.checked = isGhost || !!localStorage.getItem('rocchat_ghost_mode');
+      }
     }
   } catch {}
 }
@@ -291,8 +1770,32 @@ export function applyTheme(theme: string) {
   root.classList.remove('dark', 'light');
   if (theme === 'dark') root.classList.add('dark');
   else if (theme === 'light') root.classList.add('light');
+  else if (theme === 'scheduled') {
+    const darkStart = localStorage.getItem('rocchat_theme_dark_start') || '20:00';
+    const darkEnd = localStorage.getItem('rocchat_theme_dark_end') || '07:00';
+    const now = new Date();
+    const nowMins = now.getHours() * 60 + now.getMinutes();
+    const [sh, sm] = darkStart.split(':').map(Number);
+    const [eh, em] = darkEnd.split(':').map(Number);
+    const startMins = sh * 60 + sm;
+    const endMins = eh * 60 + em;
+    const isDark = startMins < endMins
+      ? nowMins >= startMins && nowMins < endMins
+      : nowMins >= startMins || nowMins < endMins;
+    root.classList.add(isDark ? 'dark' : 'light');
+  }
   // 'auto' = no class, handled by @media query
+
+  // Also apply chat theme
+  const chatTheme = localStorage.getItem('rocchat_chat_theme') || 'default';
+  applyChatTheme(chatTheme);
 }
+
+// Check scheduled theme every minute
+setInterval(() => {
+  const theme = localStorage.getItem('rocchat_theme');
+  if (theme === 'scheduled') applyTheme('scheduled');
+}, 60_000);
 
 async function loadDevices() {
   const container = document.getElementById('devices-list');

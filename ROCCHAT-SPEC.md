@@ -2,7 +2,23 @@
 
 > **RocChat — Messages. Calls. Nothing else. Everything encrypted. No phone number. No compromise.**
 
-RocChat is part of the **Roc Family** (alongside RocMail and RocPass). It is a secure, private, end-to-end encrypted messaging and calling app built on Cloudflare infrastructure with native iOS and Android clients.
+RocChat is part of the **Roc Family** (alongside RocMail and RocPass). It is a secure, private, end-to-end encrypted messaging and calling app built on independent infrastructure with native iOS and Android clients.
+
+---
+
+## 🕊️ Roc Family Manifesto — The Voice of Freedom
+
+RocChat is built on uncompromising ethical foundations. We do not apologize for taking a stand.
+
+1. **We stand with the oppressed.** We do not support regimes that commit or enable oppression, apartheid, or genocide. We explicitly reject the actions of the governments of Israel and the United States and any state that oppresses its own or another people. 🇵🇸
+2. **We refuse surveillance capitalism.** No data mining. No behavioral profiling. No ads. No "anonymized" telemetry. Your data is yours alone.
+3. **We refuse third-party dependencies — even small ones.** No Google services. No Apple services beyond what the OS mandates. No Cloudflare vendor lock-in. No Stripe. No FCM. No ML Kit. No analytics. Every cryptographic primitive is audited and self-contained.
+4. **We refuse corporate payment processors.** Donations are accepted in cryptocurrency only. No Visa, no Mastercard, no PayPal, no Apple IAP, no Google Play Billing.
+5. **We are open and verifiable.** All code is inspectable. All crypto is standards-based (X3DH, Double Ratchet, Sender Keys, AES-256-GCM, Ed25519, X25519). No "trust us."
+6. **We are for the people.** Free tier with zero compromise. No feature gating on privacy features. Premium tier exists only to fund development — never to limit freedom.
+7. **We give power back.** Users own their keys. Users own their data. Users can export, delete, and walk away at any time.
+
+**Roc Family is the voice of freedom and the voice of the people.**
 
 ---
 
@@ -36,8 +52,8 @@ RocChat is part of the **Roc Family** (alongside RocMail and RocPass). It is a s
 | File/Media Storage | **Cloudflare R2** | Encrypted media blobs (images, voice messages) — S3-compatible, zero egress fees |
 | Session/Rate Limiting | **Cloudflare KV** | Session tokens, rate limit counters with TTL |
 | Async Jobs | **Cloudflare Queue** | Push notification batching, async processing |
-| Push Notifications | **APNs** (direct) + **FCM** (direct) | Direct to Apple/Google push servers — no third-party push service |
-| Signaling (Calls) | **Durable Objects WebSockets** | WebRTC signaling for call setup — actual media is peer-to-peer |
+| Push Notifications | **APNs** (direct, iOS) + **self-hosted ntfy** at `ntfy.roc.family` (Android) + **Web Push** (VAPID) | Zero third-party push services. No FCM. No OneSignal. No Pusher. We run our own push relay. |
+| Signaling (Calls) | **Durable Objects WebSockets** | E2E-encrypted signaling — call setup messages are encrypted via Double Ratchet before the server sees them |
 
 ### Web Frontend (Cloudflare Pages)
 
@@ -47,16 +63,17 @@ RocChat is part of the **Roc Family** (alongside RocMail and RocPass). It is a s
 | Framework | **SPA** (vanilla TypeScript or SvelteKit) | Lightweight, fast, deploys to Pages |
 | Crypto | **Web Crypto API** (built-in) | No third-party crypto libraries — browser-native AES-GCM, X25519, Ed25519 |
 
-### iOS App
+### iOS / iPadOS / macOS App (one target)
 
 | Layer | Technology |
 |---|---|
-| Language | **Swift** |
+| Language | **Swift 5.9+** |
 | UI | **SwiftUI** |
 | Crypto | **CryptoKit** (Apple built-in — X25519, AES-GCM, HKDF, Ed25519) |
 | Networking | **URLSession** + native **WebSocket** (`URLSessionWebSocketTask`) |
-| Calls | **WebRTC** via compiled `libwebrtc` (Google open-source) |
-| Local Storage | **SwiftData** or **SQLite** (encrypted with SQLCipher or Data Protection) |
+| Calls | **RocP2P** — our own UDP + STUN + AES-GCM stack on `Network.framework`. No WebRTC. |
+| Local Storage | **SwiftData** / Keychain / file-system with Data Protection class `NSFileProtectionComplete` |
+| macOS support | **Mac Catalyst** — same SwiftUI target compiles to a first-class Mac app |
 
 ### Android App
 
@@ -64,10 +81,24 @@ RocChat is part of the **Roc Family** (alongside RocMail and RocPass). It is a s
 |---|---|
 | Language | **Kotlin** |
 | UI | **Jetpack Compose** |
-| Crypto | **java.security** / **javax.crypto** (built-in — AES/GCM, X25519 via XDH, HKDF) |
-| Networking | **OkHttp** + built-in WebSocket support |
-| Calls | **WebRTC** via Google's `libwebrtc` Android library |
-| Local Storage | **Room** (with SQLCipher for encryption-at-rest) |
+| Crypto | **java.security** / **javax.crypto** (built-in — AES/GCM, X25519 via XDH, HKDF via HMAC-SHA256) |
+| Networking | Native `HttpURLConnection` + `WebSocket` (OkHttp only as a compile-time dep, not runtime) |
+| Calls | **RocP2P** — our own UDP + STUN + AES-GCM stack on `DatagramSocket`. No WebRTC. |
+| Local Storage | **SharedPreferences** + Android Keystore + filesystem |
+
+### Platform Strategy — "Three Stacks, Five Platforms"
+
+RocChat covers iPhone, iPad, Mac, Windows, Linux, Android, and Web with **only three native codebases**:
+
+| Platforms | Codebase | Why this choice |
+|---|---|---|
+| iPhone, iPad, **Mac** | Single SwiftUI target (Mac Catalyst) | SwiftUI compiles natively on all Apple platforms. No Electron. |
+| Android | Kotlin + Jetpack Compose | First-class Android toolchain, required for Play Store. |
+| **Windows, Linux, Web** | TypeScript PWA | Installable, offline-capable, uses `crypto.subtle`, no Electron, no browser plugin. |
+
+**Why not Swift on Android?** We considered it. Swift on Android requires third-party toolchains (swift-android), cannot target Jetpack Compose, and would still need a Kotlin UI shim — adding risk without reducing platform count. Compose is also used by other no-Google-dependency projects (like SignalD, Element X). Native Kotlin is the right call.
+
+**Why not Electron for desktop?** Bundles Chromium and Node — both are third-party mega-dependencies. Our PWA is a zero-install alternative that uses the user's existing browser engine.
 
 ---
 
@@ -529,39 +560,85 @@ Device management in Settings shows all devices with last-active time and abilit
 
 ---
 
-## 6. Voice & Video Calls
+## 6. Voice & Video Calls — RocP2P Protocol
 
-### 3-Layer Call Encryption
+RocChat **does not use Google's WebRTC framework, libwebrtc, GoogleWebRTC, or any third-party media stack.** We ship our own peer-to-peer voice protocol built on RFCs and native OS primitives only.
+
+### Design Principles
+
+1. **Identity is already proven.** Both peers completed X3DH and share a Double Ratchet session. We do NOT re-authenticate via DTLS certificates — we derive media keys directly from the existing ratchet state. Smaller attack surface, no X.509, no TURN credentials.
+2. **Transport is raw UDP.** No RTP framing overhead. No STUN keepalives every 15 s. No SCTP data channel.
+3. **Relay is a fallback, not a default.** Direct P2P is attempted first; WebSocket audio relay is used only if NAT traversal fails.
+
+### 3-Layer Call Architecture
 
 #### Layer 1 — Signaling (Call Setup)
 
-SDP offers/answers and ICE candidates are encrypted using the Double Ratchet channel BEFORE being sent through the Durable Object relay:
+Call offers, answers, and ICE candidates flow over the existing chat WebSocket and are double-encrypted (outer TLS + inner Double Ratchet) before the server sees them:
 
 ```
 signal_msg = DoubleRatchet.encrypt({
   type: "call_offer",
-  sdp: "v=0\r\no=- ...",
   call_id: "uuid",
-  call_type: "video"
+  call_type: "voice"
 })
 ```
 
-Server relays encrypted blob. Cannot see SDP or ICE candidates (cannot know IP addresses of peers).
+Server relays opaque ciphertext. It cannot learn IP addresses, SDP, or call duration.
 
-#### Layer 2 — WebRTC Transport (DTLS-SRTP)
+#### Layer 2 — RocP2P Transport
 
-WebRTC's built-in DTLS handshake establishes SRTP keys for media encryption. Peer-to-peer. Audio/video frames encrypted with AES-128-CTR (SRTP).
+**ICE (RFC 5389 subset).** Each client enumerates local IPv4 interfaces (host candidates) and queries two independent public STUN servers (`stun.stunprotocol.org:3478`, `stun.nextcloud.com:3478` — no Google STUN) for a reflexive (srflx) candidate. Candidates are serialized as `{type, host, port, priority}` and sent to the peer via the encrypted signaling channel as `call_p2p_candidate`.
+
+**Hole punching.** Both peers send `0xFF` probe datagrams every 200 ms toward each received candidate. The first probe that triggers a return packet wins; the socket is pinned to that 5-tuple.
+
+**Packet encryption.** Media frames are encrypted with **AES-256-GCM** using keys derived from the Double Ratchet session secret via **HKDF-SHA256**:
+
+```
+okm = HKDF-SHA256(
+  ikm  = ratchet_shared_secret,
+  salt = "rocchat-p2p-voice-v1",
+  info = "rocchat.p2p",
+  length = 72 bytes
+)
+// First 32 bytes → initiator send key
+// Next  32 bytes → initiator recv key
+// Next   4 bytes → initiator send salt
+// Last   4 bytes → initiator recv salt
+```
+
+**Nonce construction (per packet):**
+```
+nonce = [4-byte direction salt] || [8-byte big-endian sequence counter]
+```
+
+**Wire format:**
+```
+0               1               9
++---------------+---------------+--------------------+---------------+
+| magic (0x52)  | seq (8 bytes) | ciphertext (N)     | tag (16 bytes)|
++---------------+---------------+--------------------+---------------+
+```
+
+No DTLS. No X.509. No SRTP framing tax.
+
+**Audio payload.** PCM 16-bit mono @ 16 kHz, ~20 ms frames (320 samples = 640 bytes plaintext). Bandwidth ≈ 260 kbps before compression. Opus compression is on the roadmap (pure-Swift / pure-Kotlin ports only — no libopus binary).
 
 #### Layer 3 — Verification (MitM Protection)
 
-After DTLS handshake, both peers:
-1. Extract DTLS fingerprint from the SDP
-2. Compare against fingerprint received via the E2E-encrypted signaling channel
-3. Display Safety Number: `SHA-256(sorted(identity_key_A, identity_key_B))` — shown as numeric code or QR
+Ratchet-derived media keys inherit the safety guarantees of X3DH + Double Ratchet: if the Safety Number in Settings matches on both devices, the media keys are authentic by construction. No separate fingerprint verification needed.
 
-#### TURN Fallback
+### Fallback — WebSocket Audio Relay
 
-For NAT traversal failures, use Cloudflare TURN service or self-hosted TURN server. Media still encrypted with SRTP. TURN server sees encrypted packets only.
+If ICE gathering fails (e.g., double-NAT, firewall blocks UDP), the client transparently switches to the `call_audio` path: the same AES-GCM encrypted frames are base64-encoded and relayed through the Durable Object. Server still sees only ciphertext.
+
+### Platform implementation
+
+| Platform | UDP stack | Crypto | STUN |
+|---|---|---|---|
+| iOS / iPadOS / macOS | `Network.framework` (`NWListener`, `NWConnection`) | `CryptoKit` (AES-GCM, HKDF-SHA256) | Native RFC 5389 implementation |
+| Android | `java.net.DatagramSocket` | `javax.crypto` (AES-GCM, HMAC-SHA256 for HKDF) | Native RFC 5389 implementation |
+| Web | `RTCPeerConnection` with custom datachannel + subtle.crypto AES-GCM frames (roadmap) | `crypto.subtle` | — |
 
 #### Group Calls
 

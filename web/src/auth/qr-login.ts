@@ -51,7 +51,7 @@ const ROC_BIRD_QR = `<svg viewBox="0 0 64 64" width="56" height="56">
 
 // ── Minimal QR Code generator (byte mode, auto version) ──
 
-function generateQRCodeSVG(data: string, size: number): string {
+export function generateQRCodeSVG(data: string, size: number): string {
   const modules = encodeQR(data);
   const moduleCount = modules.length;
   const cellSize = size / moduleCount;

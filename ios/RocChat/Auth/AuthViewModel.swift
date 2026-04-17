@@ -19,6 +19,7 @@ class AuthViewModel: ObservableObject {
         case .faceID: return "Face ID"
         case .touchID: return "Touch ID"
         case .opticID: return "Optic ID"
+        case .none: return "Biometric"
         @unknown default: return "Biometric"
         }
     }
@@ -37,6 +38,7 @@ class AuthViewModel: ObservableObject {
         // Check for existing session
         if let token = UserDefaults.standard.string(forKey: "session_token") {
             api.sessionToken = token
+            SessionManager.shared.loadCachedKeyMaterial()
             if biometricEnabled && biometricAvailable {
                 biometricLocked = true
             } else {
@@ -98,6 +100,9 @@ class AuthViewModel: ObservableObject {
                 UserDefaults.standard.set(result.userId, forKey: "user_id")
                 api.sessionToken = result.sessionToken
                 
+                // Initialize session manager key material
+                SessionManager.shared.loadCachedKeyMaterial()
+                
                 isAuthenticated = true
             } catch {
                 errorMessage = "Invalid username or passphrase."
@@ -133,10 +138,13 @@ class AuthViewModel: ObservableObject {
                 let signedPreKey = Curve25519.KeyAgreement.PrivateKey()
                 let signature = try identityKey.signature(for: signedPreKey.publicKey.rawRepresentation)
                 
-                var oneTimePreKeys: [Data] = []
+                // Generate identity DH key (X25519 for X3DH)
+                let identityDHKey = Curve25519.KeyAgreement.PrivateKey()
+                
+                var oneTimePreKeyPairs: [(pub: Data, priv: Data)] = []
                 for _ in 0..<20 {
                     let key = Curve25519.KeyAgreement.PrivateKey()
-                    oneTimePreKeys.append(key.publicKey.rawRepresentation)
+                    oneTimePreKeyPairs.append((key.publicKey.rawRepresentation, key.rawRepresentation))
                 }
                 
                 // Derive auth hash
@@ -157,15 +165,27 @@ class AuthViewModel: ObservableObject {
                     authHash: authHash.base64EncodedString(),
                     salt: salt.base64EncodedString(),
                     identityKey: identityKey.publicKey.rawRepresentation.base64EncodedString(),
+                    identityDHKey: identityDHKey.publicKey.rawRepresentation.base64EncodedString(),
                     identityPrivateEncrypted: encryptedKeys.base64EncodedString(),
                     signedPreKeyPublic: signedPreKey.publicKey.rawRepresentation.base64EncodedString(),
                     signedPreKeyPrivateEncrypted: signedPreKey.rawRepresentation.base64EncodedString(),
                     signedPreKeySignature: signature.base64EncodedString(),
-                    oneTimePreKeys: oneTimePreKeys.map { $0.base64EncodedString() }
+                    oneTimePreKeys: oneTimePreKeyPairs.map { $0.pub.base64EncodedString() }
                 )
                 
                 // Store keys locally
                 try RocCrypto.storeKeys(vaultKey: vaultKey, encryptedKeys: encryptedKeys)
+                
+                // Cache key material for E2E session manager
+                UserDefaults.standard.set(identityDHKey.publicKey.rawRepresentation, forKey: "rocchat_identity_dh_pub")
+                UserDefaults.standard.set(identityDHKey.rawRepresentation, forKey: "rocchat_identity_dh_priv")
+                SessionManager.shared.identityDHPublic = identityDHKey.publicKey.rawRepresentation
+                SessionManager.shared.identityDHPrivate = identityDHKey.rawRepresentation
+                SessionManager.shared.cacheKeyMaterial(
+                    signedPreKeyPub: signedPreKey.publicKey.rawRepresentation,
+                    signedPreKeyPriv: signedPreKey.rawRepresentation,
+                    otpKeys: oneTimePreKeyPairs.enumerated().map { (i, kp) in (id: i, privateKey: kp.priv, publicKey: kp.pub) }
+                )
                 
                 // Save session from registration response
                 UserDefaults.standard.set(result.sessionToken, forKey: "session_token")
@@ -188,10 +208,16 @@ class AuthViewModel: ObservableObject {
     }
     
     func logout() {
-        UserDefaults.standard.removeObject(forKey: "session_token")
-        UserDefaults.standard.removeObject(forKey: "user_id")
+        // Server-side session invalidation (fire-and-forget)
+        Task { try? await api.postRaw("/auth/logout", body: [:]) }
+        
+        // Clear all stored data
+        let keys = ["session_token", "user_id", "encrypted_keys", "identity_key",
+                     "identity_pub", "spk_pub", "biometric_enabled"]
+        keys.forEach { UserDefaults.standard.removeObject(forKey: $0) }
         api.sessionToken = nil
         isAuthenticated = false
+        biometricLocked = false
     }
     
     private static let bip39Words = [

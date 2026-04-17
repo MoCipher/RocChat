@@ -231,6 +231,7 @@ async function performX3DH(conversationId: string, recipientUserId: string): Pro
 
   const bundle: PreKeyBundle = {
     identityKey: fromBase64(bundleData.identityKey),
+    identityDHKey: bundleData.identityDHKey ? fromBase64(bundleData.identityDHKey) : undefined,
     signedPreKey: {
       id: bundleData.signedPreKey.id,
       publicKey: fromBase64(bundleData.signedPreKey.publicKey),

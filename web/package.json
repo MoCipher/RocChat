@@ -9,7 +9,10 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@rocchat/shared": "*"
+    "@fontsource/jetbrains-mono": "^5.0.20",
+    "@fontsource/montserrat": "^5.0.19",
+    "@rocchat/shared": "*",
+    "lucide": "^0.460.0"
   },
   "devDependencies": {
     "typescript": "^5.7.0",

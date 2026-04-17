@@ -1,5 +1,8 @@
 import SwiftUI
 import UIKit
+import CryptoKit
+import AVFoundation
+import PhotosUI
 
 // MARK: - Data Models
 
@@ -9,11 +12,14 @@ struct ChatConversation: Identifiable {
     var name: String?
     let members: [ConversationMember]
     var lastMessageAt: String?
+    var muted: Bool
+    var archived: Bool
 
     struct ConversationMember {
         let userId: String
         let username: String
         let displayName: String
+        let avatarUrl: String?
     }
 }
 
@@ -26,6 +32,7 @@ struct ChatMessage: Identifiable {
     let ratchetHeader: String
     let messageType: String
     let createdAt: String
+    let expiresAt: Int?
 }
 
 // MARK: - Main Tab View
@@ -52,8 +59,8 @@ struct MainTabView: View {
 
             SettingsView()
                 .tabItem {
-                    Image(systemName: "gearshape.fill")
-                    Text("Settings")
+                    Image(systemName: "person.circle.fill")
+                    Text("Profile")
                 }
                 .tag(2)
         }
@@ -61,6 +68,52 @@ struct MainTabView: View {
         .overlay {
             CallOverlay()
         }
+        .onChange(of: CallManager.shared.callStatus) { _, newStatus in
+            // Dismiss keyboard during active calls so it doesn't overlap the call UI
+            if newStatus != .idle {
+                UIApplication.shared.sendAction(
+                    #selector(UIResponder.resignFirstResponder),
+                    to: nil, from: nil, for: nil
+                )
+            }
+        }
+    }
+}
+
+// MARK: - Avatar View
+
+struct AvatarView: View {
+    let name: String
+    let avatarUrl: String?
+    let size: CGFloat
+
+    var body: some View {
+        if let urlStr = avatarUrl, !urlStr.isEmpty, let url = URL(string: urlStr.hasPrefix("http") ? urlStr : "https://chat.mocipher.com\(urlStr)") {
+            AsyncImage(url: url) { phase in
+                switch phase {
+                case .success(let image):
+                    image.resizable().scaledToFill()
+                        .frame(width: size, height: size)
+                        .clipShape(Circle())
+                default:
+                    fallbackAvatar
+                }
+            }
+        } else {
+            fallbackAvatar
+        }
+    }
+
+    private var fallbackAvatar: some View {
+        Circle()
+            .fill(LinearGradient(colors: [.rocGoldLight, .rocGold, .rocGoldDark], startPoint: .topLeading, endPoint: .bottomTrailing))
+            .frame(width: size, height: size)
+            .overlay(
+                Text(String(name.split(separator: " ").prefix(2).compactMap { $0.first }).uppercased())
+                    .font(.system(size: size * 0.33, weight: .bold))
+                    .foregroundColor(.white)
+            )
+            .shadow(color: .rocGold.opacity(0.2), radius: 4, y: 2)
     }
 }
 
@@ -72,31 +125,88 @@ struct ChatsView: View {
     @State private var isLoading = true
     @State private var showNewChat = false
     @State private var selectedConversation: ChatConversation?
+    @State private var showNotifModePicker = false
+    @State private var notifModeConvId: String = ""
+    @State private var folders: [(id: String, name: String, icon: String, conversationIds: [String])] = []
+    @State private var selectedFolderId: String? = nil
+    @State private var showFolderManager = false
+    @State private var folderMenuConvId: String = ""
     private let userId = UserDefaults.standard.string(forKey: "user_id") ?? ""
 
     var filteredConversations: [ChatConversation] {
-        if searchText.isEmpty { return conversations }
-        return conversations.filter {
-            conversationName($0).localizedCaseInsensitiveContains(searchText)
+        var result = conversations
+        if let folderId = selectedFolderId,
+           let folder = folders.first(where: { $0.id == folderId }) {
+            result = result.filter { folder.conversationIds.contains($0.id) }
         }
+        if !searchText.isEmpty {
+            result = result.filter {
+                conversationName($0).localizedCaseInsensitiveContains(searchText)
+            }
+        }
+        return result
     }
 
     var body: some View {
         NavigationStack {
-            Group {
-                if isLoading {
-                    ProgressView()
-                        .tint(.rocGold)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if conversations.isEmpty {
-                    emptyState
-                } else {
-                    conversationList
+            VStack(spacing: 0) {
+                if !folders.isEmpty {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            Button {
+                                selectedFolderId = nil
+                            } label: {
+                                Text("All")
+                                    .font(.subheadline.weight(.medium))
+                                    .padding(.horizontal, 14)
+                                    .padding(.vertical, 7)
+                                    .background(selectedFolderId == nil ? Color.rocGold : Color.rocGold.opacity(0.15))
+                                    .foregroundColor(selectedFolderId == nil ? .white : .rocGold)
+                                    .clipShape(Capsule())
+                            }
+                            ForEach(folders, id: \.id) { folder in
+                                Button {
+                                    selectedFolderId = folder.id
+                                } label: {
+                                    HStack(spacing: 4) {
+                                        Text(folder.icon)
+                                        Text(folder.name)
+                                    }
+                                    .font(.subheadline.weight(.medium))
+                                    .padding(.horizontal, 14)
+                                    .padding(.vertical, 7)
+                                    .background(selectedFolderId == folder.id ? Color.rocGold : Color.rocGold.opacity(0.15))
+                                    .foregroundColor(selectedFolderId == folder.id ? .white : .rocGold)
+                                    .clipShape(Capsule())
+                                }
+                            }
+                        }
+                        .padding(.horizontal)
+                        .padding(.vertical, 8)
+                    }
+                }
+
+                Group {
+                    if isLoading {
+                        ProgressView()
+                            .tint(.rocGold)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    } else if conversations.isEmpty {
+                        emptyState
+                    } else {
+                        conversationList
+                    }
                 }
             }
             .navigationTitle("Chats")
             .searchable(text: $searchText, prompt: "Search conversations")
             .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button(action: { showFolderManager = true }) {
+                        Image(systemName: "folder.fill.badge.plus")
+                            .foregroundColor(.rocGold)
+                    }
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button(action: { showNewChat = true }) {
                         Image(systemName: "square.and.pencil")
@@ -114,8 +224,14 @@ struct ChatsView: View {
             .navigationDestination(item: $selectedConversation) { conv in
                 ConversationView(conversation: conv)
             }
+            .sheet(isPresented: $showFolderManager) {
+                FolderManagerSheet(folders: $folders, onReload: { Task { await loadFolders() } })
+            }
         }
-        .task { await loadConversations() }
+        .task {
+            await loadConversations()
+            await loadFolders()
+        }
     }
 
     private var emptyState: some View {
@@ -140,43 +256,109 @@ struct ChatsView: View {
     }
 
     private var conversationList: some View {
-        List(filteredConversations) { conv in
-            Button {
-                selectedConversation = conv
-            } label: {
-                HStack(spacing: 12) {
-                    Circle()
-                        .fill(Color.rocGold.opacity(0.15))
-                        .frame(width: 48, height: 48)
-                        .overlay(
-                            Text(initials(for: conv))
-                                .font(.system(size: 16, weight: .bold))
-                                .foregroundColor(.rocGold)
-                        )
+        List {
+            ForEach(filteredConversations) { conv in
+                Button {
+                    selectedConversation = conv
+                } label: {
+                    HStack(spacing: 14) {
+                        let other = conv.members.first { $0.userId != userId }
+                        AvatarView(name: conversationName(conv), avatarUrl: other?.avatarUrl, size: 52)
 
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(conversationName(conv))
-                            .font(.body.weight(.medium))
-                            .lineLimit(1)
-                        Text("🔒 Encrypted message")
-                            .font(.caption)
-                            .foregroundColor(.textSecondary)
-                            .lineLimit(1)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(conversationName(conv))
+                                .font(.body.weight(.semibold))
+                                .foregroundColor(.adaptiveText)
+                                .lineLimit(1)
+                            HStack(spacing: 3) {
+                                Text("🔒").font(.system(size: 9))
+                                Text("Encrypted message")
+                                    .font(.subheadline)
+                                    .foregroundColor(.adaptiveTextSec)
+                                    .lineLimit(1)
+                            }
+                        }
+
+                        Spacer()
+
+                        VStack(alignment: .trailing, spacing: 4) {
+                            if let time = conv.lastMessageAt {
+                                Text(formatRelativeTime(time))
+                                    .font(.caption)
+                                    .foregroundColor(.adaptiveTextSec)
+                            }
+                            if conv.muted {
+                                Image(systemName: "speaker.slash.fill")
+                                    .font(.system(size: 11))
+                                    .foregroundColor(.adaptiveTextSec)
+                            }
+                        }
                     }
-
-                    Spacer()
-
-                    if let time = conv.lastMessageAt {
-                        Text(formatRelativeTime(time))
-                            .font(.caption2)
-                            .foregroundColor(.textSecondary)
+                    .padding(.vertical, 4)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .contextMenu {
+                    if !folders.isEmpty {
+                        Menu("Add to Folder") {
+                            ForEach(folders, id: \.id) { folder in
+                                if !folder.conversationIds.contains(conv.id) {
+                                    Button {
+                                        Task { await addToFolder(folderId: folder.id, convId: conv.id) }
+                                    } label: {
+                                        Label("\(folder.icon) \(folder.name)", systemImage: "folder.badge.plus")
+                                    }
+                                }
+                            }
+                        }
+                        let containingFolders = folders.filter { $0.conversationIds.contains(conv.id) }
+                        if !containingFolders.isEmpty {
+                            Menu("Remove from Folder") {
+                                ForEach(containingFolders, id: \.id) { folder in
+                                    Button(role: .destructive) {
+                                        Task { await removeFromFolder(folderId: folder.id, convId: conv.id) }
+                                    } label: {
+                                        Label("\(folder.icon) \(folder.name)", systemImage: "folder.badge.minus")
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
-                .contentShape(Rectangle())
+                .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                    Button(role: .destructive) {
+                        Task { await deleteConversation(conv.id) }
+                    } label: {
+                        Label("Delete", systemImage: "trash")
+                    }
+                    Button {
+                        Task { await toggleArchive(conv.id) }
+                    } label: {
+                        Label("Archive", systemImage: "archivebox")
+                    }
+                    .tint(.blue)
+                    Button {
+                        notifModeConvId = conv.id
+                        showNotifModePicker = true
+                    } label: {
+                        Label("Notifications", systemImage: "bell.badge")
+                    }
+                    .tint(.orange)
+                }
             }
-            .buttonStyle(.plain)
         }
         .listStyle(.plain)
+        .refreshable {
+            await loadConversations()
+        }
+        .confirmationDialog("Notification Mode", isPresented: $showNotifModePicker) {
+            Button("Normal — All notifications") { Task { await setNotificationMode(notifModeConvId, "normal") } }
+            Button("Quiet — Badge only, no sound") { Task { await setNotificationMode(notifModeConvId, "quiet") } }
+            Button("Focus — @mentions & replies only") { Task { await setNotificationMode(notifModeConvId, "focus") } }
+            Button("Emergency — Calls ring only") { Task { await setNotificationMode(notifModeConvId, "emergency") } }
+            Button("Silent — No notifications") { Task { await setNotificationMode(notifModeConvId, "silent") } }
+            Button("Cancel", role: .cancel) {}
+        }
     }
 
     private func loadConversations() async {
@@ -189,15 +371,21 @@ struct ChatsView: View {
                     ChatConversation.ConversationMember(
                         userId: $0["user_id"] as? String ?? "",
                         username: $0["username"] as? String ?? "",
-                        displayName: $0["display_name"] as? String ?? ""
+                        displayName: $0["display_name"] as? String ?? "",
+                        avatarUrl: $0["avatar_url"] as? String
                     )
                 }
+                let muted = dict["muted"] as? Bool ?? false
+                let archived = dict["archived"] as? Bool ?? false
+                if archived { return nil } // hide archived
                 return ChatConversation(
                     id: id,
                     type: dict["type"] as? String ?? "direct",
                     name: dict["name"] as? String,
                     members: members,
-                    lastMessageAt: dict["last_message_at"] as? String
+                    lastMessageAt: dict["last_message_at"] as? String,
+                    muted: muted,
+                    archived: archived
                 )
             }
         } catch {}
@@ -214,6 +402,171 @@ struct ChatsView: View {
     private func initials(for conv: ChatConversation) -> String {
         let name = conversationName(conv)
         return String(name.split(separator: " ").prefix(2).compactMap { $0.first }).uppercased()
+    }
+
+    private func setNotificationMode(_ convId: String, _ mode: String) async {
+        do {
+            let _ = try await APIClient.shared.postRaw("/messages/conversations/\(convId)/notification-mode", body: ["mode": mode])
+            if let idx = conversations.firstIndex(where: { $0.id == convId }) {
+                conversations[idx].muted = mode != "normal"
+            }
+        } catch {}
+    }
+
+    private func toggleArchive(_ convId: String) async {
+        do {
+            let data = try await APIClient.shared.postRaw("/messages/conversations/\(convId)/archive", body: [:])
+            if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let archived = json["archived"] as? Bool, archived {
+                conversations.removeAll { $0.id == convId }
+                if selectedConversation?.id == convId { selectedConversation = nil }
+            }
+        } catch {}
+    }
+
+    private func deleteConversation(_ convId: String) async {
+        do {
+            _ = try await APIClient.shared.deleteRaw("/messages/conversations/\(convId)")
+            conversations.removeAll { $0.id == convId }
+            if selectedConversation?.id == convId { selectedConversation = nil }
+        } catch {}
+    }
+
+    private func loadFolders() async {
+        do {
+            let data = try await APIClient.shared.getRaw("/features/folders")
+            if let arr = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
+                folders = arr.compactMap { dict in
+                    guard let id = dict["id"] as? String,
+                          let name = dict["name"] as? String else { return nil }
+                    let icon = dict["icon"] as? String ?? "📁"
+                    let convIds = dict["conversation_ids"] as? [String] ?? []
+                    return (id: id, name: name, icon: icon, conversationIds: convIds)
+                }
+            }
+        } catch {}
+    }
+
+    private func addToFolder(folderId: String, convId: String) async {
+        do {
+            _ = try await APIClient.shared.postRaw("/features/folders/\(folderId)/chats", body: ["conversation_id": convId])
+            await loadFolders()
+        } catch {}
+    }
+
+    private func removeFromFolder(folderId: String, convId: String) async {
+        do {
+            _ = try await APIClient.shared.deleteRaw("/features/folders/\(folderId)/chats/\(convId)")
+            await loadFolders()
+        } catch {}
+    }
+}
+
+// MARK: - Folder Manager Sheet
+
+struct FolderManagerSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @Binding var folders: [(id: String, name: String, icon: String, conversationIds: [String])]
+    var onReload: () -> Void
+    @State private var newFolderName = ""
+    @State private var newFolderIcon = "📁"
+    @State private var showNewFolder = false
+
+    private let emojiPresets = ["📁", "⭐", "💼", "👥", "🏠", "🎮", "🏢", "❤️", "🔒", "📌", "🎵", "📸", "✈️", "🛒", "📚", "🏋️", "🍕", "🎉", "💬", "🔔"]
+
+    var body: some View {
+        NavigationStack {
+            List {
+                if showNewFolder {
+                    Section("New Folder") {
+                        TextField("Folder name", text: $newFolderName)
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 10) {
+                                ForEach(emojiPresets, id: \.self) { emoji in
+                                    Button {
+                                        newFolderIcon = emoji
+                                    } label: {
+                                        Text(emoji)
+                                            .font(.title2)
+                                            .padding(6)
+                                            .background(newFolderIcon == emoji ? Color.rocGold.opacity(0.3) : Color.clear)
+                                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                                    }
+                                }
+                            }
+                        }
+                        Button("Create") {
+                            guard !newFolderName.trimmingCharacters(in: .whitespaces).isEmpty else { return }
+                            Task { await createFolder() }
+                        }
+                        .disabled(newFolderName.trimmingCharacters(in: .whitespaces).isEmpty)
+                    }
+                }
+
+                Section("Folders") {
+                    if folders.isEmpty {
+                        Text("No folders yet")
+                            .foregroundColor(.textSecondary)
+                    }
+                    ForEach(folders, id: \.id) { folder in
+                        HStack {
+                            Text(folder.icon)
+                            Text(folder.name)
+                                .font(.body.weight(.medium))
+                            Spacer()
+                            Text("\(folder.conversationIds.count) chats")
+                                .font(.caption)
+                                .foregroundColor(.textSecondary)
+                        }
+                    }
+                    .onDelete { indexSet in
+                        for idx in indexSet {
+                            let folder = folders[idx]
+                            Task { await deleteFolder(folder.id) }
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Chat Folders")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Done") { dismiss() }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        showNewFolder.toggle()
+                    } label: {
+                        Image(systemName: showNewFolder ? "minus.circle" : "plus.circle")
+                            .foregroundColor(.rocGold)
+                    }
+                }
+            }
+        }
+    }
+
+    private func createFolder() async {
+        do {
+            let body: [String: Any] = ["name": newFolderName.trimmingCharacters(in: .whitespaces), "icon": newFolderIcon]
+            let data = try await APIClient.shared.postRaw("/features/folders", body: body)
+            if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let id = json["id"] as? String,
+               let name = json["name"] as? String {
+                let icon = json["icon"] as? String ?? "📁"
+                folders.append((id: id, name: name, icon: icon, conversationIds: []))
+                newFolderName = ""
+                newFolderIcon = "📁"
+                showNewFolder = false
+            }
+        } catch {}
+    }
+
+    private func deleteFolder(_ folderId: String) async {
+        do {
+            _ = try await APIClient.shared.deleteRaw("/features/folders/\(folderId)")
+            folders.removeAll { $0.id == folderId }
+            onReload()
+        } catch {}
     }
 }
 
@@ -248,8 +601,10 @@ struct NewChatView: View {
                                    let convId = json["conversation_id"] as? String {
                                     let conv = ChatConversation(
                                         id: convId, type: "direct", name: nil,
-                                        members: [.init(userId: user.id, username: user.username, displayName: user.displayName)],
-                                        lastMessageAt: nil
+                                        members: [.init(userId: user.id, username: user.username, displayName: user.displayName, avatarUrl: nil)],
+                                        lastMessageAt: nil,
+                                        muted: false,
+                                        archived: false
                                     )
                                     onSelect(conv)
                                 }
@@ -300,6 +655,22 @@ struct ConversationView: View {
     @State private var wsTask: URLSessionWebSocketTask?
     @State private var disappearTimer: Int = 0
     @State private var showDisappearMenu = false
+    @State private var showSafetyNumber = false
+    @State private var safetyNumber = ""
+    @State private var isOffline = false
+    @State private var isRecording = false
+    @State private var audioRecorder: AVAudioRecorder?
+    @State private var recordingURL: URL?
+    @State private var recordingElapsed: Int = 0
+    @State private var recordingTimer: Timer?
+    @State private var recordingLevels: [CGFloat] = Array(repeating: 0.1, count: 32)
+    @State private var pendingAudioURL: URL?
+    @State private var pendingAudioDuration: Int = 0
+    @State private var showVideoRecorder = false
+    @State private var showScheduleSheet = false
+    @State private var scheduleDate = Date().addingTimeInterval(3600)
+    @State private var editingMessageId: String?
+    @State private var replyingTo: ChatMessage?
     private let userId = UserDefaults.standard.string(forKey: "user_id") ?? ""
 
     private var convName: String {
@@ -325,9 +696,30 @@ struct ConversationView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 4) {
-                        ForEach(messages) { msg in
-                            MessageBubbleView(message: msg, isMine: msg.senderId == userId)
+                        ForEach(messages.filter { msg in
+                            guard let expires = msg.expiresAt else { return true }
+                            return expires > Int(Date().timeIntervalSince1970)
+                        }) { msg in
+                            MessageBubbleView(
+                                message: msg,
+                                isMine: msg.senderId == userId,
+                                onReact: { emoji in Task { await reactToMessage(msg.id, emoji: emoji) } },
+                                onEdit: { editingMessageId = msg.id; inputText = msg.ciphertext },
+                                onDelete: { Task { await deleteMessage(msg.id) } },
+                                onPin: { Task { await pinMessage(msg.id) } },
+                                onReply: {
+                                    withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                                        replyingTo = msg
+                                    }
+                                }
+                            )
                                 .id(msg.id)
+                                .transition(.asymmetric(
+                                    insertion: .scale(scale: 0.85, anchor: .bottomTrailing)
+                                        .combined(with: .opacity)
+                                        .combined(with: .offset(y: 12)),
+                                    removal: .opacity.combined(with: .scale(scale: 0.9))
+                                ))
                         }
                     }
                     .padding(.horizontal, 12)
@@ -335,30 +727,165 @@ struct ConversationView: View {
                 }
                 .onChange(of: messages.count) { _ in
                     if let last = messages.last {
-                        withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
+                        #if canImport(UIKit)
+                        UIImpactFeedbackGenerator(style: .soft).impactOccurred()
+                        #endif
+                        withAnimation(.spring(response: 0.42, dampingFraction: 0.72)) {
+                            proxy.scrollTo(last.id, anchor: .bottom)
+                        }
                     }
                 }
             }
 
-            // Composer
-            HStack(spacing: 8) {
-                TextField("Type a message...", text: $inputText, axis: .vertical)
-                    .textFieldStyle(.roundedBorder)
-                    .lineLimit(1...4)
-                    .onSubmit { sendMessage() }
-
-                Button(action: sendMessage) {
-                    Image(systemName: "paperplane.fill")
-                        .foregroundColor(inputText.trimmingCharacters(in: .whitespaces).isEmpty ? .textSecondary : .rocGold)
+            // Reply preview banner
+            if let reply = replyingTo {
+                HStack(spacing: 10) {
+                    Rectangle()
+                        .fill(Color.rocGold)
+                        .frame(width: 3)
+                        .cornerRadius(1.5)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Replying to \(reply.senderId == userId ? "yourself" : "message")")
+                            .font(.caption2)
+                            .foregroundColor(.rocGold)
+                        Text(reply.ciphertext.isEmpty ? "🔒 Encrypted" : reply.ciphertext)
+                            .font(.caption)
+                            .foregroundColor(.adaptiveTextSec)
+                            .lineLimit(1)
+                    }
+                    Spacer()
+                    Button {
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
+                            replyingTo = nil
+                        }
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 18))
+                            .foregroundColor(.adaptiveTextSec)
+                    }
                 }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+                .background(Color.rocGold.opacity(0.08))
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+
+            // Composer — Roc Family unique capsule style
+            if let url = pendingAudioURL {
+                AudioPreviewBar(
+                    url: url,
+                    duration: pendingAudioDuration,
+                    onDiscard: {
+                        try? FileManager.default.removeItem(at: url)
+                        pendingAudioURL = nil
+                    },
+                    onSend: {
+                        let u = url; let d = pendingAudioDuration
+                        pendingAudioURL = nil
+                        Task { await sendAudioNote(url: u, duration: d) }
+                    }
+                )
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+                .background(.ultraThinMaterial)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            } else if isRecording {
+                RecordingBar(
+                    elapsed: recordingElapsed,
+                    levels: recordingLevels,
+                    onCancel: { cancelRecording() },
+                    onSend: { finishRecording() }
+                )
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+                .background(.ultraThinMaterial)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            } else {
+            HStack(alignment: .bottom, spacing: 10) {
+                // Mic button (tap to start recording; stop/send happens in the recording bar)
+                Button(action: { startRecording() }) {
+                    ZStack {
+                        Circle()
+                            .fill(Color.rocGold.opacity(0.12))
+                            .frame(width: 40, height: 40)
+                        Image(systemName: "mic.fill")
+                            .font(.system(size: 18, weight: .semibold))
+                            .foregroundColor(.rocGold)
+                    }
+                }
+                .buttonStyle(.plain)
+
+                // Video message button
+                Button(action: { showVideoRecorder = true }) {
+                    ZStack {
+                        Circle()
+                            .fill(Color.rocGold.opacity(0.12))
+                            .frame(width: 40, height: 40)
+                        Image(systemName: "video.fill")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundColor(.rocGold)
+                    }
+                }
+                .buttonStyle(.plain)
+
+                // Capsule text field
+                HStack(alignment: .center, spacing: 6) {
+                    TextField("Type a message...", text: $inputText, axis: .vertical)
+                        .textFieldStyle(.plain)
+                        .lineLimit(1...5)
+                        .onSubmit { sendMessage() }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                }
+                .background(
+                    RoundedRectangle(cornerRadius: 22, style: .continuous)
+                        .fill(Color(.secondarySystemBackground))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 22, style: .continuous)
+                        .stroke(Color.rocGold.opacity(inputText.isEmpty ? 0.0 : 0.4), lineWidth: 1)
+                )
+                .animation(.easeInOut(duration: 0.18), value: inputText.isEmpty)
+
+                // Send button (morphs based on content)
+                Button(action: sendMessage) {
+                    ZStack {
+                        Circle()
+                            .fill(
+                                inputText.trimmingCharacters(in: .whitespaces).isEmpty
+                                ? Color.gray.opacity(0.18)
+                                : Color.rocGold
+                            )
+                            .frame(width: 40, height: 40)
+                            .shadow(color: Color.rocGold.opacity(inputText.isEmpty ? 0 : 0.35), radius: 6, y: 2)
+                        Image(systemName: "arrow.up")
+                            .font(.system(size: 16, weight: .bold))
+                            .foregroundColor(
+                                inputText.trimmingCharacters(in: .whitespaces).isEmpty ? .gray : .white
+                            )
+                            .rotationEffect(.degrees(inputText.isEmpty ? 0 : -0))
+                    }
+                    .scaleEffect(inputText.trimmingCharacters(in: .whitespaces).isEmpty ? 0.92 : 1.0)
+                    .animation(.spring(response: 0.35, dampingFraction: 0.6), value: inputText)
+                }
+                .buttonStyle(.plain)
                 .disabled(inputText.trimmingCharacters(in: .whitespaces).isEmpty || isSending)
+                .contextMenu {
+                    Button {
+                        showScheduleSheet = true
+                    } label: {
+                        Label("Schedule Message", systemImage: "clock")
+                    }
+                }
             }
             .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(Color(.systemBackground))
+            .padding(.vertical, 10)
+            .background(.ultraThinMaterial)
+            } // else !isRecording
         }
         .navigationTitle(convName)
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.hidden, for: .tabBar)
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {
                 Button(action: {
@@ -393,11 +920,26 @@ struct ConversationView: View {
                     Image(systemName: disappearTimer > 0 ? "timer" : "timer")
                         .foregroundColor(disappearTimer > 0 ? .turquoise : .rocGold)
                 }
+                Button(action: { loadSafetyNumber() }) {
+                    Image(systemName: "shield.fill").foregroundColor(.rocGold)
+                }
             }
         }
         .task { await loadMessages() }
-        .onAppear { connectWebSocket() }
+        .onAppear {
+            disappearTimer = UserDefaults.standard.integer(forKey: "disappear_\(conversation.id)")
+            connectWebSocket()
+            // Flush any queued messages on appear
+            Task { await flushMessageQueue() }
+            // Screenshot detection
+            NotificationCenter.default.addObserver(forName: UIApplication.userDidTakeScreenshotNotification, object: nil, queue: .main) { _ in
+                Task { await notifyScreenshot() }
+            }
+        }
         .onDisappear { wsTask?.cancel(with: .goingAway, reason: nil); wsTask = nil }
+        .onChange(of: disappearTimer) { newValue in
+            UserDefaults.standard.set(newValue, forKey: "disappear_\(conversation.id)")
+        }
         .confirmationDialog("Disappearing Messages", isPresented: $showDisappearMenu) {
             Button("Off") { disappearTimer = 0 }
             Button("5 minutes") { disappearTimer = 300 }
@@ -409,6 +951,284 @@ struct ConversationView: View {
         } message: {
             Text("New messages will auto-delete after the selected time.")
         }
+        .sheet(isPresented: $showSafetyNumber) {
+            SafetyNumberSheet(safetyNumber: safetyNumber, otherName: convName)
+        }
+        .sheet(isPresented: $showVideoRecorder) {
+            VideoMessageRecorder { url, duration in
+                showVideoRecorder = false
+                if let u = url {
+                    Task { await sendVideoNote(url: u, duration: duration) }
+                }
+            }
+        }
+        .sheet(isPresented: $showScheduleSheet) {
+            NavigationStack {
+                VStack(spacing: 20) {
+                    Text("Schedule Message").font(.headline)
+                    DatePicker("Send at", selection: $scheduleDate, in: Date()..., displayedComponents: [.date, .hourAndMinute])
+                        .datePickerStyle(.graphical)
+                        .tint(.rocGold)
+                    Button("Schedule") {
+                        scheduleMessage()
+                        showScheduleSheet = false
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.rocGold)
+                    .disabled(inputText.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+                .padding()
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancel") { showScheduleSheet = false }
+                    }
+                }
+            }
+            .presentationDetents([.medium])
+        }
+    }
+
+    private func loadSafetyNumber() {
+        Task {
+            guard let myKeyB64 = UserDefaults.standard.string(forKey: "identity_pub") else { return }
+            let others = conversation.members.filter { $0.userId != userId }
+            guard let peer = others.first else { return }
+            do {
+                let data = try await APIClient.shared.getRaw("/keys/bundle/\(peer.userId)")
+                if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   let bundle = json["bundle"] as? [String: Any],
+                   let theirKeyB64 = bundle["identity_key"] as? String,
+                   let myKey = Data(base64Encoded: myKeyB64),
+                   let theirKey = Data(base64Encoded: theirKeyB64) {
+                    // Sort keys for deterministic order, then SHA-512 → 12 groups of 5 digits
+                    let sorted = myKey.lexicographicallyPrecedes(theirKey)
+                        ? myKey + theirKey : theirKey + myKey
+                    let hash = SHA512.hash(data: sorted)
+                    let bytes = Array(hash)
+                    var groups: [String] = []
+                    var i = 0
+                    while groups.count < 12 && i + 3 < bytes.count {
+                        let num = (UInt32(bytes[i]) << 24) | (UInt32(bytes[i+1]) << 16) |
+                                  (UInt32(bytes[i+2]) << 8) | UInt32(bytes[i+3])
+                        groups.append(String(format: "%05d", num % 100000))
+                        i += 5
+                    }
+                    safetyNumber = groups.joined(separator: " ")
+                    showSafetyNumber = true
+                }
+            } catch { /* ignore */ }
+        }
+    }
+
+    private func startRecording() {
+        let session = AVAudioSession.sharedInstance()
+        do {
+            try session.setCategory(.playAndRecord, mode: .default)
+            try session.setActive(true)
+        } catch { return }
+
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("voice_note_\(UUID().uuidString).m4a")
+        let settings: [String: Any] = [
+            AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
+            AVSampleRateKey: 44100,
+            AVNumberOfChannelsKey: 1,
+            AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue,
+        ]
+        do {
+            let recorder = try AVAudioRecorder(url: url, settings: settings)
+            recorder.isMeteringEnabled = true
+            recorder.record()
+            audioRecorder = recorder
+            recordingURL = url
+            recordingElapsed = 0
+            recordingLevels = Array(repeating: 0.1, count: 32)
+            withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) { isRecording = true }
+
+            // Poll levels + timer at 10Hz
+            recordingTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in
+                guard let r = audioRecorder else { return }
+                r.updateMeters()
+                let p = r.averagePower(forChannel: 0) // dB, -160..0
+                let norm = max(0.05, min(1.0, CGFloat(pow(10, p / 20))))
+                recordingLevels.removeFirst()
+                recordingLevels.append(norm)
+                let secs = Int(r.currentTime)
+                if secs != recordingElapsed { recordingElapsed = secs }
+                if secs >= 300 { finishRecording() } // 5 min cap
+            }
+            if let t = recordingTimer { RunLoop.main.add(t, forMode: .common) }
+        } catch { /* ignore */ }
+    }
+
+    private func cancelRecording() {
+        recordingTimer?.invalidate(); recordingTimer = nil
+        audioRecorder?.stop()
+        if let url = recordingURL { try? FileManager.default.removeItem(at: url) }
+        audioRecorder = nil
+        recordingURL = nil
+        withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) { isRecording = false }
+    }
+
+    private func finishRecording() {
+        recordingTimer?.invalidate(); recordingTimer = nil
+        guard let recorder = audioRecorder, let url = recordingURL else {
+            withAnimation { isRecording = false }
+            return
+        }
+        let duration = Int(recorder.currentTime)
+        recorder.stop()
+        audioRecorder = nil
+        recordingURL = nil
+        withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+            isRecording = false
+            pendingAudioURL = url
+            pendingAudioDuration = max(1, duration)
+        }
+    }
+
+    private func sendAudioNote(url: URL, duration: Int) async {
+        guard let fileData = try? Data(contentsOf: url) else { return }
+        try? FileManager.default.removeItem(at: url)
+
+        let others = conversation.members.filter { $0.userId != userId }
+        guard let recipientId = others.first?.userId else { return }
+
+        // Encrypt file
+        let fileKey = SymmetricKey(size: .bits256)
+        let nonce = AES.GCM.Nonce()
+        guard let sealed = try? AES.GCM.seal(fileData, using: fileKey, nonce: nonce),
+              let combined = sealed.combined else { return }
+        let ciphertextWithTag = combined.dropFirst(12)
+        let fileIvData = Data(nonce)
+        let fileKeyData = fileKey.withUnsafeBytes { Data($0) }
+        let fileHash = SHA256.hash(data: fileData)
+
+        guard let uploadData = try? await APIClient.shared.uploadBinary(
+            "/media/upload",
+            data: Data(ciphertextWithTag),
+            headers: [
+                "Content-Type": "application/octet-stream",
+                "x-conversation-id": conversation.id,
+                "x-encrypted-filename": "voice_note.m4a",
+                "x-encrypted-mimetype": "audio/mp4",
+            ]
+        ) else { return }
+        guard let json = try? JSONSerialization.jsonObject(with: uploadData) as? [String: Any],
+              let mediaId = json["mediaId"] as? String else { return }
+
+        let voiceMsg: [String: Any] = [
+            "type": "voice_note",
+            "blobId": mediaId,
+            "fileKey": fileKeyData.base64EncodedString(),
+            "fileIv": fileIvData.base64EncodedString(),
+            "fileHash": Data(fileHash).base64EncodedString(),
+            "filename": "voice_note.m4a",
+            "mime": "audio/mp4",
+            "size": fileData.count,
+            "duration": duration,
+        ]
+        guard let msgData = try? JSONSerialization.data(withJSONObject: voiceMsg),
+              let msgStr = String(data: msgData, encoding: .utf8) else { return }
+
+        guard let envelope = try? await SessionManager.shared.encryptMessage(
+            conversationId: conversation.id,
+            recipientUserId: recipientId,
+            plaintext: msgStr
+        ) else { return }
+
+        try? await APIClient.shared.postRaw("/messages/send", body: [
+            "conversation_id": conversation.id,
+            "ciphertext": envelope.ciphertext,
+            "iv": envelope.iv,
+            "ratchet_header": envelope.ratchetHeader,
+            "message_type": "voice_note",
+        ])
+
+        await MainActor.run {
+            messages.append(ChatMessage(
+                id: UUID().uuidString,
+                conversationId: conversation.id,
+                senderId: userId,
+                ciphertext: "🎙️ Voice note (\(duration)s)",
+                iv: "", ratchetHeader: "",
+                messageType: "voice_note",
+                createdAt: ISO8601DateFormatter().string(from: Date()),
+                expiresAt: disappearTimer > 0 ? Int(Date().timeIntervalSince1970) + disappearTimer : nil
+            ))
+        }
+    }
+
+    private func sendVideoNote(url: URL, duration: Int) async {
+        guard let fileData = try? Data(contentsOf: url) else { return }
+        try? FileManager.default.removeItem(at: url)
+        let others = conversation.members.filter { $0.userId != userId }
+        guard let recipientId = others.first?.userId else { return }
+
+        let fileKey = SymmetricKey(size: .bits256)
+        let nonce = AES.GCM.Nonce()
+        guard let sealed = try? AES.GCM.seal(fileData, using: fileKey, nonce: nonce),
+              let combined = sealed.combined else { return }
+        let ciphertextWithTag = combined.dropFirst(12)
+        let fileIvData = Data(nonce)
+        let fileKeyData = fileKey.withUnsafeBytes { Data($0) }
+        let fileHash = SHA256.hash(data: fileData)
+
+        guard let uploadData = try? await APIClient.shared.uploadBinary(
+            "/media/upload", data: Data(ciphertextWithTag),
+            headers: [
+                "Content-Type": "application/octet-stream",
+                "x-conversation-id": conversation.id,
+                "x-encrypted-filename": "video_note.mp4",
+                "x-encrypted-mimetype": "video/mp4",
+            ]
+        ) else { return }
+        guard let json = try? JSONSerialization.jsonObject(with: uploadData) as? [String: Any],
+              let mediaId = json["mediaId"] as? String else { return }
+
+        let vm: [String: Any] = [
+            "type": "video_note",
+            "blobId": mediaId,
+            "fileKey": fileKeyData.base64EncodedString(),
+            "fileIv": fileIvData.base64EncodedString(),
+            "fileHash": Data(fileHash).base64EncodedString(),
+            "filename": "video_note.mp4",
+            "mime": "video/mp4",
+            "size": fileData.count,
+            "duration": duration,
+        ]
+        guard let msgData = try? JSONSerialization.data(withJSONObject: vm),
+              let msgStr = String(data: msgData, encoding: .utf8) else { return }
+
+        guard let envelope = try? await SessionManager.shared.encryptMessage(
+            conversationId: conversation.id,
+            recipientUserId: recipientId,
+            plaintext: msgStr
+        ) else { return }
+
+        try? await APIClient.shared.postRaw("/messages/send", body: [
+            "conversation_id": conversation.id,
+            "ciphertext": envelope.ciphertext,
+            "iv": envelope.iv,
+            "ratchet_header": envelope.ratchetHeader,
+            "message_type": "video_note",
+        ])
+        await MainActor.run {
+            messages.append(ChatMessage(
+                id: UUID().uuidString,
+                conversationId: conversation.id,
+                senderId: userId,
+                ciphertext: "🎥 Video message (\(duration)s)",
+                iv: "", ratchetHeader: "",
+                messageType: "video_note",
+                createdAt: ISO8601DateFormatter().string(from: Date()),
+                expiresAt: disappearTimer > 0 ? Int(Date().timeIntervalSince1970) + disappearTimer : nil
+            ))
+        }
+    }
+
+    private func stopRecording() {
+        // Legacy entry point kept for any external callers — now routes through finish.
+        finishRecording()
     }
 
     private func loadMessages() async {
@@ -419,15 +1239,28 @@ struct ConversationView: View {
                 messages = arr.compactMap { m in
                     guard let id = m["id"] as? String,
                           let sid = m["sender_id"] as? String else { return nil }
+                    let ct = m["ciphertext"] as? String ?? ""
+                    let iv = m["iv"] as? String ?? ""
+                    let rh = m["ratchet_header"] as? String ?? ""
+                    let displayText: String
+                    if !rh.isEmpty && !iv.isEmpty {
+                        displayText = (try? SessionManager.shared.decryptMessage(
+                            conversationId: conversation.id,
+                            ciphertext: ct, iv: iv, ratchetHeaderStr: rh
+                        )) ?? ct
+                    } else {
+                        displayText = ct
+                    }
                     return ChatMessage(
                         id: id,
                         conversationId: conversation.id,
                         senderId: sid,
-                        ciphertext: m["ciphertext"] as? String ?? "",
-                        iv: m["iv"] as? String ?? "",
-                        ratchetHeader: m["ratchet_header"] as? String ?? "",
+                        ciphertext: displayText,
+                        iv: iv,
+                        ratchetHeader: rh,
                         messageType: m["message_type"] as? String ?? "text",
-                        createdAt: m["created_at"] as? String ?? ""
+                        createdAt: m["created_at"] as? String ?? "",
+                        expiresAt: m["expires_at"] as? Int
                     )
                 }
             }
@@ -437,22 +1270,59 @@ struct ConversationView: View {
     private func sendMessage() {
         let text = inputText.trimmingCharacters(in: .whitespaces)
         guard !text.isEmpty, !isSending else { return }
+        #if canImport(UIKit)
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        #endif
+        let wasReplyingTo = replyingTo
+        replyingTo = nil
         inputText = ""
         isSending = true
+        _ = wasReplyingTo // hook for future: include reply_to_message_id in outgoing envelope
+
+        // Handle edit mode
+        if let editId = editingMessageId {
+            editingMessageId = nil
+            Task {
+                do {
+                    _ = try await APIClient.shared.postRaw("/messages/\(editId)", body: ["encrypted": text], method: "PATCH")
+                    if let idx = messages.firstIndex(where: { $0.id == editId }) {
+                        messages[idx] = ChatMessage(id: editId, conversationId: conversation.id, senderId: userId,
+                            ciphertext: text, iv: "", ratchetHeader: "", messageType: "text",
+                            createdAt: messages[idx].createdAt, expiresAt: messages[idx].expiresAt)
+                    }
+                } catch {}
+                isSending = false
+            }
+            return
+        }
 
         // Haptic feedback
         let impact = UIImpactFeedbackGenerator(style: .light)
         impact.impactOccurred()
 
+        let localId = "queued-\(Date().timeIntervalSince1970)"
+
         Task {
             do {
+                let recipientId = conversation.members.first(where: { $0.userId != userId })?.userId ?? ""
                 var body: [String: Any] = [
                     "conversation_id": conversation.id,
-                    "ciphertext": text,
-                    "iv": "",
-                    "ratchet_header": "",
                     "message_type": "text",
                 ]
+                if !recipientId.isEmpty {
+                    let envelope = try await SessionManager.shared.encryptMessage(
+                        conversationId: conversation.id,
+                        recipientUserId: recipientId,
+                        plaintext: text
+                    )
+                    body["ciphertext"] = envelope.ciphertext
+                    body["iv"] = envelope.iv
+                    body["ratchet_header"] = envelope.ratchetHeader
+                } else {
+                    body["ciphertext"] = text
+                    body["iv"] = ""
+                    body["ratchet_header"] = ""
+                }
                 if disappearTimer > 0 {
                     body["expires_in"] = disappearTimer
                 }
@@ -464,13 +1334,148 @@ struct ConversationView: View {
                     ciphertext: text,
                     iv: "", ratchetHeader: "",
                     messageType: "text",
-                    createdAt: ISO8601DateFormatter().string(from: Date())
+                    createdAt: ISO8601DateFormatter().string(from: Date()),
+                    expiresAt: disappearTimer > 0 ? Int(Date().timeIntervalSince1970) + disappearTimer : nil
                 ))
             } catch {
-                inputText = text
+                // Queue message for later delivery
+                queueMessage(localId: localId, text: text)
+                messages.append(ChatMessage(
+                    id: localId,
+                    conversationId: conversation.id,
+                    senderId: userId,
+                    ciphertext: "⏳ \(text)",
+                    iv: "", ratchetHeader: "",
+                    messageType: "text",
+                    createdAt: ISO8601DateFormatter().string(from: Date()),
+                    expiresAt: disappearTimer > 0 ? Int(Date().timeIntervalSince1970) + disappearTimer : nil
+                ))
+                isOffline = true
             }
             isSending = false
         }
+    }
+
+    // MARK: - Offline Message Queue
+
+    // MARK: - Reactions / Edit / Delete / Pin
+
+    private func reactToMessage(_ msgId: String, emoji: String) async {
+        do {
+            _ = try await APIClient.shared.postRaw("/messages/\(msgId)/react", body: ["encrypted_reaction": emoji])
+        } catch {}
+    }
+
+    private func deleteMessage(_ msgId: String) async {
+        do {
+            _ = try await APIClient.shared.deleteRaw("/messages/\(msgId)")
+            messages.removeAll { $0.id == msgId }
+        } catch {}
+    }
+
+    private func pinMessage(_ msgId: String) async {
+        do {
+            _ = try await APIClient.shared.postRaw("/messages/conversations/\(conversation.id)/pin/\(msgId)", body: [:])
+        } catch {}
+    }
+
+    private static let queueKey = "rocchat_message_queue"
+
+    private func queueMessage(localId: String, text: String) {
+        var queue = loadQueue()
+        let item: [String: String] = [
+            "localId": localId,
+            "conversationId": conversation.id,
+            "text": text,
+            "recipientUserId": conversation.members.first(where: { $0.userId != userId })?.userId ?? "",
+        ]
+        queue.append(item)
+        saveQueue(queue)
+    }
+
+    private func loadQueue() -> [[String: String]] {
+        guard let data = UserDefaults.standard.data(forKey: Self.queueKey),
+              let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: String]] else {
+            return []
+        }
+        return arr
+    }
+
+    private func saveQueue(_ queue: [[String: String]]) {
+        if let data = try? JSONSerialization.data(withJSONObject: queue) {
+            UserDefaults.standard.set(data, forKey: Self.queueKey)
+        }
+    }
+
+    private func flushMessageQueue() async {
+        var queue = loadQueue()
+        var remaining: [[String: String]] = []
+        for item in queue {
+            guard let convId = item["conversationId"],
+                  let text = item["text"],
+                  let recipientId = item["recipientUserId"],
+                  let localId = item["localId"] else { continue }
+            do {
+                var body: [String: Any] = ["conversation_id": convId, "message_type": "text"]
+                if !recipientId.isEmpty {
+                    let envelope = try await SessionManager.shared.encryptMessage(
+                        conversationId: convId, recipientUserId: recipientId, plaintext: text
+                    )
+                    body["ciphertext"] = envelope.ciphertext
+                    body["iv"] = envelope.iv
+                    body["ratchet_header"] = envelope.ratchetHeader
+                } else {
+                    body["ciphertext"] = text; body["iv"] = ""; body["ratchet_header"] = ""
+                }
+                _ = try await APIClient.shared.postRaw("/messages/send", body: body)
+                // Update local message from queued to sent
+                if let idx = messages.firstIndex(where: { $0.id == localId }) {
+                    messages[idx] = ChatMessage(
+                        id: "sent-\(Date().timeIntervalSince1970)",
+                        conversationId: convId,
+                        senderId: userId,
+                        ciphertext: text,
+                        iv: "", ratchetHeader: "",
+                        messageType: "text",
+                        createdAt: ISO8601DateFormatter().string(from: Date()),
+                        expiresAt: nil
+                    )
+                }
+            } catch {
+                remaining.append(item)
+                break // Still offline
+            }
+        }
+        saveQueue(remaining)
+        if remaining.isEmpty { isOffline = false }
+    }
+
+    private func scheduleMessage() {
+        let text = inputText.trimmingCharacters(in: .whitespaces)
+        guard !text.isEmpty else { return }
+        inputText = ""
+        Task {
+            let iso = ISO8601DateFormatter()
+            iso.formatOptions = [.withInternetDateTime]
+            let body: [String: Any] = [
+                "conversation_id": conversation.id,
+                "ciphertext": text,
+                "scheduled_at": iso.string(from: scheduleDate),
+            ]
+            _ = try? await APIClient.shared.postRaw("/features/scheduled", body: body)
+        }
+    }
+
+    private func notifyScreenshot() async {
+        // Send a system message notifying the other user took a screenshot
+        let body: [String: Any] = [
+            "conversation_id": conversation.id,
+            "ciphertext": "📸 Screenshot taken",
+            "iv": "",
+            "ratchet_header": "",
+            "message_type": "screenshot_alert",
+        ]
+        _ = try? await APIClient.shared.postRaw("/messages/send", body: body)
     }
 
     private func connectWebSocket() {
@@ -498,15 +1503,28 @@ struct ConversationView: View {
                        let type = json["type"] as? String,
                        let payload = json["payload"] as? [String: Any] {
                         if type == "message" {
+                            let ct = payload["ciphertext"] as? String ?? ""
+                            let iv = payload["iv"] as? String ?? ""
+                            let rh = payload["ratchet_header"] as? String ?? ""
+                            let displayText: String
+                            if !rh.isEmpty && !iv.isEmpty {
+                                displayText = (try? SessionManager.shared.decryptMessage(
+                                    conversationId: conversation.id,
+                                    ciphertext: ct, iv: iv, ratchetHeaderStr: rh
+                                )) ?? ct
+                            } else {
+                                displayText = ct
+                            }
                             let newMsg = ChatMessage(
                                 id: payload["id"] as? String ?? "ws-\(Date().timeIntervalSince1970)",
                                 conversationId: conversation.id,
                                 senderId: payload["fromUserId"] as? String ?? payload["sender_id"] as? String ?? "",
-                                ciphertext: payload["ciphertext"] as? String ?? "",
-                                iv: payload["iv"] as? String ?? "",
-                                ratchetHeader: payload["ratchet_header"] as? String ?? "",
+                                ciphertext: displayText,
+                                iv: "",
+                                ratchetHeader: "",
                                 messageType: payload["message_type"] as? String ?? "text",
-                                createdAt: payload["created_at"] as? String ?? ISO8601DateFormatter().string(from: Date())
+                                createdAt: payload["created_at"] as? String ?? ISO8601DateFormatter().string(from: Date()),
+                                expiresAt: payload["expires_at"] as? Int
                             )
                             DispatchQueue.main.async {
                                 messages.append(newMsg)
@@ -519,6 +1537,26 @@ struct ConversationView: View {
                                     ws: task
                                 )
                             }
+                        } else if type == "call_answer" {
+                            DispatchQueue.main.async {
+                                CallManager.shared.handleCallAnswer(payload: payload)
+                            }
+                        } else if type == "call_ice" {
+                            DispatchQueue.main.async {
+                                CallManager.shared.handleIceCandidate(payload: payload)
+                            }
+                        } else if type == "call_end" {
+                            DispatchQueue.main.async {
+                                CallManager.shared.handleCallEnd(payload: payload)
+                            }
+                        } else if type == "call_audio" {
+                            DispatchQueue.main.async {
+                                CallManager.shared.handleCallAudio(payload: payload)
+                            }
+                        } else if type == "call_p2p_candidate" {
+                            DispatchQueue.main.async {
+                                CallManager.shared.handleP2PCandidate(payload: payload)
+                            }
                         }
                     }
                 default: break
@@ -528,6 +1566,7 @@ struct ConversationView: View {
                 // Auto-reconnect after 3 seconds
                 DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: DispatchWorkItem {
                     connectWebSocket()
+                    Task { await flushMessageQueue() }
                 })
             }
         }
@@ -539,33 +1578,233 @@ struct ConversationView: View {
 struct MessageBubbleView: View {
     let message: ChatMessage
     let isMine: Bool
+    var onReact: ((String) -> Void)?
+    var onEdit: (() -> Void)?
+    var onDelete: (() -> Void)?
+    var onPin: (() -> Void)?
+    var onReply: (() -> Void)?
+    @State private var viewOnceRevealed = false
+    @State private var viewOnceImage: UIImage?
+    @State private var showViewOnceModal = false
+    @State private var swipeOffset: CGFloat = 0
+    @State private var didTriggerReply = false
+
+    private var parsedFileMessage: [String: Any]? {
+        guard let data = message.ciphertext.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              json["blobId"] != nil else { return nil }
+        return json
+    }
+
+    private var isViewOnce: Bool {
+        parsedFileMessage?["viewOnce"] as? Bool == true
+    }
+
+    private var viewOnceViewedKey: String {
+        "rocchat_viewed_\(message.id)"
+    }
+
+    private var alreadyViewed: Bool {
+        UserDefaults.standard.bool(forKey: viewOnceViewedKey)
+    }
 
     var body: some View {
         HStack {
             if isMine { Spacer(minLength: 60) }
 
-            VStack(alignment: isMine ? .trailing : .leading, spacing: 2) {
-                Text(message.ciphertext.isEmpty ? "🔒 Encrypted" : message.ciphertext)
-                    .font(.body)
-                    .foregroundColor(.textPrimary)
+            VStack(alignment: isMine ? .trailing : .leading, spacing: 3) {
+                if isViewOnce {
+                    viewOnceContent
+                } else {
+                    Text(message.ciphertext.isEmpty ? "🔒 Encrypted" : message.ciphertext)
+                        .font(.body)
+                        .foregroundColor(.adaptiveText)
+                }
 
                 HStack(spacing: 4) {
                     Text("🔒").font(.system(size: 8))
                     Text(formatRelativeTime(message.createdAt))
                         .font(.system(size: 11))
-                        .foregroundColor(.textSecondary)
+                        .foregroundColor(.adaptiveTextSec)
                     if isMine {
                         Text("✓✓").font(.system(size: 11)).foregroundColor(.turquoise)
                     }
                 }
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(isMine ? Color.rocGold.opacity(0.12) : Color.bubbleTheirs)
-            .clipShape(RoundedRectangle(cornerRadius: 16))
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(isMine ? Color.rocGold.opacity(0.12) : Color.adaptiveBubbleTheirs)
+            .clipShape(RoundedRectangle(cornerRadius: 18))
+            .shadow(color: .black.opacity(0.04), radius: 2, y: 1)
+            .contextMenu {
+                // Quick reactions
+                ForEach(["❤️", "👍", "😂", "😮", "😢", "🙏"], id: \.self) { emoji in
+                    Button(emoji) { onReact?(emoji) }
+                }
+                Divider()
+                Button { onReply?() } label: {
+                    Label("Reply", systemImage: "arrowshape.turn.up.left")
+                }
+                Button { UIPasteboard.general.string = message.ciphertext } label: {
+                    Label("Copy", systemImage: "doc.on.doc")
+                }
+                if isMine {
+                    Button { onEdit?() } label: {
+                        Label("Edit", systemImage: "pencil")
+                    }
+                }
+                Button { onPin?() } label: {
+                    Label("Pin", systemImage: "pin")
+                }
+                if isMine {
+                    Button(role: .destructive) { onDelete?() } label: {
+                        Label("Delete", systemImage: "trash")
+                    }
+                }
+            }
 
             if !isMine { Spacer(minLength: 60) }
         }
+        .overlay(alignment: isMine ? .trailing : .leading) {
+            // Telegram-style swipe-to-reply indicator
+            Image(systemName: "arrowshape.turn.up.left.fill")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundColor(.rocGold)
+                .padding(8)
+                .background(Color.rocGold.opacity(0.15))
+                .clipShape(Circle())
+                .opacity(Double(min(abs(swipeOffset), 60) / 60))
+                .scaleEffect(0.6 + 0.4 * Double(min(abs(swipeOffset), 60) / 60))
+                .offset(x: isMine ? 36 : -36)
+                .allowsHitTesting(false)
+        }
+        .offset(x: swipeOffset)
+        .animation(.interactiveSpring(response: 0.28, dampingFraction: 0.85), value: swipeOffset)
+        .gesture(
+            DragGesture(minimumDistance: 12, coordinateSpace: .local)
+                .onChanged { value in
+                    let dx = value.translation.width
+                    // Incoming: drag RIGHT to reply. Outgoing: drag LEFT.
+                    let valid = isMine ? (dx < 0 && dx > -120) : (dx > 0 && dx < 120)
+                    if valid {
+                        swipeOffset = dx
+                        if !didTriggerReply && abs(dx) > 60 {
+                            didTriggerReply = true
+                            #if canImport(UIKit)
+                            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                            #endif
+                            onReply?()
+                        }
+                    }
+                }
+                .onEnded { _ in
+                    swipeOffset = 0
+                    didTriggerReply = false
+                }
+        )
+        .fullScreenCover(isPresented: $showViewOnceModal) {
+            ViewOnceModalView(image: viewOnceImage, onClose: {
+                showViewOnceModal = false
+                UserDefaults.standard.set(true, forKey: viewOnceViewedKey)
+                viewOnceRevealed = false
+                viewOnceImage = nil
+            })
+        }
+    }
+
+    @ViewBuilder
+    private var viewOnceContent: some View {
+        if alreadyViewed || (viewOnceRevealed && viewOnceImage == nil) {
+            HStack(spacing: 6) {
+                Image(systemName: "eye")
+                    .font(.system(size: 14))
+                    .foregroundColor(.adaptiveTextSec)
+                Text("Opened")
+                    .font(.subheadline)
+                    .foregroundColor(.adaptiveTextSec)
+            }
+        } else {
+            Button(action: { revealViewOnce() }) {
+                HStack(spacing: 8) {
+                    Image(systemName: "eye.circle.fill")
+                        .font(.system(size: 24))
+                        .foregroundColor(.rocGold)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("View once photo")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundColor(.adaptiveText)
+                        Text("Tap to open")
+                            .font(.caption)
+                            .foregroundColor(.adaptiveTextSec)
+                    }
+                }
+                .padding(4)
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    private func revealViewOnce() {
+        guard let fileMsg = parsedFileMessage,
+              let blobId = fileMsg["blobId"] as? String,
+              let fileKeyB64 = fileMsg["fileKey"] as? String,
+              let fileIvB64 = fileMsg["fileIv"] as? String,
+              let fileKeyData = Data(base64Encoded: fileKeyB64),
+              let fileIvData = Data(base64Encoded: fileIvB64) else { return }
+
+        viewOnceRevealed = true
+        Task {
+            do {
+                let data = try await APIClient.shared.getRaw("/media/\(blobId)")
+                let key = SymmetricKey(data: fileKeyData)
+                let nonce = try AES.GCM.Nonce(data: fileIvData)
+                let sealedBox = try AES.GCM.SealedBox(nonce: nonce, ciphertext: data.dropLast(16), tag: data.suffix(16))
+                let plainData = try AES.GCM.open(sealedBox, using: key)
+                if let img = UIImage(data: plainData) {
+                    viewOnceImage = img
+                    showViewOnceModal = true
+                }
+            } catch {
+                // Mark as viewed even on error to prevent retries
+                UserDefaults.standard.set(true, forKey: viewOnceViewedKey)
+            }
+        }
+    }
+}
+
+// MARK: - View Once Modal
+
+struct ViewOnceModalView: View {
+    let image: UIImage?
+    let onClose: () -> Void
+
+    var body: some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+            if let img = image {
+                Image(uiImage: img)
+                    .resizable()
+                    .scaledToFit()
+                    .padding()
+            }
+            VStack {
+                HStack {
+                    Spacer()
+                    Button(action: onClose) {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.title)
+                            .foregroundColor(.white.opacity(0.8))
+                    }
+                    .padding()
+                }
+                Spacer()
+                Text("This media will disappear when closed")
+                    .font(.caption)
+                    .foregroundColor(.white.opacity(0.6))
+                    .padding(.bottom, 40)
+            }
+        }
+        .statusBarHidden()
     }
 }
 
@@ -576,31 +1815,120 @@ struct SettingsView: View {
     @State private var discoverable = true
     @State private var readReceipts = true
     @State private var typingIndicators = true
+    @State private var onlineVisibility = "everyone"
+    @State private var whoCanAdd = "everyone"
+    @State private var ghostMode = false
     @State private var username = "loading..."
     @State private var displayName = "Loading..."
+    @State private var avatarUrl: String?
     @State private var showQrScanner = false
     @State private var qrScanResult: String?
     @State private var isLinkingDevice = false
     @State private var linkMessage: String?
+    @State private var quietStart = Date()
+    @State private var quietEnd = Date()
+    @State private var quietHoursEnabled = false
+
+    @State private var showPhotoPicker = false
+    @State private var selectedPhoto: PhotosPickerItem?
+    @State private var isUploadingAvatar = false
 
     var body: some View {
         NavigationStack {
             List {
-                Section("Account") {
-                    HStack {
-                        Circle()
-                            .fill(Color.rocGold.opacity(0.15))
-                            .frame(width: 48, height: 48)
-                            .overlay(
-                                Text(initials(from: displayName))
-                                    .font(.system(size: 18, weight: .bold))
-                                    .foregroundColor(.rocGold)
-                            )
-                        VStack(alignment: .leading) {
-                            Text(displayName).font(.headline)
-                            Text("@\(username)").font(.subheadline).foregroundColor(.textSecondary)
+                // ── Roc Family Hero Card ──────────────────────────────
+                Section {
+                    ZStack {
+                        // Animated gradient background
+                        LinearGradient(
+                            colors: [
+                                Color.rocGold.opacity(0.22),
+                                Color(red: 0.08, green: 0.58, blue: 0.62).opacity(0.18), // turquoise
+                                Color.black.opacity(0.08),
+                            ],
+                            startPoint: .topLeading, endPoint: .bottomTrailing
+                        )
+                        // Decorative wing silhouettes
+                        HStack {
+                            Image(systemName: "bird.fill")
+                                .font(.system(size: 90))
+                                .foregroundStyle(Color.rocGold.opacity(0.08))
+                                .rotationEffect(.degrees(-18))
+                                .offset(x: -14, y: -22)
+                            Spacer()
+                            Image(systemName: "bird.fill")
+                                .font(.system(size: 70))
+                                .foregroundStyle(Color.rocGold.opacity(0.07))
+                                .rotationEffect(.degrees(18))
+                                .scaleEffect(x: -1)
+                                .offset(x: 16, y: 30)
                         }
+
+                        VStack(spacing: 12) {
+                            // Avatar with gold ring + edit badge
+                            ZStack(alignment: .bottomTrailing) {
+                                Circle()
+                                    .stroke(
+                                        AngularGradient(
+                                            colors: [.rocGold, Color(red: 0.08, green: 0.58, blue: 0.62), .rocGold],
+                                            center: .center
+                                        ),
+                                        lineWidth: 3
+                                    )
+                                    .frame(width: 104, height: 104)
+                                AvatarView(name: displayName, avatarUrl: avatarUrl, size: 92)
+                                if isUploadingAvatar {
+                                    Circle()
+                                        .fill(Color.black.opacity(0.35))
+                                        .frame(width: 92, height: 92)
+                                    ProgressView()
+                                        .tint(.white)
+                                }
+                                Circle()
+                                    .fill(Color.rocGold)
+                                    .frame(width: 30, height: 30)
+                                    .overlay(
+                                        Image(systemName: "camera.fill")
+                                            .font(.system(size: 13, weight: .bold))
+                                            .foregroundColor(.white)
+                                    )
+                                    .shadow(color: .black.opacity(0.25), radius: 4, y: 2)
+                            }
+                            .onTapGesture { showPhotoPicker = true }
+
+                            VStack(spacing: 2) {
+                                Text(displayName)
+                                    .font(.title3.weight(.bold))
+                                Text("@\(username)")
+                                    .font(.subheadline)
+                                    .foregroundColor(.adaptiveTextSec)
+                            }
+
+                            // Roc Family solidarity banner
+                            HStack(spacing: 6) {
+                                Text("🕊️")
+                                Text("Voice of Freedom")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundColor(.rocGold)
+                                Text("🇵🇸")
+                            }
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 5)
+                            .background(
+                                Capsule().fill(Color.rocGold.opacity(0.12))
+                            )
+                            .overlay(
+                                Capsule().stroke(Color.rocGold.opacity(0.4), lineWidth: 1)
+                            )
+                        }
+                        .padding(.vertical, 20)
+                        .padding(.horizontal, 16)
                     }
+                    .frame(maxWidth: .infinity)
+                    .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+                    .listRowInsets(EdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12))
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
                 }
 
                 Section("Linked Devices") {
@@ -634,6 +1962,27 @@ struct SettingsView: View {
                 }
 
                 Section("Privacy") {
+                    Toggle(isOn: $ghostMode) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("👻 Ghost Mode").fontWeight(.bold)
+                            Text("No receipts, no typing, no online status, 24h auto-delete")
+                                .font(.caption)
+                                .foregroundColor(.textSecondary)
+                        }
+                    }
+                    .onChange(of: ghostMode) { val in
+                        Task {
+                            if val {
+                                let body: [String: Any] = ["show_read_receipts": 0, "show_typing_indicator": 0, "show_online_to": "nobody", "default_disappear_timer": 86400]
+                                _ = try? await APIClient.shared.postRaw("/me/settings", body: body, method: "PATCH")
+                                readReceipts = false; typingIndicators = false; onlineVisibility = "nobody"
+                            } else {
+                                let body: [String: Any] = ["show_read_receipts": 1, "show_typing_indicator": 1, "show_online_to": "everyone", "default_disappear_timer": 0]
+                                _ = try? await APIClient.shared.postRaw("/me/settings", body: body, method: "PATCH")
+                                readReceipts = true; typingIndicators = true; onlineVisibility = "everyone"
+                            }
+                        }
+                    }
                     Toggle("Discoverable by username", isOn: $discoverable)
                         .onChange(of: discoverable) { val in
                             Task {
@@ -642,7 +1991,76 @@ struct SettingsView: View {
                             }
                         }
                     Toggle("Read receipts", isOn: $readReceipts)
+                        .onChange(of: readReceipts) { val in
+                            Task {
+                                let body: [String: Any] = ["show_read_receipts": val ? 1 : 0]
+                                _ = try? await APIClient.shared.postRaw("/me/settings", body: body, method: "PATCH")
+                            }
+                        }
                     Toggle("Typing indicators", isOn: $typingIndicators)
+                        .onChange(of: typingIndicators) { val in
+                            Task {
+                                let body: [String: Any] = ["show_typing_indicator": val ? 1 : 0]
+                                _ = try? await APIClient.shared.postRaw("/me/settings", body: body, method: "PATCH")
+                            }
+                        }
+                    Picker("Online status visible to", selection: $onlineVisibility) {
+                        Text("Everyone").tag("everyone")
+                        Text("Contacts only").tag("contacts")
+                        Text("Nobody").tag("nobody")
+                    }
+                    .onChange(of: onlineVisibility) { val in
+                        Task {
+                            let body: [String: Any] = ["show_online_to": val]
+                            _ = try? await APIClient.shared.postRaw("/me/settings", body: body, method: "PATCH")
+                        }
+                    }
+                    Picker("Who can add me", selection: $whoCanAdd) {
+                        Text("Everyone").tag("everyone")
+                        Text("Nobody").tag("nobody")
+                    }
+                    .onChange(of: whoCanAdd) { val in
+                        Task {
+                            let body: [String: Any] = ["who_can_add": val]
+                            _ = try? await APIClient.shared.postRaw("/me/settings", body: body, method: "PATCH")
+                        }
+                    }
+                }
+                .tint(.rocGold)
+
+                Section("Quiet Hours") {
+                    Toggle("Enable Quiet Hours", isOn: $quietHoursEnabled)
+                        .onChange(of: quietHoursEnabled) { val in
+                            Task {
+                                if val {
+                                    let formatter = DateFormatter()
+                                    formatter.dateFormat = "HH:mm"
+                                    let body: [String: Any] = [
+                                        "quiet_start": formatter.string(from: quietStart),
+                                        "quiet_end": formatter.string(from: quietEnd),
+                                    ]
+                                    _ = try? await APIClient.shared.postRaw("/features/quiet-hours", body: body, method: "PUT")
+                                } else {
+                                    _ = try? await APIClient.shared.deleteRaw("/features/quiet-hours")
+                                }
+                            }
+                        }
+                    if quietHoursEnabled {
+                        DatePicker("From", selection: $quietStart, displayedComponents: .hourAndMinute)
+                            .tint(.rocGold)
+                            .onChange(of: quietStart) { _ in saveQuietHours() }
+                        DatePicker("To", selection: $quietEnd, displayedComponents: .hourAndMinute)
+                            .tint(.rocGold)
+                            .onChange(of: quietEnd) { _ in saveQuietHours() }
+                    }
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("During quiet hours, notifications are silenced.")
+                            .font(.caption)
+                            .foregroundColor(.textSecondary)
+                        Text("DND exceptions can bypass this on the web settings.")
+                            .font(.caption)
+                            .foregroundColor(.textSecondary)
+                    }
                 }
                 .tint(.rocGold)
 
@@ -660,11 +2078,66 @@ struct SettingsView: View {
                     }
                 }
 
+                Section("Premium Features") {
+                    HStack(spacing: 12) {
+                        Image(systemName: "crown.fill")
+                            .foregroundColor(.rocGold)
+                            .font(.title2)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("RocChat Premium")
+                                .font(.subheadline.bold())
+                                .foregroundColor(.rocGold)
+                            Text("Chat themes, scheduled messages, chat folders & more")
+                                .font(.caption)
+                                .foregroundColor(.textSecondary)
+                        }
+                    }
+                    .padding(.vertical, 4)
+
+                    HStack(spacing: 8) {
+                        Image(systemName: "paintpalette.fill").foregroundColor(.adaptiveTextSec).frame(width: 20)
+                        Text("Chat Themes").foregroundColor(.adaptiveText)
+                        Spacer()
+                        Text("Free").font(.caption).foregroundColor(.success)
+                    }
+                    HStack(spacing: 8) {
+                        Image(systemName: "clock.fill").foregroundColor(.adaptiveTextSec).frame(width: 20)
+                        Text("Scheduled Messages").foregroundColor(.adaptiveText)
+                        Spacer()
+                        Text("Free").font(.caption).foregroundColor(.success)
+                    }
+                    HStack(spacing: 8) {
+                        Image(systemName: "folder.fill").foregroundColor(.adaptiveTextSec).frame(width: 20)
+                        Text("Chat Folders").foregroundColor(.adaptiveText)
+                        Spacer()
+                        Text("Free").font(.caption).foregroundColor(.success)
+                    }
+                }
+
+                Section("Support RocChat") {
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(spacing: 6) {
+                            Text("💛")
+                            Text("All features are free forever")
+                                .font(.subheadline.bold())
+                                .foregroundColor(.rocGold)
+                        }
+                        Text("RocChat is built with love. If you enjoy the app, consider supporting development with a donation.")
+                            .font(.caption)
+                            .foregroundColor(.textSecondary)
+                    }
+                    .padding(.vertical, 4)
+                }
+
                 Section("About") {
                     HStack {
                         Text("Version"); Spacer()
                         Text("0.1.0").foregroundColor(.textSecondary)
                     }
+                    HStack(spacing: 4) {
+                        Text("Free & open for everyone")
+                    }
+                    .font(.subheadline).foregroundColor(.textSecondary)
                     HStack(spacing: 4) {
                         Text("Part of the")
                         Text("Roc Family").fontWeight(.semibold).foregroundColor(.rocGold)
@@ -672,12 +2145,33 @@ struct SettingsView: View {
                     .font(.subheadline).foregroundColor(.textSecondary)
                 }
 
+                Section("🪶 Roc Family Manifesto") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("We are the voice of freedom.\nWe are the voice of the people.")
+                            .font(.subheadline.bold())
+                            .foregroundColor(.rocGold)
+                        Text("Zero third-party dependencies. No Google, no Apple services, no corporate APIs. Every component is self-hosted or open-source.")
+                            .font(.caption)
+                            .foregroundColor(.textSecondary)
+                        Text("We do not support or depend on entities that participate in the oppression of people anywhere in the world.")
+                            .font(.caption)
+                            .foregroundColor(.textSecondary)
+                        Text("Privacy is a human right. End-to-end encryption by default. We cannot read your messages.")
+                            .font(.caption)
+                            .foregroundColor(.textSecondary)
+                        Text("Built with love, for the people. 🇵🇸")
+                            .font(.caption.italic())
+                            .foregroundColor(.rocGold)
+                    }
+                    .padding(.vertical, 4)
+                }
+
                 Section {
                     Button("Sign Out") { authVM.logout() }
                         .foregroundColor(.danger)
                 }
             }
-            .navigationTitle("Settings")
+            .navigationTitle("Profile")
         }
         .sheet(isPresented: $showQrScanner) {
             QrScannerView { code in
@@ -685,19 +2179,84 @@ struct SettingsView: View {
                 handleQrCode(code)
             }
         }
+        .photosPicker(isPresented: $showPhotoPicker, selection: $selectedPhoto, matching: .images)
+        .onChange(of: selectedPhoto) { _, newItem in
+            guard let newItem else { return }
+            Task { await uploadAvatar(item: newItem) }
+        }
         .task {
             do {
                 let me = try await APIClient.shared.getMe()
                 username = me["username"] as? String ?? "unknown"
                 displayName = me["display_name"] as? String ?? username
+                avatarUrl = me["avatar_url"] as? String
                 if let disc = me["discoverable"] as? Bool { discoverable = disc }
                 if let disc = me["discoverable"] as? Int { discoverable = disc != 0 }
+                if let rr = me["show_read_receipts"] as? Int { readReceipts = rr != 0 }
+                if let ti = me["show_typing_indicator"] as? Int { typingIndicators = ti != 0 }
+                if let ov = me["show_online_to"] as? String { onlineVisibility = ov }
+                if let wa = me["who_can_add"] as? String { whoCanAdd = wa }
+                // Detect ghost mode
+                ghostMode = !readReceipts && !typingIndicators && onlineVisibility == "nobody"
             } catch {}
+            // Load quiet hours
+            do {
+                let qhData = try await APIClient.shared.getRaw("/features/quiet-hours")
+                if let qh = try JSONSerialization.jsonObject(with: qhData) as? [String: Any] {
+                    let formatter = DateFormatter()
+                    formatter.dateFormat = "HH:mm"
+                    if let qs = qh["quiet_start"] as? String, let qe = qh["quiet_end"] as? String,
+                       let startDate = formatter.date(from: qs), let endDate = formatter.date(from: qe) {
+                        quietStart = startDate
+                        quietEnd = endDate
+                        quietHoursEnabled = true
+                    }
+                }
+            } catch {}
+        }
+    }
+
+    private func saveQuietHours() {
+        guard quietHoursEnabled else { return }
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm"
+        Task {
+            let body: [String: Any] = [
+                "quiet_start": formatter.string(from: quietStart),
+                "quiet_end": formatter.string(from: quietEnd),
+            ]
+            _ = try? await APIClient.shared.postRaw("/features/quiet-hours", body: body, method: "PUT")
         }
     }
 
     private func initials(from name: String) -> String {
         String(name.split(separator: " ").prefix(2).compactMap { $0.first }).uppercased()
+    }
+
+    private func uploadAvatar(item: PhotosPickerItem) async {
+        await MainActor.run { isUploadingAvatar = true }
+        defer { Task { @MainActor in isUploadingAvatar = false; selectedPhoto = nil } }
+        do {
+            guard let data = try await item.loadTransferable(type: Data.self),
+                  let image = UIImage(data: data) else { return }
+            // Resize to max 512x512 and recompress as JPEG
+            let maxDim: CGFloat = 512
+            let scale = min(maxDim / image.size.width, maxDim / image.size.height, 1)
+            let newSize = CGSize(width: image.size.width * scale, height: image.size.height * scale)
+            UIGraphicsBeginImageContextWithOptions(newSize, false, 1)
+            image.draw(in: CGRect(origin: .zero, size: newSize))
+            let resized = UIGraphicsGetImageFromCurrentImageContext() ?? image
+            UIGraphicsEndImageContext()
+            guard let jpeg = resized.jpegData(compressionQuality: 0.85) else { return }
+
+            let resp = try await APIClient.shared.uploadBinary("/me/avatar", data: jpeg, headers: [
+                "Content-Type": "image/jpeg",
+            ])
+            if let json = try JSONSerialization.jsonObject(with: resp) as? [String: Any],
+               let url = json["avatar_url"] as? String {
+                await MainActor.run { avatarUrl = url }
+            }
+        } catch {}
     }
 
     private func handleQrCode(_ code: String) {
@@ -905,4 +2464,63 @@ func formatRelativeTime(_ iso: String) -> String {
 extension ChatConversation: Hashable {
     static func == (lhs: ChatConversation, rhs: ChatConversation) -> Bool { lhs.id == rhs.id }
     func hash(into hasher: inout Hasher) { hasher.combine(id) }
+}
+
+// MARK: - Safety Number Sheet
+struct SafetyNumberSheet: View {
+    let safetyNumber: String
+    let otherName: String
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 20) {
+                Image(systemName: "shield.checkered")
+                    .font(.system(size: 48))
+                    .foregroundColor(.turquoise)
+
+                Text("Verify Safety Number")
+                    .font(.headline)
+
+                Text("Compare this number with **\(otherName)** to verify end-to-end encryption.")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal)
+
+                let groups = safetyNumber.split(separator: " ").map(String.init)
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 4), spacing: 12) {
+                    ForEach(groups, id: \.self) { group in
+                        Text(group)
+                            .font(.system(.title3, design: .monospaced))
+                            .fontWeight(.medium)
+                    }
+                }
+                .padding()
+
+                Text("If both of you see the same number, your messages are secure.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
+
+                Button {
+                    UIPasteboard.general.string = safetyNumber
+                } label: {
+                    Label("Copy Safety Number", systemImage: "doc.on.doc")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.turquoise)
+                .padding(.horizontal)
+
+                Spacer()
+            }
+            .padding(.top, 30)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+    }
 }

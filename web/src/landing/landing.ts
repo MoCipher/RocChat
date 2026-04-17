@@ -137,6 +137,24 @@ export function renderLanding(container: HTMLElement, onWebLogin: () => void) {
 
       <section class="landing-security" id="security">
         <h2 class="landing-section-title">Built for the paranoid.</h2>
+        <div class="landing-trust-numbers">
+          <div class="landing-trust-stat">
+            <span class="landing-trust-num">256</span>
+            <span class="landing-trust-label">bit AES-GCM encryption</span>
+          </div>
+          <div class="landing-trust-stat">
+            <span class="landing-trust-num">600K</span>
+            <span class="landing-trust-label">PBKDF2 rounds</span>
+          </div>
+          <div class="landing-trust-stat">
+            <span class="landing-trust-num">0</span>
+            <span class="landing-trust-label">metadata stored</span>
+          </div>
+          <div class="landing-trust-stat">
+            <span class="landing-trust-num">100%</span>
+            <span class="landing-trust-label">open source</span>
+          </div>
+        </div>
         <div class="landing-security-grid">
           <div class="landing-security-item">
             <span class="landing-security-tag">Protocol</span>

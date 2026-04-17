@@ -86,13 +86,16 @@ object PushManager {
         subscribe(context, topic)
     }
 
-    /** Subscribe to ntfy.sh topic via SSE for real-time push. */
+    /** Subscribe to self-hosted ntfy instance via SSE for real-time push. */
     private fun subscribe(context: Context, topic: String) {
         sseJob?.cancel()
         sseJob = CoroutineScope(Dispatchers.IO).launch {
             while (isActive) {
                 try {
-                    val url = URL("https://ntfy.sh/$topic/sse")
+                    // Self-hosted ntfy — no third-party dependency
+                    val ntfyBase = context.getSharedPreferences("rocchat", Context.MODE_PRIVATE)
+                        .getString("ntfy_url", "https://ntfy.roc.family") ?: "https://ntfy.roc.family"
+                    val url = URL("$ntfyBase/$topic/sse")
                     val conn = url.openConnection() as HttpURLConnection
                     conn.setRequestProperty("Accept", "text/event-stream")
                     conn.connectTimeout = 15_000

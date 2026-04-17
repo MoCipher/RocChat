@@ -24,13 +24,18 @@ id = "df07663e9fda4cbb92dfeba95da05851"
 name = "CHAT_ROOM"
 class_name = "ChatRoom"
 
+# ── Cron Triggers (scheduled worker) ──
+# Uncomment when cron slot is available (free plan: 5 triggers max across account)
+# [triggers]
+# crons = ["*/5 * * * *"]  # Every 5 minutes: send scheduled msgs, purge expired, retention cleanup
+
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["ChatRoom"]
 
 # ── Environment Variables ──
 [vars]
-TURNSTILE_SITE_KEY = "0x4AAAAAAC8p8j2JeE2saTfE"
+POW_DIFFICULTY = "18"  # Proof-of-work difficulty (no Turnstile/CAPTCHA dependency)
 
 # ── Scheduled Workers (cron) ──
 # Disabled: free plan cron trigger limit reached

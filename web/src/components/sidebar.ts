@@ -53,6 +53,19 @@ export function renderSidebar(
   onTabChange: (tab: Tab) => void,
   unreadCount: number,
 ) {
+  // Build profile button content: avatar image or fallback user icon
+  const avatarUrl = localStorage.getItem('rocchat_avatar_url') || '';
+  const uid = localStorage.getItem('rocchat_user_id') || '';
+  const displayName = localStorage.getItem('rocchat_display_name') || '';
+  const initials = displayName.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase() || '?';
+  let profileContent: string;
+  if (avatarUrl && uid) {
+    const path = avatarUrl.startsWith('/api/') ? avatarUrl : `/api${avatarUrl}`;
+    const sep = path.includes('?') ? '&' : '?';
+    profileContent = `<img class="sidebar-avatar" src="${path}${sep}uid=${encodeURIComponent(uid)}" alt="" loading="lazy" decoding="async" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'"><span class="sidebar-avatar-fallback" style="display:none">${initials}</span>`;
+  } else {
+    profileContent = `<span class="sidebar-avatar-fallback">${initials}</span>`;
+  }
   container.innerHTML = `
     <nav class="sidebar" role="navigation" aria-label="Main navigation">
       <div class="sidebar-logo" title="RocChat">
@@ -61,20 +74,20 @@ export function renderSidebar(
 
       <button class="sidebar-btn ${activeTab === 'chats' ? 'active' : ''}" data-tab="chats"
               title="Chats" aria-label="Chats">
-        <i data-lucide="message-circle"></i>
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/></svg>
         ${unreadCount > 0 ? `<span class="badge">${unreadCount}</span>` : ''}
       </button>
 
       <button class="sidebar-btn ${activeTab === 'calls' ? 'active' : ''}" data-tab="calls"
               title="Calls" aria-label="Calls">
-        <i data-lucide="phone"></i>
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></svg>
       </button>
 
       <div class="sidebar-spacer"></div>
 
-      <button class="sidebar-btn ${activeTab === 'settings' ? 'active' : ''}" data-tab="settings"
-              title="Settings" aria-label="Settings">
-        <i data-lucide="settings"></i>
+      <button class="sidebar-btn sidebar-profile-btn ${activeTab === 'settings' ? 'active' : ''}" data-tab="settings"
+              title="Profile" aria-label="Profile">
+        ${profileContent}
       </button>
     </nav>
   `;

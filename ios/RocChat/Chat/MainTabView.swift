@@ -11,6 +11,7 @@ struct ChatConversation: Identifiable {
     let id: String
     let type: String
     var name: String?
+    var avatarURL: String?
     let members: [ConversationMember]
     var lastMessageAt: String?
     var muted: Bool
@@ -391,6 +392,7 @@ struct ChatsView: View {
                     id: id,
                     type: dict["type"] as? String ?? "direct",
                     name: dict["name"] as? String,
+                    avatarURL: dict["avatar_url"] as? String,
                     members: members,
                     lastMessageAt: dict["last_message_at"] as? String,
                     muted: muted,
@@ -585,16 +587,57 @@ struct NewChatView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var searchQuery = ""
     @State private var results: [(id: String, username: String, displayName: String)] = []
+    @State private var isGroupMode = false
+    @State private var selectedMembers: [(id: String, username: String, displayName: String)] = []
+    @State private var groupName = ""
     var onSelect: (ChatConversation) -> Void
 
     var body: some View {
         NavigationStack {
-            VStack {
+            VStack(spacing: 0) {
+                // Group toggle
+                Picker("", selection: $isGroupMode) {
+                    Text("Direct").tag(false)
+                    Text("Group").tag(true)
+                }
+                .pickerStyle(.segmented)
+                .padding(.horizontal)
+                .padding(.top, 8)
+
+                if isGroupMode {
+                    TextField("Group Name", text: $groupName)
+                        .textFieldStyle(.roundedBorder)
+                        .padding(.horizontal)
+                        .padding(.top, 8)
+
+                    if !selectedMembers.isEmpty {
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 8) {
+                                ForEach(selectedMembers, id: \.id) { member in
+                                    HStack(spacing: 4) {
+                                        Text(member.displayName).font(.caption).lineLimit(1)
+                                        Button(action: { selectedMembers.removeAll { $0.id == member.id } }) {
+                                            Image(systemName: "xmark.circle.fill").font(.caption2)
+                                        }
+                                    }
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 4)
+                                    .background(Color.rocGold.opacity(0.15))
+                                    .clipShape(Capsule())
+                                }
+                            }
+                            .padding(.horizontal)
+                            .padding(.vertical, 6)
+                        }
+                    }
+                }
+
                 TextField("Search @username", text: $searchQuery)
                     .textFieldStyle(.roundedBorder)
                     .autocapitalization(.none)
                     .disableAutocorrection(true)
-                    .padding()
+                    .padding(.horizontal)
+                    .padding(.top, 8)
                     .onChange(of: searchQuery) { _, newVal in
                         guard newVal.count >= 3 else { return }
                         Task { await search(newVal) }
@@ -602,39 +645,76 @@ struct NewChatView: View {
 
                 List(results, id: \.id) { user in
                     Button {
-                        Task {
-                            do {
-                                let body: [String: Any] = ["type": "direct", "member_ids": [user.id]]
-                                let data = try await APIClient.shared.postRaw("/messages/conversations", body: body)
-                                if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-                                   let convId = json["conversation_id"] as? String {
-                                    let conv = ChatConversation(
-                                        id: convId, type: "direct", name: nil,
-                                        members: [.init(userId: user.id, username: user.username, displayName: user.displayName, avatarUrl: nil)],
-                                        lastMessageAt: nil,
-                                        muted: false,
-                                        archived: false
-                                    )
-                                    onSelect(conv)
-                                }
-                            } catch {}
+                        if isGroupMode {
+                            if !selectedMembers.contains(where: { $0.id == user.id }) {
+                                selectedMembers.append(user)
+                            }
+                        } else {
+                            Task { await createDirect(user) }
                         }
                     } label: {
-                        VStack(alignment: .leading) {
-                            Text(user.displayName).font(.body.weight(.medium))
-                            Text("@\(user.username)").font(.caption).foregroundColor(.textSecondary)
+                        HStack {
+                            VStack(alignment: .leading) {
+                                Text(user.displayName).font(.body.weight(.medium))
+                                Text("@\(user.username)").font(.caption).foregroundColor(.textSecondary)
+                            }
+                            Spacer()
+                            if isGroupMode && selectedMembers.contains(where: { $0.id == user.id }) {
+                                Image(systemName: "checkmark.circle.fill").foregroundColor(.rocGold)
+                            }
                         }
                     }
                 }
             }
-            .navigationTitle("New Conversation")
+            .navigationTitle(isGroupMode ? "New Group" : "New Conversation")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
                 }
+                if isGroupMode {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Create") {
+                            Task { await createGroup() }
+                        }
+                        .disabled(selectedMembers.count < 2 || groupName.trimmingCharacters(in: .whitespaces).isEmpty)
+                    }
+                }
             }
         }
+    }
+
+    private func createDirect(_ user: (id: String, username: String, displayName: String)) async {
+        do {
+            let body: [String: Any] = ["type": "direct", "member_ids": [user.id]]
+            let data = try await APIClient.shared.postRaw("/messages/conversations", body: body)
+            if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let convId = json["conversation_id"] as? String {
+                let conv = ChatConversation(
+                    id: convId, type: "direct", name: nil, avatarURL: nil,
+                    members: [.init(userId: user.id, username: user.username, displayName: user.displayName, avatarUrl: nil)],
+                    lastMessageAt: nil, muted: false, archived: false
+                )
+                onSelect(conv)
+            }
+        } catch {}
+    }
+
+    private func createGroup() async {
+        do {
+            let memberIds = selectedMembers.map { $0.id }
+            let body: [String: Any] = ["type": "group", "member_ids": memberIds, "name": groupName.trimmingCharacters(in: .whitespaces)]
+            let data = try await APIClient.shared.postRaw("/messages/conversations", body: body)
+            if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let convId = json["conversation_id"] as? String {
+                let members = selectedMembers.map { ChatConversation.ConversationMember(userId: $0.id, username: $0.username, displayName: $0.displayName, avatarUrl: nil) }
+                let conv = ChatConversation(
+                    id: convId, type: "group", name: groupName, avatarURL: nil,
+                    members: members, lastMessageAt: nil, muted: false, archived: false
+                )
+                onSelect(conv)
+            }
+        } catch {}
     }
 
     private func search(_ query: String) async {
@@ -684,11 +764,14 @@ struct ConversationView: View {
     @State private var showPhotoPicker = false
     @State private var showFilePicker = false
     @State private var showAttachMenu = false
-    @State private var selectedPhotoData: Data?
+    @State private var selectedPhotoItem: PhotosPickerItem?
     @State private var showForwardSheet = false
     @State private var forwardMessage: ChatMessage?
     @State private var searchText = ""
     @State private var isSearching = false
+    @State private var lastTypingSent: Date = .distantPast
+    @State private var isRemoteTyping = false
+    @State private var remoteOnlineStatus: String = ""
     private let userId = UserDefaults.standard.string(forKey: "user_id") ?? ""
 
     private var convName: String {
@@ -832,6 +915,22 @@ struct ConversationView: View {
                 .background(.ultraThinMaterial)
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             } else {
+            // Typing indicator
+            if isRemoteTyping {
+                HStack(spacing: 4) {
+                    Text("typing")
+                        .font(.caption2)
+                        .foregroundColor(.adaptiveTextSec)
+                    TypingDotsView()
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 2)
+                .transition(.opacity)
+            }
+            // Online presence
+            if !remoteOnlineStatus.isEmpty {
+                // shown in nav subtitle area — handled via toolbar
+            }
             HStack(alignment: .bottom, spacing: 10) {
                 // Attachment menu (photo, file, vault)
                 Menu {
@@ -864,6 +963,7 @@ struct ConversationView: View {
                         .textFieldStyle(.plain)
                         .lineLimit(1...5)
                         .onSubmit { sendMessage() }
+                        .onChange(of: inputText) { _, _ in sendTypingIndicator() }
                         .padding(.horizontal, 14)
                         .padding(.vertical, 10)
                 }
@@ -1020,17 +1120,16 @@ struct ConversationView: View {
             }
             .presentationDetents([.medium])
         }
-        .photosPicker(isPresented: $showPhotoPicker, selection: Binding(
-            get: { nil },
-            set: { item in
-                guard let item else { return }
-                Task {
-                    if let data = try? await item.loadTransferable(type: Data.self) {
-                        await sendPhotoAttachment(data: data)
-                    }
+        .photosPicker(isPresented: $showPhotoPicker, selection: $selectedPhotoItem, matching: .any(of: [.images, .videos]))
+        .onChange(of: selectedPhotoItem) { _, newItem in
+            guard let newItem else { return }
+            Task {
+                if let data = try? await newItem.loadTransferable(type: Data.self) {
+                    await sendPhotoAttachment(data: data)
                 }
+                selectedPhotoItem = nil
             }
-        ), matching: .any(of: [.images, .videos]))
+        }
         .fileImporter(isPresented: $showFilePicker, allowedContentTypes: [.data], allowsMultipleSelection: false) { result in
             if case .success(let urls) = result, let url = urls.first {
                 guard url.startAccessingSecurityScopedResource() else { return }
@@ -1148,7 +1247,6 @@ struct ConversationView: View {
 
     private func forwardMessageTo(_ msg: ChatMessage, targetConversationId: String) async {
         do {
-            // Forward as a new message to the target conversation
             var body: [String: Any] = [
                 "conversation_id": targetConversationId,
                 "message_type": msg.messageType,
@@ -1158,6 +1256,25 @@ struct ConversationView: View {
             ]
             _ = try await APIClient.shared.postRaw("/messages/send", body: body)
         } catch {}
+    }
+
+    private func sendTypingIndicator() {
+        guard let task = wsTask, Date().timeIntervalSince(lastTypingSent) >= 3 else { return }
+        lastTypingSent = Date()
+        let msg: [String: Any] = ["type": "typing", "payload": ["fromUserId": userId, "isTyping": true]]
+        if let data = try? JSONSerialization.data(withJSONObject: msg),
+           let str = String(data: data, encoding: .utf8) {
+            task.send(.string(str)) { _ in }
+        }
+    }
+
+    private func sendReadReceipt(messageId: String) {
+        guard let task = wsTask else { return }
+        let msg: [String: Any] = ["type": "read_receipt", "payload": ["message_id": messageId, "fromUserId": userId]]
+        if let data = try? JSONSerialization.data(withJSONObject: msg),
+           let str = String(data: data, encoding: .utf8) {
+            task.send(.string(str)) { _ in }
+        }
     }
 
     private func loadSafetyNumber() {
@@ -1772,6 +1889,22 @@ struct ConversationView: View {
                                     messages[idx].status = newStatus
                                 }
                             }
+                        } else if type == "typing" {
+                            let fromUser = payload["fromUserId"] as? String ?? ""
+                            if fromUser != userId {
+                                DispatchQueue.main.async {
+                                    withAnimation { isRemoteTyping = true }
+                                    DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
+                                        withAnimation { isRemoteTyping = false }
+                                    }
+                                }
+                            }
+                        } else if type == "presence" {
+                            let fromUser = payload["fromUserId"] as? String ?? ""
+                            let status = payload["status"] as? String ?? ""
+                            if fromUser != userId {
+                                DispatchQueue.main.async { remoteOnlineStatus = status }
+                            }
                         }
                     }
                 default: break
@@ -1842,6 +1975,10 @@ struct MessageBubbleView: View {
                     Text(message.ciphertext.isEmpty ? "🔒 Encrypted" : message.ciphertext)
                         .font(.body)
                         .foregroundColor(.adaptiveText)
+                    // Link preview
+                    if let url = extractURL(from: message.ciphertext) {
+                        LinkPreviewView(urlString: url)
+                    }
                 }
 
                 HStack(spacing: 4) {
@@ -2779,6 +2916,76 @@ struct SafetyNumberSheet: View {
     }
 }
 
+// MARK: - Typing Dots Animation
+
+struct TypingDotsView: View {
+    @State private var phase = 0.0
+    var body: some View {
+        HStack(spacing: 3) {
+            ForEach(0..<3) { i in
+                Circle()
+                    .fill(Color.adaptiveTextSec)
+                    .frame(width: 5, height: 5)
+                    .offset(y: sin((phase + Double(i) * 0.6)) * 3)
+            }
+        }
+        .onAppear {
+            withAnimation(.linear(duration: 1.2).repeatForever(autoreverses: false)) {
+                phase = .pi * 2
+            }
+        }
+    }
+}
+
+// MARK: - Link Preview Helper
+
+struct LinkPreviewView: View {
+    let urlString: String
+    @State private var title: String?
+    @State private var description: String?
+    @State private var imageURL: String?
+
+    var body: some View {
+        if let title {
+            VStack(alignment: .leading, spacing: 4) {
+                if let imageURL, let url = URL(string: imageURL) {
+                    AsyncImage(url: url) { image in
+                        image.resizable().aspectRatio(contentMode: .fill)
+                    } placeholder: {
+                        Color.gray.opacity(0.2)
+                    }
+                    .frame(maxHeight: 120)
+                    .clipped()
+                    .cornerRadius(8)
+                }
+                Text(title).font(.caption.weight(.semibold)).lineLimit(2)
+                if let description {
+                    Text(description).font(.caption2).foregroundColor(.adaptiveTextSec).lineLimit(2)
+                }
+                Text(urlString).font(.caption2).foregroundColor(.turquoise).lineLimit(1)
+            }
+            .padding(8)
+            .background(Color(.tertiarySystemBackground))
+            .cornerRadius(10)
+        } else {
+            EmptyView()
+                .task { await fetchPreview() }
+        }
+    }
+
+    private func fetchPreview() async {
+        do {
+            let encoded = urlString.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? urlString
+            let data = try await APIClient.shared.getRaw("/link-preview?url=\(encoded)")
+            if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                title = json["title"] as? String
+                description = json["description"] as? String
+                imageURL = json["image"] as? String
+            }
+        } catch {}
+    }
+}
+
 // MARK: - Forward Message Sheet
 
 struct ForwardMessageSheet: View {
@@ -2829,13 +3036,25 @@ struct ForwardMessageSheet: View {
                                       let dn = m["display_name"] as? String ?? m["displayName"] as? String else { return nil }
                                 return (uid, un, dn)
                             } ?? []
-                            return ChatConversation(id: id, name: name, avatarURL: avatar, lastMessage: nil, lastTimestamp: nil, unreadCount: 0, isPinned: false, isMuted: false, isGroup: (dict["is_group"] as? Bool) ?? false, members: members)
+                            return ChatConversation(
+                                id: id, type: (dict["type"] as? String) ?? "direct", name: name, avatarURL: avatar,
+                                members: members.map { ChatConversation.ConversationMember(userId: $0.0, username: $0.1, displayName: $0.2, avatarUrl: nil) },
+                                lastMessageAt: dict["last_message_at"] as? String, muted: false, archived: false
+                            )
                         }
                     }
                 } catch {}
             }
         }
     }
+}
+
+// MARK: - Helpers
+
+private func extractURL(from text: String) -> String? {
+    let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
+    let matches = detector?.matches(in: text, range: NSRange(text.startIndex..., in: text)) ?? []
+    return matches.first?.url?.absoluteString
 }
 
 // MARK: - URL MIME Type Extension

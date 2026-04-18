@@ -253,6 +253,24 @@ fun ChatsTab(onOpenConversation: (String, String, String) -> Unit) {
             },
         )
 
+        // Search bar
+        OutlinedTextField(
+            value = searchQuery,
+            onValueChange = { searchQuery = it },
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+            placeholder = { Text("Search conversations...") },
+            singleLine = true,
+            leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+            trailingIcon = {
+                if (searchQuery.isNotBlank()) {
+                    IconButton(onClick = { searchQuery = "" }) {
+                        Icon(Icons.Default.Close, contentDescription = "Clear")
+                    }
+                }
+            },
+            shape = RoundedCornerShape(20.dp),
+        )
+
         if (folders.isNotEmpty()) {
             LazyRow(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
@@ -302,10 +320,20 @@ fun ChatsTab(onOpenConversation: (String, String, String) -> Unit) {
             val userId = context.getSharedPreferences("rocchat", Context.MODE_PRIVATE)
                 .getString("user_id", "") ?: ""
 
-            val filteredConversations = if (selectedFolderId != null) {
-                val ids = folderConvIds[selectedFolderId] ?: emptyList()
-                conversations.filter { it.id in ids }
-            } else conversations
+            val filteredConversations = run {
+                var list = if (selectedFolderId != null) {
+                    val ids = folderConvIds[selectedFolderId] ?: emptyList()
+                    conversations.filter { it.id in ids }
+                } else conversations
+                // Apply search filter
+                if (searchQuery.isNotBlank()) {
+                    list = list.filter { conv ->
+                        val name = conv.name ?: conv.members.joinToString(", ") { it.displayName.ifBlank { it.username } }
+                        name.contains(searchQuery, ignoreCase = true)
+                    }
+                }
+                list
+            }
 
             var isRefreshing by remember { mutableStateOf(false) }
             PullToRefreshBox(
@@ -598,19 +626,45 @@ fun ChatsTab(onOpenConversation: (String, String, String) -> Unit) {
 
     // New Chat Dialog
     if (showNewChat) {
+        var chatMode by remember { mutableStateOf("direct") }
+        var selectedUsers by remember { mutableStateOf<List<APIClient.UserSearchResult>>(emptyList()) }
+        var groupName by remember { mutableStateOf("") }
+        var newChatSearch by remember { mutableStateOf("") }
+        var newChatResults by remember { mutableStateOf<List<APIClient.UserSearchResult>>(emptyList()) }
+
         AlertDialog(
             onDismissRequest = { showNewChat = false },
             title = { Text("New Conversation") },
             text = {
                 Column {
+                    // Direct / Group toggle
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilterChip(selected = chatMode == "direct", onClick = { chatMode = "direct"; selectedUsers = emptyList() }, label = { Text("Direct") })
+                        FilterChip(selected = chatMode == "group", onClick = { chatMode = "group" }, label = { Text("Group") })
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    if (chatMode == "group") {
+                        OutlinedTextField(
+                            value = groupName,
+                            onValueChange = { groupName = it },
+                            label = { Text("Group Name") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        if (selectedUsers.isNotEmpty()) {
+                            Text("Members: ${selectedUsers.joinToString(", ") { it.displayName }}", fontSize = 12.sp, color = RocColors.TextSecondary)
+                            Spacer(Modifier.height(4.dp))
+                        }
+                    }
                     OutlinedTextField(
-                        value = searchQuery,
+                        value = newChatSearch,
                         onValueChange = { q ->
-                            searchQuery = q
+                            newChatSearch = q
                             if (q.length >= 3) {
                                 scope.launch {
                                     try {
-                                        searchResults = APIClient.searchUsers(q.removePrefix("@"))
+                                        newChatResults = APIClient.searchUsers(q.removePrefix("@"))
                                     } catch (_: Exception) {}
                                 }
                             }
@@ -620,26 +674,42 @@ fun ChatsTab(onOpenConversation: (String, String, String) -> Unit) {
                         singleLine = true,
                     )
                     Spacer(Modifier.height(8.dp))
-                    searchResults.forEach { user ->
+                    newChatResults.forEach { user ->
                         ListItem(
                             headlineContent = { Text(user.displayName) },
                             supportingContent = { Text("@${user.username}") },
                             modifier = Modifier.clickable {
-                                scope.launch {
-                                    try {
-                                        val convId = APIClient.createConversation("direct", listOf(user.userId))
-                                        onOpenConversation(convId, user.displayName, user.userId)
-                                        showNewChat = false
-                                        searchQuery = ""
-                                        searchResults = emptyList()
-                                    } catch (_: Exception) {}
+                                if (chatMode == "direct") {
+                                    scope.launch {
+                                        try {
+                                            val convId = APIClient.createConversation("direct", listOf(user.userId))
+                                            onOpenConversation(convId, user.displayName, user.userId)
+                                            showNewChat = false
+                                        } catch (_: Exception) {}
+                                    }
+                                } else {
+                                    if (selectedUsers.none { it.userId == user.userId }) {
+                                        selectedUsers = selectedUsers + user
+                                    }
                                 }
                             },
                         )
                     }
                 }
             },
-            confirmButton = {},
+            confirmButton = {
+                if (chatMode == "group" && selectedUsers.size >= 2) {
+                    TextButton(onClick = {
+                        scope.launch {
+                            try {
+                                val convId = APIClient.createConversation("group", selectedUsers.map { it.userId }, groupName.trim())
+                                onOpenConversation(convId, groupName.ifBlank { "Group" }, "")
+                                showNewChat = false
+                            } catch (_: Exception) {}
+                        }
+                    }) { Text("Create Group") }
+                }
+            },
             dismissButton = {
                 TextButton(onClick = { showNewChat = false }) { Text("Cancel") }
             },
@@ -679,6 +749,9 @@ fun ConversationScreen(conversationId: String, conversationName: String, recipie
     var showForwardDialog by remember { mutableStateOf(false) }
     var searchText by remember { mutableStateOf("") }
     var isSearching by remember { mutableStateOf(false) }
+    var isRemoteTyping by remember { mutableStateOf(false) }
+    var remoteOnlineStatus by remember { mutableStateOf("") }
+    var lastTypingSent by remember { mutableStateOf(0L) }
     val haptics = LocalHapticFeedback.current
 
     // File/photo picker
@@ -796,6 +869,23 @@ fun ConversationScreen(conversationId: String, conversationName: String, recipie
                                 val msgId = payload.optString("message_id")
                                 val newStatus = if (data.optString("type") == "read_receipt") "read" else "delivered"
                                 messages = messages.map { if (it.id == msgId) it.copy(status = newStatus) else it }
+                            }
+                            "typing" -> {
+                                val payload = data.getJSONObject("payload")
+                                val fromUser = payload.optString("fromUserId")
+                                if (fromUser != userId) {
+                                    isRemoteTyping = true
+                                    scope.launch {
+                                        delay(4000)
+                                        isRemoteTyping = false
+                                    }
+                                }
+                            }
+                            "presence" -> {
+                                val payload = data.getJSONObject("payload")
+                                val fromUser = payload.optString("fromUserId")
+                                val status = payload.optString("status")
+                                if (fromUser != userId) remoteOnlineStatus = status
                             }
                             "call_offer" -> {
                                 val payload = data.getJSONObject("payload")
@@ -995,6 +1085,20 @@ fun ConversationScreen(conversationId: String, conversationName: String, recipie
                 }
             }
 
+            // Typing indicator
+            if (isRemoteTyping) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("typing", fontSize = 12.sp, color = RocColors.TextSecondary)
+                    Spacer(Modifier.width(4.dp))
+                    Text("•••", fontSize = 12.sp, color = RocColors.TextSecondary)
+                }
+            }
+
             // Reply preview banner
             replyingTo?.let { reply ->
                 Row(
@@ -1110,7 +1214,21 @@ fun ConversationScreen(conversationId: String, conversationName: String, recipie
                     }
                 OutlinedTextField(
                     value = inputText,
-                    onValueChange = { inputText = it },
+                    onValueChange = { newVal ->
+                        inputText = newVal
+                        // Send typing indicator (throttled to 3s)
+                        val now = System.currentTimeMillis()
+                        if (now - lastTypingSent > 3000) {
+                            lastTypingSent = now
+                            ws?.send(JSONObject().apply {
+                                put("type", "typing")
+                                put("payload", JSONObject().apply {
+                                    put("fromUserId", userId)
+                                    put("isTyping", true)
+                                })
+                            }.toString())
+                        }
+                    },
                     modifier = Modifier.weight(1f),
                     placeholder = { Text("Type a message...") },
                     maxLines = 4,

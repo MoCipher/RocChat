@@ -26,6 +26,8 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -52,6 +54,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
@@ -73,6 +76,7 @@ import com.rocchat.crypto.SessionManager
 import com.rocchat.network.APIClient
 import com.rocchat.network.NativeWebSocket
 import com.rocchat.ui.RocColors
+import com.rocchat.ui.chatThemes
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.json.JSONArray
@@ -752,6 +756,13 @@ fun ConversationScreen(conversationId: String, conversationName: String, recipie
     var isRemoteTyping by remember { mutableStateOf(false) }
     var remoteOnlineStatus by remember { mutableStateOf("") }
     var lastTypingSent by remember { mutableStateOf(0L) }
+    var showThemePicker by remember { mutableStateOf(false) }
+    var chatTheme by remember { mutableStateOf(prefs.getString("theme_$conversationId", "default") ?: "default") }
+    var showVaultComposer by remember { mutableStateOf(false) }
+    var vaultType by remember { mutableStateOf("password") }
+    var vaultLabel by remember { mutableStateOf("") }
+    var vaultFields by remember { mutableStateOf(mutableMapOf<String, String>()) }
+    var vaultViewOnce by remember { mutableStateOf(false) }
     val haptics = LocalHapticFeedback.current
 
     // File/photo picker
@@ -898,6 +909,41 @@ fun ConversationScreen(conversationId: String, conversationName: String, recipie
                                 val status = payload.optString("status")
                                 if (fromUser != userId) remoteOnlineStatus = status
                             }
+                            "reaction" -> {
+                                val payload = data.getJSONObject("payload")
+                                val msgId = payload.optString("message_id")
+                                val emoji = payload.optString("emoji")
+                                messages = messages.map {
+                                    if (it.id == msgId) {
+                                        val cur = it.reactions ?: ""
+                                        it.copy(reactions = if (cur.isEmpty()) emoji else "$cur,$emoji")
+                                    } else it
+                                }
+                            }
+                            "message_edit" -> {
+                                val payload = data.getJSONObject("payload")
+                                val msgId = payload.optString("message_id")
+                                val newCt = payload.optString("ciphertext", "")
+                                val newIv = payload.optString("iv", "")
+                                val newRh = payload.optString("ratchet_header", "")
+                                messages = messages.map {
+                                    if (it.id == msgId) {
+                                        val displayText = if (newRh.isNotEmpty() && newIv.isNotEmpty()) {
+                                            try { SessionManager.decryptMessage(context, conversationId, newCt, newIv, newRh) }
+                                            catch (_: Exception) { newCt }
+                                        } else newCt
+                                        it.copy(ciphertext = "$displayText (edited)")
+                                    } else it
+                                }
+                            }
+                            "message_delete" -> {
+                                val payload = data.getJSONObject("payload")
+                                val msgId = payload.optString("message_id")
+                                messages = messages.filter { it.id != msgId }
+                            }
+                            "message_pin" -> {
+                                // Pin notification — no UI update needed in chat list
+                            }
                             "call_offer" -> {
                                 val payload = data.getJSONObject("payload")
                                 CallManager.handleIncomingOffer(payload, conversationId, ws)
@@ -1035,6 +1081,9 @@ fun ConversationScreen(conversationId: String, conversationName: String, recipie
                     IconButton(onClick = { showSafetyDialog = true }) {
                         Icon(Icons.Default.Security, contentDescription = "Safety Number", tint = RocColors.RocGold)
                     }
+                    IconButton(onClick = { showThemePicker = true }) {
+                        Icon(Icons.Default.Palette, contentDescription = "Chat Theme", tint = RocColors.RocGold)
+                    }
                     IconButton(onClick = { isSearching = !isSearching }) {
                         Icon(Icons.Default.Search, contentDescription = "Search messages", tint = RocColors.RocGold)
                     }
@@ -1042,8 +1091,10 @@ fun ConversationScreen(conversationId: String, conversationName: String, recipie
             )
         },
     ) { padding ->
+        val activeThemeBg = chatThemes.firstOrNull { it.key == chatTheme }?.bgColor ?: Color.Transparent
         Column(
-            modifier = Modifier.fillMaxSize().padding(padding),
+            modifier = Modifier.fillMaxSize().padding(padding)
+                .then(if (chatTheme != "default") Modifier.background(activeThemeBg) else Modifier),
         ) {
             // Encryption banner
             Row(
@@ -1236,6 +1287,11 @@ fun ConversationScreen(conversationId: String, conversationName: String, recipie
                                 text = { Text("Video Message") },
                                 leadingIcon = { Icon(Icons.Default.Videocam, null) },
                                 onClick = { showAttachMenu = false; showVideoRecorder = true }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Vault Item") },
+                                leadingIcon = { Icon(Icons.Default.Lock, null) },
+                                onClick = { showAttachMenu = false; showVaultComposer = true }
                             )
                         }
                     }
@@ -1560,6 +1616,118 @@ fun ConversationScreen(conversationId: String, conversationName: String, recipie
             } catch (_: Exception) {}
         }
 
+        // Vault composer
+        if (showVaultComposer) {
+            AlertDialog(
+                onDismissRequest = { showVaultComposer = false },
+                title = { Text("Share Vault Item") },
+                text = {
+                    Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                        // Type selector
+                        listOf("password" to "🔑 Password", "wifi" to "📶 WiFi", "card" to "💳 Card", "note" to "📝 Note").forEach { (key, label) ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth().clickable { vaultType = key; vaultFields = mutableMapOf() }.padding(vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                RadioButton(selected = vaultType == key, onClick = { vaultType = key; vaultFields = mutableMapOf() })
+                                Spacer(Modifier.width(4.dp))
+                                Text(label)
+                            }
+                        }
+                        Spacer(Modifier.height(8.dp))
+                        OutlinedTextField(value = vaultLabel, onValueChange = { vaultLabel = it }, label = { Text("Label") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+                        Spacer(Modifier.height(8.dp))
+                        when (vaultType) {
+                            "password" -> {
+                                OutlinedTextField(value = vaultFields["username"] ?: "", onValueChange = { vaultFields = vaultFields.toMutableMap().apply { put("username", it) } }, label = { Text("Username") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+                                OutlinedTextField(value = vaultFields["password"] ?: "", onValueChange = { vaultFields = vaultFields.toMutableMap().apply { put("password", it) } }, label = { Text("Password") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+                                OutlinedTextField(value = vaultFields["url"] ?: "", onValueChange = { vaultFields = vaultFields.toMutableMap().apply { put("url", it) } }, label = { Text("URL (optional)") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+                            }
+                            "wifi" -> {
+                                OutlinedTextField(value = vaultFields["ssid"] ?: "", onValueChange = { vaultFields = vaultFields.toMutableMap().apply { put("ssid", it) } }, label = { Text("Network Name") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+                                OutlinedTextField(value = vaultFields["password"] ?: "", onValueChange = { vaultFields = vaultFields.toMutableMap().apply { put("password", it) } }, label = { Text("Password") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+                            }
+                            "card" -> {
+                                OutlinedTextField(value = vaultFields["number"] ?: "", onValueChange = { vaultFields = vaultFields.toMutableMap().apply { put("number", it) } }, label = { Text("Card Number") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+                                OutlinedTextField(value = vaultFields["expiry"] ?: "", onValueChange = { vaultFields = vaultFields.toMutableMap().apply { put("expiry", it) } }, label = { Text("Expiry (MM/YY)") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+                                OutlinedTextField(value = vaultFields["name"] ?: "", onValueChange = { vaultFields = vaultFields.toMutableMap().apply { put("name", it) } }, label = { Text("Cardholder Name") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+                            }
+                            "note" -> {
+                                OutlinedTextField(value = vaultFields["text"] ?: "", onValueChange = { vaultFields = vaultFields.toMutableMap().apply { put("text", it) } }, label = { Text("Note") }, modifier = Modifier.fillMaxWidth(), minLines = 3)
+                            }
+                        }
+                        Spacer(Modifier.height(8.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(checked = vaultViewOnce, onCheckedChange = { vaultViewOnce = it })
+                            Text("View once", modifier = Modifier.padding(start = 4.dp))
+                        }
+                    }
+                },
+                confirmButton = {
+                    TextButton(
+                        enabled = vaultLabel.isNotBlank(),
+                        onClick = {
+                            scope.launch {
+                                try {
+                                    val fieldsJson = JSONObject(vaultFields.toMap())
+                                    val encoded = android.util.Base64.encodeToString(fieldsJson.toString().toByteArray(), android.util.Base64.NO_WRAP)
+                                    val vault = JSONObject().apply {
+                                        put("type", "vault_item")
+                                        put("vaultType", vaultType)
+                                        put("label", vaultLabel)
+                                        put("encryptedPayload", encoded)
+                                        put("viewOnce", vaultViewOnce)
+                                        put("timestamp", System.currentTimeMillis() / 1000)
+                                    }
+                                    val body = JSONObject().apply {
+                                        put("conversation_id", conversationId)
+                                        put("message_type", "vault_item")
+                                        put("encrypted", vault.toString())
+                                    }
+                                    APIClient.post("/messages/send", body)
+                                } catch (_: Exception) {}
+                            }
+                            showVaultComposer = false; vaultLabel = ""; vaultFields = mutableMapOf(); vaultViewOnce = false
+                        },
+                    ) { Text("Send") }
+                },
+                dismissButton = { TextButton(onClick = { showVaultComposer = false }) { Text("Cancel") } },
+            )
+        }
+
+        // Theme picker
+        if (showThemePicker) {
+            AlertDialog(
+                onDismissRequest = { showThemePicker = false },
+                title = { Text("Chat Theme") },
+                text = {
+                    LazyColumn(modifier = Modifier.heightIn(max = 350.dp)) {
+                        items(chatThemes, key = { it.key }) { theme ->
+                            ListItem(
+                                headlineContent = { Text(theme.label) },
+                                leadingContent = {
+                                    Surface(shape = CircleShape, color = if (theme.key == "default") RocColors.RocGold else theme.swatch, modifier = Modifier.size(32.dp)) {}
+                                },
+                                trailingContent = {
+                                    if (chatTheme == theme.key) Icon(Icons.Default.Check, contentDescription = null, tint = RocColors.RocGold)
+                                },
+                                modifier = Modifier.clickable {
+                                    chatTheme = theme.key
+                                    prefs.edit().putString("theme_$conversationId", theme.key).apply()
+                                    scope.launch {
+                                        try { APIClient.post("/messages/conversations/$conversationId/theme", JSONObject().apply { put("theme", theme.key) }) } catch (_: Exception) {}
+                                    }
+                                    showThemePicker = false
+                                },
+                            )
+                        }
+                    }
+                },
+                confirmButton = {},
+                dismissButton = { TextButton(onClick = { showThemePicker = false }) { Text("Cancel") } },
+            )
+        }
+
         if (safetyNumberText.isNotEmpty()) {
             AlertDialog(
                 onDismissRequest = { showSafetyDialog = false; safetyNumberText = "" },
@@ -1793,6 +1961,8 @@ private fun MessageBubble(
                             }
                         }
                     }
+                } else if (msg.ciphertext.contains("\"type\":\"vault_item\"")) {
+                    VaultItemCard(ciphertext = msg.ciphertext, messageId = msg.id)
                 } else {
                     Text(
                         text = msg.ciphertext.ifBlank { "🔒 Encrypted" },
@@ -1954,6 +2124,91 @@ fun SettingsTab(onLogout: () -> Unit) {
     }
 
     var isUploadingAvatar by remember { mutableStateOf(false) }
+
+    // Invite link
+    var inviteLink by remember { mutableStateOf<String?>(null) }
+    var isGeneratingLink by remember { mutableStateOf(false) }
+
+    // Chat import
+    var importSource by remember { mutableStateOf("") }
+    var importStatus by remember { mutableStateOf("") }
+
+    // Device management
+    var devicesList by remember { mutableStateOf<List<JSONObject>>(emptyList()) }
+    var verifyCode by remember { mutableStateOf<String?>(null) }
+    var verifyInput by remember { mutableStateOf("") }
+
+    val importFileLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.GetContent()
+    ) { uri ->
+        if (uri != null && importSource.isNotEmpty()) {
+            scope.launch {
+                try {
+                    val text = context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() } ?: return@launch
+                    importStatus = "Parsing $importSource export..."
+                    val parsed = mutableListOf<JSONObject>()
+                    when (importSource) {
+                        "whatsapp" -> {
+                            val regex = Regex("""^(\d{1,2}/\d{1,2}/\d{2,4},?\s+\d{1,2}:\d{2}(?:\s*[AP]M)?)\s*-\s*([^:]+):\s*(.+)$""")
+                            text.lineSequence().forEach { line ->
+                                regex.find(line)?.let { m ->
+                                    parsed.add(JSONObject().apply {
+                                        put("timestamp", m.groupValues[1])
+                                        put("sender_name", m.groupValues[2].trim())
+                                        put("body", m.groupValues[3])
+                                    })
+                                }
+                            }
+                        }
+                        "telegram" -> {
+                            val data = JSONObject(text)
+                            val msgs = data.optJSONArray("messages") ?: return@launch
+                            for (i in 0 until msgs.length()) {
+                                val m = msgs.getJSONObject(i)
+                                val body = m.optString("text", "")
+                                if (body.isNotEmpty()) parsed.add(JSONObject().apply {
+                                    put("timestamp", m.optString("date", ""))
+                                    put("sender_name", m.optString("from", "Unknown"))
+                                    put("body", body)
+                                })
+                            }
+                        }
+                        "signal" -> {
+                            val data = JSONObject(text)
+                            val msgs = data.optJSONArray("messages") ?: return@launch
+                            for (i in 0 until msgs.length()) {
+                                val m = msgs.getJSONObject(i)
+                                val body = m.optString("body", "")
+                                if (body.isNotEmpty()) parsed.add(JSONObject().apply {
+                                    put("timestamp", m.optString("sent_at", m.optString("timestamp", "")))
+                                    put("sender_name", m.optString("source", "Unknown"))
+                                    put("body", body)
+                                })
+                            }
+                        }
+                    }
+                    if (parsed.isEmpty()) { importStatus = "No messages found"; return@launch }
+                    val convRes = APIClient.post("/messages/conversations", JSONObject().apply {
+                        put("type", "direct"); put("member_ids", org.json.JSONArray()); put("name", "$importSource import")
+                    })
+                    val convId = convRes.optString("conversation_id", "")
+                    if (convId.isEmpty()) { importStatus = "Failed to create conversation"; return@launch }
+                    var total = 0
+                    parsed.chunked(500).forEach { batch ->
+                        val arr = org.json.JSONArray()
+                        batch.forEach { arr.put(it) }
+                        val res = APIClient.post("/features/import", JSONObject().apply {
+                            put("source", importSource); put("conversation_id", convId); put("messages", arr)
+                        })
+                        total += res.optInt("imported", batch.size)
+                        importStatus = "Imported $total of ${parsed.size} messages..."
+                    }
+                    importStatus = "✅ Imported $total messages from $importSource"
+                } catch (_: Exception) { importStatus = "Import failed — check file format" }
+            }
+        }
+    }
+
     val photoPickerLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.PickVisualMedia()
     ) { uri ->
@@ -1997,6 +2252,11 @@ fun SettingsTab(onLogout: () -> Unit) {
             if (me.has("show_online_to")) onlineVisibility = me.optString("show_online_to", "everyone")
             if (me.has("who_can_add")) whoCanAdd = me.optString("who_can_add", "everyone")
             ghostMode = !readReceipts && !typingIndicators && onlineVisibility == "nobody"
+        } catch (_: Exception) {}
+        // Load devices
+        try {
+            val arr = APIClient.getArray("/devices")
+            devicesList = (0 until arr.length()).map { arr.getJSONObject(it) }
         } catch (_: Exception) {}
     }
 
@@ -2172,6 +2432,144 @@ fun SettingsTab(onLogout: () -> Unit) {
                 Text(linkMessage ?: "", fontSize = 13.sp, color = if (isSuccess) RocColors.Success else RocColors.Danger)
             }
         }
+
+        // Device list
+        devicesList.forEach { d ->
+            val devName = d.optString("device_name", "Unknown")
+            val platform = d.optString("platform", "")
+            val devIcon = if (platform == "ios" || platform == "android") "📱" else "💻"
+            val devId = d.optString("id", "")
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("$devIcon $devName · $platform", fontSize = 14.sp, modifier = Modifier.weight(1f))
+                IconButton(onClick = {
+                    scope.launch {
+                        try { APIClient.delete("/devices/$devId") } catch (_: Exception) {}
+                        try {
+                            val arr = APIClient.getArray("/devices")
+                            devicesList = (0 until arr.length()).map { arr.getJSONObject(it) }
+                        } catch (_: Exception) {}
+                    }
+                }, modifier = Modifier.size(32.dp)) {
+                    Icon(Icons.Default.Delete, contentDescription = "Remove", tint = RocColors.Danger, modifier = Modifier.size(18.dp))
+                }
+            }
+        }
+
+        // Verify device
+        ListItem(
+            headlineContent = { Text("Generate Verification Code", fontWeight = FontWeight.Medium) },
+            supportingContent = { Text("6-digit code for new device", fontSize = 13.sp, color = RocColors.TextSecondary) },
+            leadingContent = { Icon(Icons.Default.Key, contentDescription = null, tint = RocColors.RocGold, modifier = Modifier.size(24.dp)) },
+            modifier = Modifier.clickable {
+                scope.launch {
+                    try {
+                        val res = APIClient.post("/devices/verify/initiate", JSONObject())
+                        verifyCode = res.optString("code", "")
+                    } catch (_: Exception) {}
+                }
+            },
+        )
+        verifyCode?.let { code ->
+            Text(
+                code.chunked(3).joinToString(" "),
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                fontSize = 28.sp,
+                fontFamily = FontFamily.Monospace,
+                color = RocColors.RocGold,
+                letterSpacing = 6.sp,
+            )
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            OutlinedTextField(
+                value = verifyInput,
+                onValueChange = { if (it.length <= 6 && it.all { c -> c.isDigit() }) verifyInput = it },
+                label = { Text("Enter 6-digit code") },
+                modifier = Modifier.weight(1f),
+                singleLine = true,
+            )
+            Spacer(Modifier.width(8.dp))
+            TextButton(
+                enabled = verifyInput.length == 6,
+                onClick = {
+                    scope.launch {
+                        try {
+                            val res = APIClient.post("/devices/verify/confirm", JSONObject().apply { put("code", verifyInput) })
+                            if (res.optBoolean("verified", false)) {
+                                linkMessage = "✓ Device verified"
+                                verifyInput = ""
+                            } else {
+                                linkMessage = "Invalid or expired code"
+                            }
+                        } catch (_: Exception) { linkMessage = "Verification failed" }
+                    }
+                },
+            ) { Text("Verify") }
+        }
+
+        HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+
+        // Invite Link
+        Text("Invite Link", modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp), fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = RocColors.RocGold)
+        ListItem(
+            headlineContent = { Text(if (isGeneratingLink) "Generating..." else if (inviteLink != null) "Regenerate" else "Generate Invite Link") },
+            leadingContent = { Icon(Icons.Default.Link, contentDescription = null, tint = RocColors.RocGold) },
+            modifier = Modifier.clickable(enabled = !isGeneratingLink) {
+                isGeneratingLink = true
+                scope.launch {
+                    try {
+                        val res = APIClient.get("/contacts/invite-link")
+                        inviteLink = res.optString("link", "")
+                    } catch (_: Exception) {}
+                    isGeneratingLink = false
+                }
+            },
+        )
+        inviteLink?.let { link ->
+            Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(link, fontSize = 12.sp, color = RocColors.Turquoise, fontFamily = FontFamily.Monospace, modifier = Modifier.weight(1f), maxLines = 1)
+                IconButton(onClick = {
+                    val clip = android.content.ClipData.newPlainText("invite", link)
+                    (context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager).setPrimaryClip(clip)
+                }, modifier = Modifier.size(32.dp)) {
+                    Icon(Icons.Default.ContentCopy, contentDescription = "Copy", modifier = Modifier.size(18.dp))
+                }
+                IconButton(onClick = {
+                    val sendIntent = android.content.Intent().apply {
+                        action = android.content.Intent.ACTION_SEND
+                        putExtra(android.content.Intent.EXTRA_TEXT, link)
+                        type = "text/plain"
+                    }
+                    context.startActivity(android.content.Intent.createChooser(sendIntent, "Share invite"))
+                }, modifier = Modifier.size(32.dp)) {
+                    Icon(Icons.Default.Share, contentDescription = "Share", modifier = Modifier.size(18.dp))
+                }
+            }
+        }
+
+        HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+
+        // Import Chat History
+        Text("Import Chat History", modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp), fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = RocColors.RocGold)
+        Text("Upload an exported chat file. Messages are re-encrypted with your RocChat keys.", modifier = Modifier.padding(horizontal = 16.dp), fontSize = 12.sp, color = RocColors.TextSecondary)
+        listOf("whatsapp" to "📱 WhatsApp (.txt)", "telegram" to "✈️ Telegram (.json)", "signal" to "🔒 Signal (.json)").forEach { (source, label) ->
+            ListItem(
+                headlineContent = { Text(label) },
+                modifier = Modifier.clickable {
+                    importSource = source
+                    importFileLauncher.launch(if (source == "whatsapp") "text/plain" else "application/json")
+                },
+            )
+        }
+        if (importStatus.isNotEmpty()) {
+            Text(importStatus, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp), fontSize = 12.sp, color = RocColors.Turquoise)
+        }
+
         HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
 
         // Privacy header
@@ -2399,6 +2797,84 @@ fun SettingsTab(onLogout: () -> Unit) {
             border = ButtonDefaults.outlinedButtonBorder(enabled = true),
         ) {
             Text("Sign Out")
+        }
+    }
+}
+
+// ── Vault Item Card ──
+
+@Composable
+fun VaultItemCard(ciphertext: String, messageId: String) {
+    val context = LocalContext.current
+    var revealed by remember { mutableStateOf(false) }
+    val prefs = context.getSharedPreferences("rocchat", Context.MODE_PRIVATE)
+    val viewedKey = "vault_viewed_$messageId"
+
+    val vault = remember(ciphertext) {
+        try {
+            val json = JSONObject(ciphertext)
+            mapOf(
+                "vaultType" to json.optString("vaultType", ""),
+                "label" to json.optString("label", ""),
+                "encryptedPayload" to json.optString("encryptedPayload", ""),
+                "viewOnce" to json.optBoolean("viewOnce", false).toString(),
+            )
+        } catch (_: Exception) { emptyMap() }
+    }
+    val vType = vault["vaultType"] ?: ""
+    val label = vault["label"] ?: ""
+    val viewOnce = vault["viewOnce"] == "true"
+    val alreadyViewed = viewOnce && prefs.getBoolean(viewedKey, false)
+    val icon = when (vType) { "password" -> "🔑"; "wifi" -> "📶"; "card" -> "💳"; "note" -> "📝"; else -> "🔐" }
+
+    val fields = remember(vault["encryptedPayload"]) {
+        try {
+            val decoded = android.util.Base64.decode(vault["encryptedPayload"], android.util.Base64.NO_WRAP)
+            val json = JSONObject(String(decoded))
+            json.keys().asSequence().map { it to json.optString(it, "") }.toList()
+        } catch (_: Exception) { emptyList() }
+    }
+
+    Surface(
+        shape = RoundedCornerShape(10.dp),
+        color = RocColors.RocGold.copy(alpha = 0.08f),
+        modifier = Modifier.padding(4.dp),
+    ) {
+        Column(modifier = Modifier.padding(8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(icon, fontSize = 16.sp)
+                Spacer(Modifier.width(6.dp))
+                Text(label, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                if (viewOnce) {
+                    Spacer(Modifier.width(6.dp))
+                    Text("👁 View once", fontSize = 11.sp, color = Color(0xFFFF9800))
+                }
+            }
+            Spacer(Modifier.height(4.dp))
+            if (alreadyViewed) {
+                Text("Already viewed", fontSize = 12.sp, color = RocColors.TextSecondary)
+            } else if (revealed) {
+                fields.forEach { (key, value) ->
+                    Row(modifier = Modifier.padding(vertical = 1.dp)) {
+                        Text(key.replaceFirstChar { it.uppercase() }, fontSize = 12.sp, color = RocColors.TextSecondary, modifier = Modifier.width(80.dp))
+                        if (vType == "card" && key == "number") {
+                            Text("•••• ${value.takeLast(4)}", fontSize = 12.sp, fontFamily = FontFamily.Monospace)
+                        } else {
+                            Text(value, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
+                        }
+                    }
+                }
+                TextButton(onClick = {
+                    val text = fields.joinToString("\n") { "${it.first}: ${it.second}" }
+                    val clip = android.content.ClipData.newPlainText("vault", text)
+                    (context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager).setPrimaryClip(clip)
+                }) { Text("Copy All", color = RocColors.RocGold, fontSize = 12.sp) }
+            } else {
+                TextButton(onClick = {
+                    revealed = true
+                    if (viewOnce) prefs.edit().putBoolean(viewedKey, true).apply()
+                }) { Text("Tap to reveal", color = RocColors.Turquoise, fontSize = 12.sp) }
+            }
         }
     }
 }

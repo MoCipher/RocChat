@@ -124,6 +124,7 @@ object APIClient {
         val createdAt: String,
         val expiresAt: Long? = null,
         var status: String = "sent",
+        val reactions: String? = null,
     )
 
     suspend fun getMessages(conversationId: String): List<ChatMessage> {

@@ -29,21 +29,44 @@ struct ChatMessage: Identifiable {
     let id: String
     let conversationId: String
     let senderId: String
-    let ciphertext: String
+    var ciphertext: String
     let iv: String
     let ratchetHeader: String
     let messageType: String
     let createdAt: String
     let expiresAt: Int?
     var status: String // "sent", "delivered", "read"
+    var reactions: [[String: String]]?
 
-    init(id: String, conversationId: String, senderId: String, ciphertext: String, iv: String, ratchetHeader: String, messageType: String, createdAt: String, expiresAt: Int?, status: String = "sent") {
+    init(id: String, conversationId: String, senderId: String, ciphertext: String, iv: String, ratchetHeader: String, messageType: String, createdAt: String, expiresAt: Int?, status: String = "sent", reactions: [[String: String]]? = nil) {
         self.id = id; self.conversationId = conversationId; self.senderId = senderId
         self.ciphertext = ciphertext; self.iv = iv; self.ratchetHeader = ratchetHeader
         self.messageType = messageType; self.createdAt = createdAt; self.expiresAt = expiresAt
-        self.status = status
+        self.status = status; self.reactions = reactions
     }
 }
+
+// MARK: - Chat Themes
+
+struct ChatThemeOption {
+    let key: String
+    let label: String
+    let color: Color
+    let bgColor: Color
+    let bubbleMine: Color
+    let bubbleTheirs: Color
+}
+
+let chatThemeOptions: [ChatThemeOption] = [
+    ChatThemeOption(key: "default", label: "Default", color: .clear, bgColor: Color(.systemBackground), bubbleMine: .rocGold.opacity(0.15), bubbleTheirs: Color(.secondarySystemBackground)),
+    ChatThemeOption(key: "midnight-blue", label: "Midnight Blue", color: Color(red: 0.04, green: 0.09, blue: 0.16), bgColor: Color(red: 0.04, green: 0.09, blue: 0.16), bubbleMine: Color(red: 0.1, green: 0.21, blue: 0.36).opacity(0.8), bubbleTheirs: Color(red: 0.12, green: 0.16, blue: 0.23).opacity(0.9)),
+    ChatThemeOption(key: "forest-green", label: "Forest Green", color: Color(red: 0.04, green: 0.12, blue: 0.04), bgColor: Color(red: 0.04, green: 0.12, blue: 0.04), bubbleMine: Color(red: 0.08, green: 0.33, blue: 0.18).opacity(0.8), bubbleTheirs: Color(red: 0.1, green: 0.18, blue: 0.1).opacity(0.9)),
+    ChatThemeOption(key: "sunset-amber", label: "Sunset Amber", color: Color(red: 0.1, green: 0.06, blue: 0.02), bgColor: Color(red: 0.1, green: 0.06, blue: 0.02), bubbleMine: Color(red: 0.49, green: 0.18, blue: 0.07).opacity(0.8), bubbleTheirs: Color(red: 0.16, green: 0.13, blue: 0.09).opacity(0.9)),
+    ChatThemeOption(key: "ocean-teal", label: "Ocean Teal", color: Color(red: 0.02, green: 0.18, blue: 0.18), bgColor: Color(red: 0.02, green: 0.18, blue: 0.18), bubbleMine: Color(red: 0.07, green: 0.31, blue: 0.29).opacity(0.8), bubbleTheirs: Color(red: 0.1, green: 0.18, blue: 0.18).opacity(0.9)),
+    ChatThemeOption(key: "rose-gold", label: "Rose Gold", color: Color(red: 0.1, green: 0.04, blue: 0.06), bgColor: Color(red: 0.1, green: 0.04, blue: 0.06), bubbleMine: Color(red: 0.51, green: 0.09, blue: 0.26).opacity(0.8), bubbleTheirs: Color(red: 0.16, green: 0.08, blue: 0.13).opacity(0.9)),
+    ChatThemeOption(key: "lavender", label: "Lavender", color: Color(red: 0.06, green: 0.04, blue: 0.1), bgColor: Color(red: 0.06, green: 0.04, blue: 0.1), bubbleMine: Color(red: 0.3, green: 0.11, blue: 0.58).opacity(0.8), bubbleTheirs: Color(red: 0.12, green: 0.08, blue: 0.19).opacity(0.9)),
+    ChatThemeOption(key: "charcoal", label: "Charcoal", color: Color(red: 0.07, green: 0.07, blue: 0.07), bgColor: Color(red: 0.07, green: 0.07, blue: 0.07), bubbleMine: Color(red: 0.2, green: 0.2, blue: 0.2).opacity(0.9), bubbleTheirs: Color(red: 0.13, green: 0.13, blue: 0.13).opacity(0.9)),
+]
 
 // MARK: - Main Tab View
 
@@ -772,6 +795,13 @@ struct ConversationView: View {
     @State private var lastTypingSent: Date = .distantPast
     @State private var isRemoteTyping = false
     @State private var remoteOnlineStatus: String = ""
+    @State private var showThemePicker = false
+    @State private var chatTheme: String = "default"
+    @State private var showVaultComposer = false
+    @State private var vaultType = "password"
+    @State private var vaultLabel = ""
+    @State private var vaultFields: [String: String] = [:]
+    @State private var vaultViewOnce = false
     private let userId = UserDefaults.standard.string(forKey: "user_id") ?? ""
 
     private var convName: String {
@@ -779,6 +809,10 @@ struct ConversationView: View {
         let others = conversation.members.filter { $0.userId != userId }
         let name = others.map { $0.displayName.isEmpty ? $0.username : $0.displayName }.joined(separator: ", ")
         return name.isEmpty ? "Unknown" : name
+    }
+
+    private var activeTheme: ChatThemeOption {
+        chatThemeOptions.first(where: { $0.key == chatTheme }) ?? chatThemeOptions[0]
     }
 
     var body: some View {
@@ -955,6 +989,9 @@ struct ConversationView: View {
                     Button(action: { showVideoRecorder = true }) {
                         Label("Video Message", systemImage: "video.fill")
                     }
+                    Button(action: { showVaultComposer = true }) {
+                        Label("Vault Item", systemImage: "lock.shield")
+                    }
                 } label: {
                     ZStack {
                         Circle()
@@ -1022,6 +1059,7 @@ struct ConversationView: View {
             .background(.ultraThinMaterial)
             } // else !isRecording
         }
+        .background(chatTheme == "default" ? Color(.systemBackground) : activeTheme.bgColor)
         .navigationTitle(convName)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.hidden, for: .tabBar)
@@ -1061,6 +1099,9 @@ struct ConversationView: View {
                 }
                 Button(action: { loadSafetyNumber() }) {
                     Image(systemName: "shield.fill").foregroundColor(.rocGold)
+                }
+                Button(action: { showThemePicker = true }) {
+                    Image(systemName: "paintpalette.fill").foregroundColor(.rocGold)
                 }
                 Button(action: { withAnimation { isSearching.toggle() } }) {
                     Image(systemName: "magnifyingglass").foregroundColor(.rocGold)
@@ -1128,6 +1169,89 @@ struct ConversationView: View {
                 }
             }
             .presentationDetents([.medium])
+        }
+        .sheet(isPresented: $showThemePicker) {
+            NavigationStack {
+                List {
+                    ForEach(chatThemeOptions, id: \.key) { theme in
+                        Button(action: {
+                            chatTheme = theme.key
+                            UserDefaults.standard.set(theme.key, forKey: "theme_\(conversation.id)")
+                            Task {
+                                try? await APIClient.shared.postRaw("/messages/conversations/\(conversation.id)/theme", body: ["theme": theme.key], method: "PUT")
+                            }
+                            showThemePicker = false
+                        }) {
+                            HStack {
+                                Circle()
+                                    .fill(theme.color)
+                                    .frame(width: 32, height: 32)
+                                Text(theme.label)
+                                    .foregroundColor(.primary)
+                                Spacer()
+                                if chatTheme == theme.key {
+                                    Image(systemName: "checkmark").foregroundColor(.rocGold)
+                                }
+                            }
+                        }
+                    }
+                }
+                .navigationTitle("Chat Theme")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Done") { showThemePicker = false }
+                    }
+                }
+            }
+            .presentationDetents([.medium])
+        }
+        .sheet(isPresented: $showVaultComposer) {
+            NavigationStack {
+                Form {
+                    Picker("Type", selection: $vaultType) {
+                        Text("🔑 Password").tag("password")
+                        Text("📶 WiFi").tag("wifi")
+                        Text("💳 Card").tag("card")
+                        Text("📝 Note").tag("note")
+                    }
+                    .onChange(of: vaultType) { _, _ in vaultFields = [:] }
+                    TextField("Label", text: $vaultLabel)
+                    switch vaultType {
+                    case "password":
+                        TextField("Username", text: Binding(get: { vaultFields["username"] ?? "" }, set: { vaultFields["username"] = $0 }))
+                        SecureField("Password", text: Binding(get: { vaultFields["password"] ?? "" }, set: { vaultFields["password"] = $0 }))
+                        TextField("URL (optional)", text: Binding(get: { vaultFields["url"] ?? "" }, set: { vaultFields["url"] = $0 }))
+                    case "wifi":
+                        TextField("Network Name", text: Binding(get: { vaultFields["ssid"] ?? "" }, set: { vaultFields["ssid"] = $0 }))
+                        SecureField("Password", text: Binding(get: { vaultFields["password"] ?? "" }, set: { vaultFields["password"] = $0 }))
+                    case "card":
+                        TextField("Card Number", text: Binding(get: { vaultFields["number"] ?? "" }, set: { vaultFields["number"] = $0 }))
+                            .keyboardType(.numberPad)
+                        TextField("Expiry (MM/YY)", text: Binding(get: { vaultFields["expiry"] ?? "" }, set: { vaultFields["expiry"] = $0 }))
+                        TextField("Cardholder Name", text: Binding(get: { vaultFields["name"] ?? "" }, set: { vaultFields["name"] = $0 }))
+                    case "note":
+                        TextEditor(text: Binding(get: { vaultFields["text"] ?? "" }, set: { vaultFields["text"] = $0 }))
+                            .frame(minHeight: 100)
+                    default: EmptyView()
+                    }
+                    Toggle("View once", isOn: $vaultViewOnce)
+                }
+                .navigationTitle("Share Vault Item")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancel") { showVaultComposer = false }
+                    }
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Send") { sendVaultItem() }
+                            .disabled(vaultLabel.isEmpty)
+                    }
+                }
+            }
+        }
+        .onAppear {
+            chatTheme = UserDefaults.standard.string(forKey: "theme_\(conversation.id)") ?? "default"
         }
         .photosPicker(isPresented: $showPhotoPicker, selection: $selectedPhotoItem, matching: .any(of: [.images, .videos]))
         .onChange(of: selectedPhotoItem) { _, newItem in
@@ -1570,6 +1694,43 @@ struct ConversationView: View {
         } catch {}
     }
 
+    private func sendVaultItem() {
+        let payload = try? JSONSerialization.data(withJSONObject: vaultFields)
+        let encoded = payload?.base64EncodedString() ?? ""
+        let vault: [String: Any] = [
+            "type": "vault_item",
+            "vaultType": vaultType,
+            "label": vaultLabel,
+            "encryptedPayload": encoded,
+            "viewOnce": vaultViewOnce,
+            "timestamp": Int(Date().timeIntervalSince1970),
+        ]
+        guard let jsonData = try? JSONSerialization.data(withJSONObject: vault),
+              let jsonString = String(data: jsonData, encoding: .utf8) else { return }
+        showVaultComposer = false
+        vaultLabel = ""; vaultFields = [:]; vaultViewOnce = false
+        Task {
+            let recipientId = conversation.members.first(where: { $0.userId != userId })?.userId ?? ""
+            var body: [String: Any] = [
+                "conversation_id": conversation.id,
+                "message_type": "vault_item",
+            ]
+            if !recipientId.isEmpty {
+                let envelope = try await SessionManager.shared.encryptMessage(
+                    conversationId: conversation.id,
+                    recipientUserId: recipientId,
+                    plaintext: jsonString
+                )
+                body["ciphertext"] = envelope.ciphertext
+                body["iv"] = envelope.iv
+                body["ratchet_header"] = envelope.ratchetHeader
+            } else {
+                body["encrypted"] = jsonString
+            }
+            _ = try? await APIClient.shared.postRaw("/messages/send", body: body)
+        }
+    }
+
     private func sendMessage() {
         let text = inputText.trimmingCharacters(in: .whitespaces)
         guard !text.isEmpty, !isSending else { return }
@@ -1918,6 +2079,43 @@ struct ConversationView: View {
                             if fromUser != userId {
                                 DispatchQueue.main.async { remoteOnlineStatus = status }
                             }
+                        } else if type == "reaction" {
+                            let msgId = payload["message_id"] as? String ?? ""
+                            let emoji = payload["emoji"] as? String ?? ""
+                            let reactUserId = payload["user_id"] as? String ?? payload["fromUserId"] as? String ?? ""
+                            DispatchQueue.main.async {
+                                if let idx = messages.firstIndex(where: { $0.id == msgId }) {
+                                    var reactions = messages[idx].reactions ?? []
+                                    reactions.append(["emoji": emoji, "user_id": reactUserId])
+                                    messages[idx].reactions = reactions
+                                }
+                            }
+                        } else if type == "message_edit" {
+                            let msgId = payload["message_id"] as? String ?? ""
+                            let newCiphertext = payload["ciphertext"] as? String ?? ""
+                            let newIv = payload["iv"] as? String ?? ""
+                            let newRh = payload["ratchet_header"] as? String ?? ""
+                            DispatchQueue.main.async {
+                                if let idx = messages.firstIndex(where: { $0.id == msgId }) {
+                                    let displayText: String
+                                    if !newRh.isEmpty && !newIv.isEmpty {
+                                        displayText = (try? SessionManager.shared.decryptMessage(
+                                            conversationId: conversation.id,
+                                            ciphertext: newCiphertext, iv: newIv, ratchetHeaderStr: newRh
+                                        )) ?? newCiphertext
+                                    } else {
+                                        displayText = newCiphertext
+                                    }
+                                    messages[idx].ciphertext = displayText + " (edited)"
+                                }
+                            }
+                        } else if type == "message_delete" {
+                            let msgId = payload["message_id"] as? String ?? ""
+                            DispatchQueue.main.async {
+                                messages.removeAll { $0.id == msgId }
+                            }
+                        } else if type == "message_pin" {
+                            // Pin updates — just refresh the pinned list if viewing
                         }
                     }
                 default: break
@@ -1984,6 +2182,8 @@ struct MessageBubbleView: View {
             VStack(alignment: isMine ? .trailing : .leading, spacing: 3) {
                 if isViewOnce {
                     viewOnceContent
+                } else if let vaultItem = parseVaultItem(message.ciphertext) {
+                    VaultItemView(vault: vaultItem, messageId: message.id)
                 } else {
                     Text(message.ciphertext.isEmpty ? "🔒 Encrypted" : message.ciphertext)
                         .font(.body)
@@ -2217,6 +2417,21 @@ struct SettingsView: View {
     @State private var isUploadingAvatar = false
     @AppStorage("app_theme") private var appTheme = "system"
 
+    // Invite link
+    @State private var inviteLink: String?
+    @State private var isGeneratingLink = false
+
+    // Chat import
+    @State private var importSource = ""
+    @State private var showImportPicker = false
+    @State private var importStatus = ""
+
+    // Device management
+    @State private var devices: [[String: Any]] = []
+    @State private var verifyCode: String?
+    @State private var verifyExpiry: Int = 0
+    @State private var verifyInput = ""
+
     var body: some View {
         NavigationStack {
             List {
@@ -2342,6 +2557,133 @@ struct SettingsView: View {
                                 .font(.caption)
                                 .foregroundColor(msg.contains("✓") ? .success : .danger)
                         }
+                    }
+
+                    // Device list
+                    ForEach(devices.indices, id: \.self) { idx in
+                        let d = devices[idx]
+                        let name = d["device_name"] as? String ?? "Unknown"
+                        let platform = d["platform"] as? String ?? ""
+                        let icon = (platform == "ios" || platform == "android") ? "📱" : "💻"
+                        HStack {
+                            Text("\(icon) \(name) · \(platform)")
+                                .font(.subheadline)
+                            Spacer()
+                            Button(role: .destructive) {
+                                Task {
+                                    if let deviceId = d["id"] as? String {
+                                        _ = try? await APIClient.shared.deleteRaw("/devices/\(deviceId)")
+                                        await loadDevices()
+                                    }
+                                }
+                            } label: {
+                                Image(systemName: "trash").font(.caption)
+                            }
+                        }
+                    }
+
+                    // Verify device
+                    Button {
+                        Task {
+                            let data = try await APIClient.shared.postRaw("/devices/verify/initiate", body: [:])
+                            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                               let code = json["code"] as? String {
+                                verifyCode = code
+                            }
+                        }
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: "key.fill").foregroundColor(.rocGold)
+                            VStack(alignment: .leading) {
+                                Text("Generate Verification Code").fontWeight(.medium)
+                                Text("6-digit code for new device").font(.caption).foregroundColor(.textSecondary)
+                            }
+                        }
+                    }
+                    if let code = verifyCode {
+                        Text(code).font(.system(size: 28, design: .monospaced)).tracking(6).foregroundColor(.rocGold)
+                    }
+                    HStack {
+                        TextField("Enter 6-digit code", text: $verifyInput)
+                            .keyboardType(.numberPad)
+                            .textFieldStyle(.roundedBorder)
+                        Button("Verify") {
+                            Task {
+                                let body: [String: Any] = ["code": verifyInput]
+                                let data = try await APIClient.shared.postRaw("/devices/verify/confirm", body: body)
+                                if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                                   json["verified"] as? Bool == true {
+                                    linkMessage = "✓ Device verified"
+                                    verifyInput = ""
+                                } else {
+                                    linkMessage = "Invalid or expired code"
+                                }
+                            }
+                        }
+                        .disabled(verifyInput.count != 6)
+                    }
+                }
+
+                Section("Invite Link") {
+                    Button {
+                        isGeneratingLink = true
+                        Task {
+                            let data = try await APIClient.shared.getRaw("/contacts/invite-link")
+                            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                               let link = json["link"] as? String {
+                                inviteLink = link
+                            }
+                            isGeneratingLink = false
+                        }
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: "link.badge.plus").foregroundColor(.rocGold)
+                            Text(isGeneratingLink ? "Generating..." : (inviteLink != nil ? "Regenerate" : "Generate Invite Link"))
+                        }
+                    }
+                    .disabled(isGeneratingLink)
+                    if let link = inviteLink {
+                        HStack {
+                            Text(link)
+                                .font(.caption.monospaced())
+                                .foregroundColor(.turquoise)
+                                .lineLimit(1)
+                            Spacer()
+                            Button {
+                                UIPasteboard.general.string = link
+                            } label: {
+                                Image(systemName: "doc.on.doc").font(.caption)
+                            }
+                            Button {
+                                let av = UIActivityViewController(activityItems: [link], applicationActivities: nil)
+                                UIApplication.shared.connectedScenes
+                                    .compactMap { $0 as? UIWindowScene }
+                                    .flatMap { $0.windows }
+                                    .first?.rootViewController?.present(av, animated: true)
+                            } label: {
+                                Image(systemName: "square.and.arrow.up").font(.caption)
+                            }
+                        }
+                    }
+                }
+
+                Section("Import Chat History") {
+                    Text("Upload an exported chat file. Messages are re-encrypted with your RocChat keys.")
+                        .font(.caption).foregroundColor(.textSecondary)
+                    Button("📱 WhatsApp (.txt)") {
+                        importSource = "whatsapp"
+                        showImportPicker = true
+                    }
+                    Button("✈️ Telegram (.json)") {
+                        importSource = "telegram"
+                        showImportPicker = true
+                    }
+                    Button("🔒 Signal (.json)") {
+                        importSource = "signal"
+                        showImportPicker = true
+                    }
+                    if !importStatus.isEmpty {
+                        Text(importStatus).font(.caption).foregroundColor(.turquoise)
                     }
                 }
 
@@ -2588,6 +2930,14 @@ struct SettingsView: View {
             guard let newItem else { return }
             Task { await uploadAvatar(item: newItem) }
         }
+        .fileImporter(isPresented: $showImportPicker, allowedContentTypes: [.plainText, .json], allowsMultipleSelection: false) { result in
+            if case .success(let urls) = result, let url = urls.first {
+                guard url.startAccessingSecurityScopedResource() else { return }
+                defer { url.stopAccessingSecurityScopedResource() }
+                guard let text = try? String(contentsOf: url, encoding: .utf8) else { return }
+                Task { await processImport(source: importSource, text: text) }
+            }
+        }
         .task {
             do {
                 let me = try await APIClient.shared.getMe()
@@ -2617,6 +2967,72 @@ struct SettingsView: View {
                     }
                 }
             } catch {}
+            // Load devices
+            await loadDevices()
+        }
+    }
+
+    private func loadDevices() async {
+        do {
+            let data = try await APIClient.shared.getRaw("/devices")
+            if let arr = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
+                devices = arr
+            }
+        } catch {}
+    }
+
+    private func processImport(source: String, text: String) async {
+        importStatus = "Parsing \(source) export..."
+        var parsed: [[String: Any]] = []
+
+        if source == "whatsapp" {
+            for line in text.components(separatedBy: "\n") {
+                let pattern = #"^(\d{1,2}/\d{1,2}/\d{2,4},?\s+\d{1,2}:\d{2}(?:\s*[AP]M)?)\s*-\s*([^:]+):\s*(.+)$"#
+                if let regex = try? NSRegularExpression(pattern: pattern),
+                   let match = regex.firstMatch(in: line, range: NSRange(line.startIndex..., in: line)) {
+                    let ts = String(line[Range(match.range(at: 1), in: line)!])
+                    let sender = String(line[Range(match.range(at: 2), in: line)!]).trimmingCharacters(in: .whitespaces)
+                    let body = String(line[Range(match.range(at: 3), in: line)!])
+                    parsed.append(["timestamp": ts, "sender_name": sender, "body": body])
+                }
+            }
+        } else if source == "telegram" || source == "signal" {
+            if let data = text.data(using: .utf8),
+               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let msgs = (json["messages"] as? [[String: Any]]) {
+                for m in msgs {
+                    let body = (source == "telegram" ? m["text"] : m["body"]) as? String ?? ""
+                    let sender = (source == "telegram" ? (m["from"] as? String ?? "Unknown") : (m["source"] as? String ?? "Unknown"))
+                    let ts = (m["date"] ?? m["sent_at"] ?? m["timestamp"]) as? String ?? ""
+                    if !body.isEmpty { parsed.append(["timestamp": ts, "sender_name": sender, "body": body]) }
+                }
+            }
+        }
+
+        guard !parsed.isEmpty else { importStatus = "No messages found in file"; return }
+
+        // Create conversation and batch upload
+        do {
+            let convBody: [String: Any] = ["type": "direct", "member_ids": [] as [String], "name": "\(source) import"]
+            let convData = try await APIClient.shared.postRaw("/messages/conversations", body: convBody)
+            guard let convJson = try JSONSerialization.jsonObject(with: convData) as? [String: Any],
+                  let convId = convJson["conversation_id"] as? String else {
+                importStatus = "Failed to create conversation"; return
+            }
+            var total = 0
+            let chunkSize = 500
+            for i in stride(from: 0, to: parsed.count, by: chunkSize) {
+                let batch = Array(parsed[i..<min(i + chunkSize, parsed.count)])
+                let body: [String: Any] = ["source": source, "conversation_id": convId, "messages": batch]
+                let resData = try await APIClient.shared.postRaw("/features/import", body: body)
+                if let res = try? JSONSerialization.jsonObject(with: resData) as? [String: Any] {
+                    total += res["imported"] as? Int ?? batch.count
+                }
+                importStatus = "Imported \(total) of \(parsed.count) messages..."
+            }
+            importStatus = "✅ Imported \(total) messages from \(source)"
+        } catch {
+            importStatus = "Import failed — check file format"
         }
     }
 
@@ -2845,9 +3261,90 @@ class QrScannerViewController: UIViewController, AVCaptureMetadataOutputObjectsD
     }
 }
 
-// MARK: - Helpers
+// MARK: - Vault Item
 
-func formatRelativeTime(_ iso: String) -> String {
+struct VaultItemData {
+    let vaultType: String
+    let label: String
+    let encryptedPayload: String
+    let viewOnce: Bool
+}
+
+func parseVaultItem(_ text: String) -> VaultItemData? {
+    guard text.contains("\"type\":\"vault_item\""),
+          let data = text.data(using: .utf8),
+          let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let vaultType = json["vaultType"] as? String,
+          let label = json["label"] as? String,
+          let payload = json["encryptedPayload"] as? String else { return nil }
+    return VaultItemData(vaultType: vaultType, label: label, encryptedPayload: payload, viewOnce: json["viewOnce"] as? Bool ?? false)
+}
+
+struct VaultItemView: View {
+    let vault: VaultItemData
+    let messageId: String
+    @State private var revealed = false
+
+    private var icon: String {
+        switch vault.vaultType {
+        case "password": return "🔑"
+        case "wifi": return "📶"
+        case "card": return "💳"
+        case "note": return "📝"
+        default: return "🔐"
+        }
+    }
+
+    private var decodedFields: [String: String] {
+        guard let data = Data(base64Encoded: vault.encryptedPayload),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: String] else { return [:] }
+        return json
+    }
+
+    private var viewedKey: String { "rocchat_vault_viewed_\(messageId)" }
+    private var alreadyViewed: Bool { vault.viewOnce && UserDefaults.standard.bool(forKey: viewedKey) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Text(icon)
+                Text(vault.label).fontWeight(.semibold).font(.subheadline)
+                if vault.viewOnce {
+                    Text("👁 View once").font(.caption2).foregroundColor(.orange)
+                }
+            }
+            if alreadyViewed {
+                Text("Already viewed").font(.caption).foregroundColor(.secondary)
+            } else if revealed {
+                ForEach(Array(decodedFields.sorted(by: { $0.key < $1.key })), id: \.key) { key, value in
+                    HStack {
+                        Text(key.capitalized).font(.caption).foregroundColor(.secondary).frame(width: 80, alignment: .leading)
+                        if vault.vaultType == "card" && key == "number" {
+                            Text("•••• \(String(value.suffix(4)))").font(.caption).monospaced()
+                        } else {
+                            Text(value).font(.caption).monospaced().textSelection(.enabled)
+                        }
+                    }
+                }
+                Button("Copy All") {
+                    let text = decodedFields.map { "\($0.key): \($0.value)" }.joined(separator: "\n")
+                    UIPasteboard.general.string = text
+                }
+                .font(.caption).foregroundColor(.rocGold)
+            } else {
+                Button("Tap to reveal") {
+                    revealed = true
+                    if vault.viewOnce { UserDefaults.standard.set(true, forKey: viewedKey) }
+                }
+                .font(.caption).foregroundColor(.turquoise)
+            }
+        }
+        .padding(8)
+        .background(RoundedRectangle(cornerRadius: 10).fill(Color.rocGold.opacity(0.08)))
+    }
+}
+
+// MARK: - Helpers(_ iso: String) -> String {
     let formatter = ISO8601DateFormatter()
     formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
     guard let date = formatter.date(from: iso) ?? ISO8601DateFormatter().date(from: iso) else { return "" }

@@ -805,6 +805,17 @@ fun ConversationScreen(conversationId: String, conversationName: String, recipie
                     msg.copy(ciphertext = displayText)
                 } else msg
             }
+            // Send read receipt for last message from the other user
+            val lastFromOther = messages.lastOrNull { it.senderId != userId }
+            if (lastFromOther != null) {
+                ws?.send(JSONObject().apply {
+                    put("type", "read_receipt")
+                    put("payload", JSONObject().apply {
+                        put("message_id", lastFromOther.id)
+                        put("fromUserId", userId)
+                    })
+                }.toString())
+            }
         } catch (_: Exception) {}
     }
 
@@ -979,7 +990,23 @@ fun ConversationScreen(conversationId: String, conversationName: String, recipie
                 title = {
                     Column {
                         Text(conversationName, fontWeight = FontWeight.Bold, fontSize = 17.sp)
-                        Text("🔒 End-to-end encrypted", fontSize = 11.sp, color = RocColors.Turquoise)
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            if (remoteOnlineStatus.isNotEmpty()) {
+                                Surface(
+                                    shape = CircleShape,
+                                    color = if (remoteOnlineStatus == "online") Color.Green else Color.Gray,
+                                    modifier = Modifier.size(8.dp),
+                                ) {}
+                                Spacer(Modifier.width(4.dp))
+                                Text(
+                                    if (remoteOnlineStatus == "online") "Online" else "Offline",
+                                    fontSize = 11.sp,
+                                    color = if (remoteOnlineStatus == "online") Color.Green else RocColors.TextSecondary,
+                                )
+                                Spacer(Modifier.width(6.dp))
+                            }
+                            Text("🔒 E2EE", fontSize = 11.sp, color = RocColors.Turquoise)
+                        }
                     }
                 },
                 navigationIcon = {
@@ -1586,6 +1613,52 @@ fun ConversationScreen(conversationId: String, conversationName: String, recipie
                 },
             )
         }
+
+        // Forward message dialog
+        if (showForwardDialog && forwardingMessage != null) {
+            var fwdConversations by remember { mutableStateOf<List<APIClient.Conversation>>(emptyList()) }
+            LaunchedEffect(Unit) {
+                try { fwdConversations = APIClient.getConversations() } catch (_: Exception) {}
+            }
+            AlertDialog(
+                onDismissRequest = { showForwardDialog = false; forwardingMessage = null },
+                title = { Text("Forward Message") },
+                text = {
+                    if (fwdConversations.isEmpty()) {
+                        Text("No conversations available", color = RocColors.TextSecondary)
+                    } else {
+                        LazyColumn(modifier = Modifier.heightIn(max = 300.dp)) {
+                            items(fwdConversations.filter { it.id != conversationId }, key = { it.id }) { conv ->
+                                val name = conv.name ?: conv.members.joinToString(", ") { it.displayName.ifBlank { it.username } }.ifBlank { "Unknown" }
+                                ListItem(
+                                    headlineContent = { Text(name) },
+                                    modifier = Modifier.clickable {
+                                        scope.launch {
+                                            try {
+                                                val fwdMsg = forwardingMessage ?: return@launch
+                                                val body = JSONObject().apply {
+                                                    put("ciphertext", fwdMsg.ciphertext)
+                                                    put("iv", "")
+                                                    put("ratchet_header", "")
+                                                    put("message_type", fwdMsg.messageType)
+                                                }
+                                                APIClient.post("/messages/send?conversation_id=${conv.id}", body)
+                                            } catch (_: Exception) {}
+                                            showForwardDialog = false
+                                            forwardingMessage = null
+                                        }
+                                    },
+                                )
+                            }
+                        }
+                    }
+                },
+                confirmButton = {},
+                dismissButton = {
+                    TextButton(onClick = { showForwardDialog = false; forwardingMessage = null }) { Text("Cancel") }
+                },
+            )
+        }
     }
 }
 
@@ -1726,6 +1799,11 @@ private fun MessageBubble(
                         fontSize = 15.sp,
                         color = MaterialTheme.colorScheme.onSurface,
                     )
+                    // Link preview
+                    val url = remember(msg.ciphertext) { extractUrl(msg.ciphertext) }
+                    if (url != null) {
+                        LinkPreviewCard(url = url)
+                    }
                 }
                 Row(
                     modifier = Modifier.align(Alignment.End).padding(top = 3.dp),
@@ -2437,6 +2515,56 @@ private fun SettingToggle(label: String, checked: Boolean, onCheckedChange: (Boo
 }
 
 // ── Helpers ──
+
+// ── Link Preview ──
+
+private val urlRegex = Regex("""https?://[^\s<>"{}|\\^`\[\]]+""")
+
+private fun extractUrl(text: String): String? {
+    return urlRegex.find(text)?.value
+}
+
+@Composable
+private fun LinkPreviewCard(url: String) {
+    var title by remember { mutableStateOf<String?>(null) }
+    var description by remember { mutableStateOf<String?>(null) }
+    var imageUrl by remember { mutableStateOf<String?>(null) }
+    var loaded by remember { mutableStateOf(false) }
+
+    LaunchedEffect(url) {
+        try {
+            val encoded = java.net.URLEncoder.encode(url, "UTF-8")
+            val json = APIClient.get("/link-preview?url=$encoded")
+            title = json.optString("title", "").ifBlank { null }
+            description = json.optString("description", "").ifBlank { null }
+            imageUrl = json.optString("image", "").ifBlank { null }
+            loaded = true
+        } catch (_: Exception) { loaded = true }
+    }
+
+    if (loaded && (title != null || description != null)) {
+        Surface(
+            shape = RoundedCornerShape(8.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+            modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+        ) {
+            Column(modifier = Modifier.padding(8.dp)) {
+                imageUrl?.let { img ->
+                    SubcomposeAsyncImage(
+                        model = ImageRequest.Builder(LocalContext.current).data(img).crossfade(true).build(),
+                        contentDescription = null,
+                        modifier = Modifier.fillMaxWidth().heightIn(max = 140.dp).clip(RoundedCornerShape(6.dp)),
+                        contentScale = ContentScale.Crop,
+                    )
+                    Spacer(Modifier.height(6.dp))
+                }
+                title?.let { Text(it, fontWeight = FontWeight.SemiBold, fontSize = 13.sp, maxLines = 2, overflow = TextOverflow.Ellipsis) }
+                description?.let { Text(it, fontSize = 12.sp, color = RocColors.TextSecondary, maxLines = 3, overflow = TextOverflow.Ellipsis) }
+                Text(url.take(40) + if (url.length > 40) "…" else "", fontSize = 11.sp, color = RocColors.Turquoise, maxLines = 1)
+            }
+        }
+    }
+}
 
 private fun formatRelativeTime(iso: String): String {
     return try {

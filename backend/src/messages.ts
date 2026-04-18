@@ -437,12 +437,12 @@ async function getMessages(
   let params: unknown[];
 
   if (before !== null) {
-    query = `SELECT id, sender_id, encrypted, server_timestamp, expires_at, reply_to
+    query = `SELECT id, sender_id, encrypted, server_timestamp, expires_at, reply_to, edited_at, deleted_at
              FROM messages WHERE conversation_id = ? AND server_timestamp < ?
              ORDER BY server_timestamp DESC LIMIT ?`;
     params = [conversationId, before, limit];
   } else {
-    query = `SELECT id, sender_id, encrypted, server_timestamp, expires_at, reply_to
+    query = `SELECT id, sender_id, encrypted, server_timestamp, expires_at, reply_to, edited_at, deleted_at
              FROM messages WHERE conversation_id = ?
              ORDER BY server_timestamp DESC LIMIT ?`;
     params = [conversationId, limit];
@@ -466,6 +466,8 @@ async function getMessages(
       created_at: new Date((row.server_timestamp as number) * 1000).toISOString(),
       expires_at: row.expires_at,
       reply_to: row.reply_to || null,
+      edited_at: row.edited_at || null,
+      deleted_at: row.deleted_at || null,
     };
   });
 

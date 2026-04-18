@@ -929,7 +929,16 @@ struct ConversationView: View {
             }
             // Online presence
             if !remoteOnlineStatus.isEmpty {
-                // shown in nav subtitle area — handled via toolbar
+                HStack(spacing: 4) {
+                    Circle()
+                        .fill(remoteOnlineStatus == "online" ? Color.green : Color.gray)
+                        .frame(width: 8, height: 8)
+                    Text(remoteOnlineStatus == "online" ? "Online" : "Offline")
+                        .font(.caption2)
+                        .foregroundColor(remoteOnlineStatus == "online" ? .green : .secondary)
+                }
+                .padding(.horizontal, 16)
+                .padding(.bottom, 2)
             }
             HStack(alignment: .bottom, spacing: 10) {
                 // Attachment menu (photo, file, vault)
@@ -1553,6 +1562,10 @@ struct ConversationView: View {
                         status: m["status"] as? String ?? "sent"
                     )
                 }
+            }
+            // Send read receipt for the last message from another user
+            if let lastFromOther = messages.last(where: { $0.senderId != userId }) {
+                sendReadReceipt(messageId: lastFromOther.id)
             }
         } catch {}
     }
@@ -3003,7 +3016,7 @@ struct ForwardMessageSheet: View {
                     dismiss()
                 }) {
                     HStack(spacing: 12) {
-                        AvatarView(url: conv.avatarURL, fallback: conv.name ?? conv.members.first?.username ?? "?", size: 40)
+                        AvatarView(name: conv.name ?? conv.members.first?.username ?? "?", avatarUrl: conv.avatarURL, size: 40)
                         VStack(alignment: .leading) {
                             Text(conv.name ?? conv.members.filter { $0.userId != userId }.map { $0.displayName.isEmpty ? $0.username : $0.displayName }.joined(separator: ", "))
                                 .font(.headline)

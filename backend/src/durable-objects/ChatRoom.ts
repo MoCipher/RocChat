@@ -33,6 +33,7 @@ interface WsMessage {
     | 'call_audio'
     | 'call_p2p_candidate'
     | 'read_receipt'
+    | 'delivery_receipt'
     | 'group_call_start'
     | 'group_call_join'
     | 'group_call_leave'
@@ -128,6 +129,12 @@ export class ChatRoom implements DurableObject {
         { type: 'presence', payload: { userId, status: 'offline' } },
         userId,
       );
+      // Persist last_seen
+      try {
+        this.env.DB.prepare(
+          `UPDATE users SET last_seen_at = datetime('now') WHERE id = ?`
+        ).bind(userId).run();
+      } catch { /* column may not exist yet */ }
     });
 
     server.addEventListener('error', () => {
@@ -256,7 +263,8 @@ export class ChatRoom implements DurableObject {
         break;
       }
 
-      case 'read_receipt':
+      case 'read_receipt': {
+        const messageId = msg.payload.message_id as string | undefined;
         this.broadcast(
           {
             type: 'read_receipt',
@@ -264,7 +272,37 @@ export class ChatRoom implements DurableObject {
           },
           sender.userId,
         );
+        // Persist to D1
+        if (messageId) {
+          try {
+            await this.env.DB.prepare(
+              `INSERT INTO message_receipts (message_id, user_id, status) VALUES (?, ?, 'read')
+               ON CONFLICT(message_id, user_id) DO UPDATE SET status = 'read', created_at = datetime('now')`
+            ).bind(messageId, sender.userId).run();
+          } catch { /* table may not exist yet */ }
+        }
         break;
+      }
+
+      case 'delivery_receipt': {
+        const delivMsgId = msg.payload.message_id as string | undefined;
+        this.broadcast(
+          {
+            type: 'delivery_receipt',
+            payload: { userId: sender.userId, ...msg.payload },
+          },
+          sender.userId,
+        );
+        if (delivMsgId) {
+          try {
+            await this.env.DB.prepare(
+              `INSERT INTO message_receipts (message_id, user_id, status) VALUES (?, ?, 'delivered')
+               ON CONFLICT(message_id, user_id) DO NOTHING`
+            ).bind(delivMsgId, sender.userId).run();
+          } catch { /* table may not exist yet */ }
+        }
+        break;
+      }
 
       case 'message':
         // Encrypted message relay — server never decrypts
@@ -272,6 +310,46 @@ export class ChatRoom implements DurableObject {
         this.broadcast(
           {
             type: 'message',
+            payload: { ...msg.payload, fromUserId: sender.userId },
+          },
+          sender.userId,
+        );
+        break;
+
+      case 'reaction':
+        this.broadcast(
+          {
+            type: 'reaction',
+            payload: { ...msg.payload, fromUserId: sender.userId },
+          },
+          sender.userId,
+        );
+        break;
+
+      case 'message_edit':
+        this.broadcast(
+          {
+            type: 'message_edit',
+            payload: { ...msg.payload, fromUserId: sender.userId },
+          },
+          sender.userId,
+        );
+        break;
+
+      case 'message_delete':
+        this.broadcast(
+          {
+            type: 'message_delete',
+            payload: { ...msg.payload, fromUserId: sender.userId },
+          },
+          sender.userId,
+        );
+        break;
+
+      case 'message_pin':
+        this.broadcast(
+          {
+            type: 'message_pin',
             payload: { ...msg.payload, fromUserId: sender.userId },
           },
           sender.userId,

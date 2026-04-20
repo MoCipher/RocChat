@@ -618,6 +618,33 @@ export default {
         return withCors(jsonResponse({ ready: true, ...parsed }));
       }
 
+      // Data export
+      if (path === '/api/me/export' && request.method === 'GET') {
+        const userId = session.userId;
+        const user = await env.DB.prepare(
+          'SELECT id, username, display_name, status_text, created_at FROM users WHERE id = ?'
+        ).bind(userId).first();
+        const contacts = await env.DB.prepare(
+          'SELECT c.contact_user_id, u.username, u.display_name, c.verified, c.created_at FROM contacts c LEFT JOIN users u ON c.contact_user_id = u.id WHERE c.user_id = ?'
+        ).bind(userId).all();
+        const conversations = await env.DB.prepare(
+          `SELECT cm.conversation_id, c.type, c.name, cm.role, cm.joined_at
+           FROM conversation_members cm JOIN conversations c ON cm.conversation_id = c.id
+           WHERE cm.user_id = ?`
+        ).bind(userId).all();
+        const devices = await env.DB.prepare(
+          'SELECT id, device_name, platform, created_at, last_active_at FROM devices WHERE user_id = ?'
+        ).bind(userId).all();
+        const exportData = {
+          account: user,
+          contacts: contacts.results,
+          conversations: conversations.results,
+          devices: devices.results,
+          exported_at: new Date().toISOString(),
+        };
+        return withCors(jsonResponse({ ok: true, export: exportData }));
+      }
+
       // Account deletion
       if (path === '/api/me' && request.method === 'DELETE') {
         const userId = session.userId;

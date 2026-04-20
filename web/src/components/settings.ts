@@ -495,9 +495,15 @@ export function renderSettings(container: HTMLElement) {
           </div>
         </div>
 
-        <div style="padding:var(--sp-4) 0">
+        <div style="padding:var(--sp-4) 0;display:flex;gap:var(--sp-3);flex-wrap:wrap">
+          <button class="btn-secondary" id="export-data-btn" style="color:var(--text-secondary);border-color:var(--border-norm)">
+            Export My Data
+          </button>
           <button class="btn-secondary" id="logout-btn" style="color:var(--danger);border-color:var(--danger)">
             Sign Out
+          </button>
+          <button class="btn-secondary" id="delete-account-btn" style="color:#fff;background:var(--danger);border-color:var(--danger)">
+            Delete Account
           </button>
         </div>
       </div>
@@ -781,6 +787,46 @@ export function renderSettings(container: HTMLElement) {
   document.getElementById('default-disappear')?.addEventListener('change', async (e) => {
     const value = parseInt((e.target as HTMLSelectElement).value, 10);
     await saveSetting(() => api.updateSettings({ default_disappear_timer: value || null }));
+  });
+
+  // Export data
+  document.getElementById('export-data-btn')?.addEventListener('click', async () => {
+    const btn = document.getElementById('export-data-btn') as HTMLButtonElement;
+    btn.disabled = true;
+    btn.textContent = 'Exporting...';
+    try {
+      const res = await api.exportData();
+      if (res.ok) {
+        const blob = new Blob([JSON.stringify(res.data.export, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `rocchat-export-${Date.now()}.json`;
+        a.click();
+        URL.revokeObjectURL(url);
+      } else {
+        alert('Export failed');
+      }
+    } catch { alert('Export failed'); }
+    btn.disabled = false;
+    btn.textContent = 'Export My Data';
+  });
+
+  // Delete account
+  document.getElementById('delete-account-btn')?.addEventListener('click', async () => {
+    const confirm1 = confirm('Are you sure you want to permanently delete your account? This cannot be undone.');
+    if (!confirm1) return;
+    const confirm2 = prompt('Type DELETE to confirm account deletion:');
+    if (confirm2 !== 'DELETE') return;
+    try {
+      await api.deleteAccount();
+      api.setToken(null);
+      api.setRefreshToken(null);
+      localStorage.clear();
+      sessionStorage.clear();
+      await clearAllSecrets();
+      location.reload();
+    } catch { alert('Account deletion failed. Please try again.'); }
   });
 
   // Logout

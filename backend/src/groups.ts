@@ -137,6 +137,18 @@ export async function handleGroups(
     await env.DB.prepare(
       'DELETE FROM conversation_members WHERE conversation_id = ? AND user_id = ?'
     ).bind(convId, targetId).run();
+
+    // Broadcast sender key rotation signal to remaining members
+    const roomId = env.CHAT_ROOM.idFromName(convId);
+    const room = env.CHAT_ROOM.get(roomId);
+    await room.fetch(new Request('https://internal/broadcast', {
+      method: 'POST',
+      body: JSON.stringify({
+        type: 'sender_key_rotation',
+        payload: { conversation_id: convId, removed_user_id: targetId },
+      }),
+    }));
+
     return jsonResponse({ ok: true });
   }
 

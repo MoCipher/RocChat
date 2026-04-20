@@ -3396,6 +3396,27 @@ struct SettingsView: View {
                 }
 
                 Section {
+                    Button("Export My Data") {
+                        Task {
+                            do {
+                                let data = try await APIClient.shared.getRaw("/me/export")
+                                let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+                                if let exportObj = json?["export"] {
+                                    let exportData = try JSONSerialization.data(withJSONObject: exportObj, options: .prettyPrinted)
+                                    let tmpUrl = FileManager.default.temporaryDirectory.appendingPathComponent("rocchat-export-\(Int(Date().timeIntervalSince1970)).json")
+                                    try exportData.write(to: tmpUrl)
+                                    await MainActor.run {
+                                        let ac = UIActivityViewController(activityItems: [tmpUrl], applicationActivities: nil)
+                                        if let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+                                           let root = scene.windows.first?.rootViewController {
+                                            root.present(ac, animated: true)
+                                        }
+                                    }
+                                }
+                            } catch { print("Export failed: \(error)") }
+                        }
+                    }
+                    .foregroundColor(.rocGold)
                     Button("Delete Account", role: .destructive) {
                         showDeleteConfirm = true
                     }

@@ -3378,6 +3378,29 @@ fun SettingsTab(onLogout: () -> Unit) {
 
         Spacer(Modifier.height(24.dp))
 
+        OutlinedButton(
+            onClick = {
+                scope.launch {
+                    try {
+                        val json = APIClient.get("/me/export")
+                        val exportObj = json.getJSONObject("export")
+                        val file = java.io.File(context.cacheDir, "rocchat-export-${System.currentTimeMillis() / 1000}.json")
+                        file.writeText(exportObj.toString(2))
+                        val uri = androidx.core.content.FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+                        val intent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                            type = "application/json"
+                            putExtra(android.content.Intent.EXTRA_STREAM, uri)
+                            addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        }
+                        context.startActivity(android.content.Intent.createChooser(intent, "Export Data"))
+                    } catch (_: Exception) {}
+                }
+            },
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+        ) {
+            Text("Export My Data", color = RocColors.RocGold)
+        }
+        Spacer(Modifier.height(8.dp))
         Button(
             onClick = { showDeleteConfirm = true },
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),

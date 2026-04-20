@@ -156,6 +156,14 @@ export function logout() {
   return req('/auth/logout', { method: 'POST' });
 }
 
+export function deleteAccount() {
+  return req('/me', { method: 'DELETE' });
+}
+
+export function exportData() {
+  return req<{ export: any }>('/me/export');
+}
+
 // ── Messages ──
 
 export function getConversations() {

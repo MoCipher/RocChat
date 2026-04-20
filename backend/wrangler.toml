@@ -25,8 +25,9 @@ name = "CHAT_ROOM"
 class_name = "ChatRoom"
 
 # ── Cron Triggers (scheduled worker) ──
-[triggers]
-crons = ["*/5 * * * *"]  # Every 5 minutes: send scheduled msgs, purge expired, retention cleanup
+# Disabled: free plan cron trigger limit (5) reached
+# [triggers]
+# crons = ["*/5 * * * *"]  # Every 5 minutes: send scheduled msgs, purge expired, retention cleanup
 
 [[migrations]]
 tag = "v1"

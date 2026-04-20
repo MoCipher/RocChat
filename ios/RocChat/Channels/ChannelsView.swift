@@ -143,53 +143,341 @@ struct ChannelsView: View {
 
 struct ChannelRow: View {
     let channel: ChannelItem
-    @State private var subscribed = false
 
     var body: some View {
-        HStack(spacing: 12) {
-            Image(systemName: "megaphone.fill")
-                .font(.title2)
-                .foregroundStyle(Color.rocGold)
-                .frame(width: 40, height: 40)
-                .background(Color.rocGold.opacity(0.1))
-                .clipShape(RoundedRectangle(cornerRadius: 8))
+        NavigationLink(destination: ChannelDetailView(channelId: channel.id, channelName: channel.name)) {
+            HStack(spacing: 12) {
+                Image(systemName: "megaphone.fill")
+                    .font(.title2)
+                    .foregroundStyle(Color.rocGold)
+                    .frame(width: 40, height: 40)
+                    .background(Color.rocGold.opacity(0.1))
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
 
-            VStack(alignment: .leading, spacing: 2) {
-                Text(channel.name).font(.headline)
-                if let desc = channel.description {
-                    Text(desc)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(channel.name).font(.headline)
+                    if let desc = channel.description {
+                        Text(desc)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                }
+
+                Spacer()
+
+                Text("\(channel.subscriber_count)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.vertical, 4)
+        }
+    }
+}
+
+// MARK: - Channel Detail View
+
+struct ChannelDetailView: View {
+    let channelId: String
+    let channelName: String
+
+    @State private var channel: [String: Any]?
+    @State private var isAdmin = false
+    @State private var isSubscribed = false
+    @State private var subscriberCount = 0
+    @State private var pinnedPostId: String?
+    @State private var showScheduleSheet = false
+    @State private var showAnalytics = false
+    @State private var showScheduledList = false
+    @State private var showNewPost = false
+
+    var body: some View {
+        List {
+            Section {
+                HStack {
+                    Image(systemName: "megaphone.fill")
+                        .font(.largeTitle)
+                        .foregroundStyle(Color.rocGold)
+                    VStack(alignment: .leading) {
+                        Text(channelName).font(.title2.bold())
+                        Text("\(subscriberCount) subscribers")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+
+                if isSubscribed {
+                    Button(role: .destructive) { Task { await unsubscribe() } } label: {
+                        Label("Unsubscribe", systemImage: "xmark.circle")
+                    }
+                } else {
+                    Button { Task { await subscribe() } } label: {
+                        Label("Subscribe", systemImage: "plus.circle.fill")
+                    }
+                    .tint(.rocGold)
                 }
             }
 
-            Spacer()
+            if let pinId = pinnedPostId {
+                Section("Pinned Post") {
+                    HStack {
+                        Image(systemName: "pin.fill").foregroundStyle(.orange)
+                        Text("Post \(pinId.prefix(8))...").font(.caption).foregroundStyle(.secondary)
+                        Spacer()
+                        if isAdmin {
+                            Button("Unpin") { Task { await unpin() } }
+                                .font(.caption).tint(.red)
+                        }
+                    }
+                }
+            }
 
-            if subscribed {
-                Label("Subscribed", systemImage: "checkmark.circle.fill")
-                    .font(.caption)
-                    .foregroundStyle(.green)
-            } else {
-                Button("Join") { Task { await subscribe() } }
-                    .buttonStyle(.borderedProminent)
-                    .tint(.rocGold)
-                    .controlSize(.small)
+            if isAdmin {
+                Section("Admin") {
+                    Button { showNewPost = true } label: {
+                        Label("New Post", systemImage: "square.and.pencil")
+                    }
+                    Button { showScheduleSheet = true } label: {
+                        Label("Schedule Post", systemImage: "clock.arrow.circlepath")
+                    }
+                    Button { showScheduledList = true } label: {
+                        Label("Scheduled Posts", systemImage: "list.bullet.clipboard")
+                    }
+                    Button { showAnalytics = true } label: {
+                        Label("Analytics", systemImage: "chart.bar.fill")
+                    }
+                }
             }
         }
-        .padding(.vertical, 4)
+        .navigationTitle(channelName)
+        .navigationBarTitleDisplayMode(.inline)
+        .task { await loadChannel() }
+        .sheet(isPresented: $showScheduleSheet) {
+            ChannelPostSheet(channelId: channelId, isScheduled: true) { Task { await loadChannel() } }
+        }
+        .sheet(isPresented: $showNewPost) {
+            ChannelPostSheet(channelId: channelId, isScheduled: false) { Task { await loadChannel() } }
+        }
+        .sheet(isPresented: $showAnalytics) {
+            ChannelAnalyticsView(channelId: channelId)
+        }
+        .sheet(isPresented: $showScheduledList) {
+            ChannelScheduledListView(channelId: channelId)
+        }
+    }
+
+    @MainActor
+    private func loadChannel() async {
+        guard let data = await apiRequest(path: "/api/channels/\(channelId)", method: "GET"),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let ch = json["channel"] as? [String: Any] else { return }
+        channel = ch
+        let role = ch["my_role"] as? String
+        isAdmin = role == "owner" || role == "admin"
+        isSubscribed = role != nil
+        subscriberCount = ch["subscriber_count"] as? Int ?? 0
+        pinnedPostId = ch["pinned_post_id"] as? String
     }
 
     private func subscribe() async {
+        let _ = await apiRequest(path: "/api/channels/\(channelId)/subscribe", method: "POST")
+        await loadChannel()
+    }
+
+    private func unsubscribe() async {
+        let _ = await apiRequest(path: "/api/channels/\(channelId)/subscribe", method: "DELETE")
+        await loadChannel()
+    }
+
+    private func unpin() async {
+        let _ = await apiRequest(path: "/api/channels/\(channelId)/pin", method: "DELETE")
+        await loadChannel()
+    }
+
+    private func apiRequest(path: String, method: String, body: Data? = nil) async -> Data? {
         guard let token = UserDefaults.standard.string(forKey: "sessionToken"),
-              let url = URL(string: "\(APIConfig.baseURL)/api/channels/\(channel.id)/subscribe") else { return }
+              let url = URL(string: "\(APIConfig.baseURL)\(path)") else { return nil }
         var req = URLRequest(url: url)
-        req.httpMethod = "POST"
+        req.httpMethod = method
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        if let (_, resp) = try? await URLSession.shared.data(for: req),
-           (resp as? HTTPURLResponse)?.statusCode == 200 {
-            await MainActor.run { subscribed = true }
+        if let body { req.setValue("application/json", forHTTPHeaderField: "Content-Type"); req.httpBody = body }
+        return try? await URLSession.shared.data(for: req).0
+    }
+}
+
+// MARK: - Channel Post Sheet
+
+struct ChannelPostSheet: View {
+    let channelId: String
+    let isScheduled: Bool
+    var onDone: () -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var content = ""
+    @State private var scheduleDate = Date().addingTimeInterval(3600)
+    @State private var isSending = false
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Message") {
+                    TextEditor(text: $content)
+                        .frame(minHeight: 120)
+                }
+                if isScheduled {
+                    Section("Schedule") {
+                        DatePicker("Send at", selection: $scheduleDate, in: Date()..., displayedComponents: [.date, .hourAndMinute])
+                    }
+                }
+            }
+            .navigationTitle(isScheduled ? "Schedule Post" : "New Post")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(isScheduled ? "Schedule" : "Post") { Task { await send() } }
+                        .disabled(content.isEmpty || isSending)
+                }
+            }
         }
+    }
+
+    private func send() async {
+        isSending = true
+        let ciphertext = Data(content.utf8).base64EncodedString()
+        if isScheduled {
+            let schedAt = Int(scheduleDate.timeIntervalSince1970)
+            let body: [String: Any] = ["ciphertext": ciphertext, "iv": "", "scheduled_at": schedAt]
+            let bodyData = try? JSONSerialization.data(withJSONObject: body)
+            let _ = await apiRequest(path: "/api/channels/\(channelId)/schedule", method: "POST", body: bodyData)
+        } else {
+            let body: [String: Any] = ["ciphertext": ciphertext, "iv": "", "ratchet_header": "{}", "message_type": "text"]
+            let bodyData = try? JSONSerialization.data(withJSONObject: body)
+            let _ = await apiRequest(path: "/api/channels/\(channelId)/post", method: "POST", body: bodyData)
+        }
+        await MainActor.run { onDone(); dismiss() }
+    }
+
+    private func apiRequest(path: String, method: String, body: Data? = nil) async -> Data? {
+        guard let token = UserDefaults.standard.string(forKey: "sessionToken"),
+              let url = URL(string: "\(APIConfig.baseURL)\(path)") else { return nil }
+        var req = URLRequest(url: url)
+        req.httpMethod = method
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        if let body { req.setValue("application/json", forHTTPHeaderField: "Content-Type"); req.httpBody = body }
+        return try? await URLSession.shared.data(for: req).0
+    }
+}
+
+// MARK: - Channel Analytics View
+
+struct ChannelAnalyticsView: View {
+    let channelId: String
+    @Environment(\.dismiss) private var dismiss
+    @State private var subscriberCount = 0
+    @State private var posts: [[String: Any]] = []
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    HStack {
+                        VStack { Text("\(subscriberCount)").font(.title.bold()).foregroundStyle(Color.rocGold); Text("Subscribers").font(.caption) }
+                        Spacer()
+                        VStack { Text("\(posts.count)").font(.title.bold()).foregroundStyle(Color.rocGold); Text("Posts").font(.caption) }
+                        Spacer()
+                        let avg = posts.isEmpty ? 0 : posts.reduce(0) { $0 + ($1["read_count"] as? Int ?? 0) } / posts.count
+                        VStack { Text("\(avg)").font(.title.bold()).foregroundStyle(Color.rocGold); Text("Avg Reads").font(.caption) }
+                    }
+                }
+                Section("Post Performance") {
+                    ForEach(Array(posts.enumerated()), id: \.offset) { _, post in
+                        let reads = post["read_count"] as? Int ?? 0
+                        let pct = subscriberCount > 0 ? Double(reads) / Double(subscriberCount) : 0
+                        let ts = post["created_at"] as? Int ?? 0
+                        HStack {
+                            Text(Date(timeIntervalSince1970: TimeInterval(ts)), style: .date).font(.caption)
+                            Spacer()
+                            ProgressView(value: min(pct, 1.0)).tint(.rocGold).frame(width: 80)
+                            Text("\(reads) (\(Int(pct * 100))%)").font(.caption2).foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Analytics")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } } }
+            .task { await load() }
+        }
+    }
+
+    @MainActor
+    private func load() async {
+        guard let token = UserDefaults.standard.string(forKey: "sessionToken"),
+              let url = URL(string: "\(APIConfig.baseURL)/api/channels/\(channelId)/analytics") else { return }
+        var req = URLRequest(url: url)
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        guard let (data, _) = try? await URLSession.shared.data(for: req),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
+        subscriberCount = json["subscriber_count"] as? Int ?? 0
+        posts = json["posts"] as? [[String: Any]] ?? []
+    }
+}
+
+// MARK: - Scheduled Posts List
+
+struct ChannelScheduledListView: View {
+    let channelId: String
+    @Environment(\.dismiss) private var dismiss
+    @State private var posts: [[String: Any]] = []
+
+    var body: some View {
+        NavigationStack {
+            List {
+                if posts.isEmpty {
+                    Text("No scheduled posts").foregroundStyle(.secondary)
+                } else {
+                    ForEach(Array(posts.enumerated()), id: \.offset) { _, post in
+                        let id = post["id"] as? String ?? ""
+                        let ts = post["scheduled_at"] as? Int ?? 0
+                        HStack {
+                            VStack(alignment: .leading) {
+                                Text(Date(timeIntervalSince1970: TimeInterval(ts)), style: .date).font(.caption)
+                                Text(Date(timeIntervalSince1970: TimeInterval(ts)), style: .time).font(.caption2).foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Button(role: .destructive) { Task { await cancel(id) } } label: {
+                                Image(systemName: "trash").font(.caption)
+                            }
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Scheduled")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } } }
+            .task { await load() }
+        }
+    }
+
+    @MainActor
+    private func load() async {
+        guard let token = UserDefaults.standard.string(forKey: "sessionToken"),
+              let url = URL(string: "\(APIConfig.baseURL)/api/channels/\(channelId)/scheduled") else { return }
+        var req = URLRequest(url: url)
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        guard let (data, _) = try? await URLSession.shared.data(for: req),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
+        posts = json["posts"] as? [[String: Any]] ?? []
+    }
+
+    private func cancel(_ postId: String) async {
+        guard let token = UserDefaults.standard.string(forKey: "sessionToken"),
+              let url = URL(string: "\(APIConfig.baseURL)/api/channels/\(channelId)/scheduled/\(postId)") else { return }
+        var req = URLRequest(url: url)
+        req.httpMethod = "DELETE"
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        let _ = try? await URLSession.shared.data(for: req)
+        await load()
     }
 }
 

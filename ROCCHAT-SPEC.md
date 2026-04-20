@@ -743,15 +743,15 @@ Per-conversation settings:
 
 **Ghost Mode**: Toggle ON → all outgoing messages auto-expire in 24h, no presence, no typing indicators, no read receipts.
 
-### 9.3 Radically Simple UI — 3 Tabs
+### 9.3 Radically Simple UI — 4 Tabs
 
 ```
-┌───────────┬───────────┬─────────────┐
-│   Chats   │   Calls   │   Settings  │
-└───────────┴───────────┴─────────────┘
+┌───────────┬───────────┬──────────────┬─────────────┐
+│   Chats   │   Calls   │   Channels   │   Settings  │
+└───────────┴───────────┴──────────────┴─────────────┘
 ```
 
-No stories. No channels. No bots. No AI. No payments. No shopping. No ads. Just messaging done perfectly.
+No stories. No bots. No AI. No payments. No shopping. No ads. Channels bring creators; everything else is just messaging done perfectly.
 
 ### 9.4 True Multi-Device E2E
 

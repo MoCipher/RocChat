@@ -1,6 +1,7 @@
 /**
  * RocChat — Channels & Communities Tab
  * Discover and subscribe to public broadcast channels.
+ * Admin features: schedule posts, pin posts, view analytics.
  */
 import * as api from '../api.js';
 
@@ -11,6 +12,10 @@ interface Channel {
   subscriber_count: number;
   tags: string;
   avatar_url: string | null;
+  my_role?: string | null;
+  pinned_post_id?: string | null;
+  topic?: string;
+  created_by?: string;
 }
 
 interface Community {
@@ -21,7 +26,16 @@ interface Community {
   avatar_url: string | null;
 }
 
+let currentView: 'discover' | 'detail' = 'discover';
+let activeChannel: Channel | null = null;
+
 export function renderChannels(container: HTMLElement) {
+  currentView = 'discover';
+  activeChannel = null;
+  renderDiscoverView(container);
+}
+
+function renderDiscoverView(container: HTMLElement) {
   container.innerHTML = `
     <div class="channels-view" style="max-width:720px;margin:0 auto;padding:var(--sp-6)">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--sp-4)">
@@ -64,7 +78,7 @@ export function renderChannels(container: HTMLElement) {
   });
 
   document.getElementById('create-channel-btn')?.addEventListener('click', () => {
-    showCreateChannelDialog();
+    showCreateChannelDialog(container);
   });
 }
 
@@ -93,27 +107,322 @@ async function loadChannels(query = '') {
           </div>
           <div style="text-align:right">
             <div style="font-size:var(--fs-xs);color:var(--text-tertiary)">${ch.subscriber_count} subscribers</div>
-            ${ch.tags ? `<div style="font-size:var(--fs-xs);color:var(--roc-gold);margin-top:2px">${ch.tags.split(',').slice(0, 3).map(t => '#' + t.trim()).join(' ')}</div>` : ''}
+            ${ch.tags ? `<div style="font-size:var(--fs-xs);color:var(--roc-gold);margin-top:2px">${ch.tags.split(',').slice(0, 3).map((t: string) => '#' + t.trim()).join(' ')}</div>` : ''}
           </div>
         </div>
       </div>
     `).join('');
 
-    // Subscribe on click
+    // Click to open channel detail
     list.querySelectorAll('.channel-card').forEach(card => {
       card.addEventListener('click', async () => {
         const id = (card as HTMLElement).dataset.id!;
-        const res = await api.req(`/channels/${id}/subscribe`, { method: 'POST' });
-        if (res.ok) {
-          const nameEl = card.querySelector('div[style*="font-weight:600"]');
-          const name = nameEl?.textContent || 'Channel';
-          card.innerHTML = `<div style="padding:var(--sp-2);color:var(--success);font-weight:500">✓ Subscribed to ${name}</div>`;
-        }
+        openChannelDetail(id, list.closest('.channels-view')!.parentElement!);
       });
     });
   } catch {
     list.innerHTML = `<div style="color:var(--danger);text-align:center;padding:var(--sp-4)">Failed to load channels</div>`;
   }
+}
+
+async function openChannelDetail(channelId: string, container: HTMLElement) {
+  const res = await api.req<{ channel: Channel }>(`/channels/${channelId}`, { method: 'GET' });
+  if (!res.ok || !res.data?.channel) return;
+  activeChannel = res.data.channel;
+  currentView = 'detail';
+  renderChannelDetail(container);
+}
+
+function renderChannelDetail(container: HTMLElement) {
+  const ch = activeChannel!;
+  const isAdmin = ch.my_role === 'owner' || ch.my_role === 'admin';
+  const isSubscribed = !!ch.my_role;
+
+  container.innerHTML = `
+    <div class="channels-view" style="max-width:720px;margin:0 auto;padding:var(--sp-6)">
+      <button id="back-to-discover" class="btn-secondary" style="margin-bottom:var(--sp-4);padding:6px 14px;font-size:var(--fs-sm)">← Back</button>
+
+      <div style="display:flex;align-items:center;gap:var(--sp-4);margin-bottom:var(--sp-4)">
+        <div style="width:56px;height:56px;border-radius:var(--radius-lg);background:var(--primary-bg);display:flex;align-items:center;justify-content:center;font-size:28px;color:var(--roc-gold)">📢</div>
+        <div style="flex:1">
+          <h2 style="margin:0;font-size:var(--fs-2xl);font-weight:700">${ch.name}</h2>
+          <div style="font-size:var(--fs-sm);color:var(--text-secondary)">${ch.description || ''}</div>
+          <div style="font-size:var(--fs-xs);color:var(--text-tertiary);margin-top:4px">${ch.subscriber_count} subscribers${ch.tags ? ' · ' + ch.tags.split(',').map((t: string) => '#' + t.trim()).join(' ') : ''}</div>
+        </div>
+        ${isSubscribed
+          ? `<button id="unsub-btn" class="btn-secondary" style="padding:8px 16px;font-size:var(--fs-sm)">Unsubscribe</button>`
+          : `<button id="sub-btn" class="btn-primary" style="padding:8px 16px;font-size:var(--fs-sm)">Subscribe</button>`
+        }
+      </div>
+
+      ${ch.pinned_post_id ? `
+        <div id="pinned-banner" style="padding:var(--sp-3);background:rgba(212,175,55,0.08);border:1px solid var(--roc-gold);border-radius:var(--radius-md);margin-bottom:var(--sp-4);display:flex;align-items:center;gap:var(--sp-2)">
+          <span>📌</span>
+          <span style="flex:1;font-size:var(--fs-sm);color:var(--text-secondary)">Pinned post: ${ch.pinned_post_id.slice(0, 8)}...</span>
+          ${isAdmin ? `<button class="btn-secondary" id="unpin-btn" style="padding:4px 10px;font-size:var(--fs-xs)">Unpin</button>` : ''}
+        </div>
+      ` : ''}
+
+      ${isAdmin ? `
+        <div style="display:flex;gap:var(--sp-2);margin-bottom:var(--sp-4);flex-wrap:wrap">
+          <button id="admin-post-btn" class="btn-primary" style="padding:8px 16px;font-size:var(--fs-sm)">📝 New Post</button>
+          <button id="admin-schedule-btn" class="btn-secondary" style="padding:8px 16px;font-size:var(--fs-sm)">🕐 Schedule Post</button>
+          <button id="admin-scheduled-btn" class="btn-secondary" style="padding:8px 16px;font-size:var(--fs-sm)">📋 Scheduled (${0})</button>
+          <button id="admin-analytics-btn" class="btn-secondary" style="padding:8px 16px;font-size:var(--fs-sm)">📊 Analytics</button>
+        </div>
+      ` : ''}
+
+      <div id="channel-posts" style="display:flex;flex-direction:column;gap:var(--sp-3)">
+        <div style="text-align:center;padding:var(--sp-6);color:var(--text-secondary)">Loading posts...</div>
+      </div>
+    </div>
+  `;
+
+  // Back button
+  document.getElementById('back-to-discover')?.addEventListener('click', () => {
+    activeChannel = null;
+    currentView = 'discover';
+    renderDiscoverView(container);
+  });
+
+  // Subscribe/unsubscribe
+  document.getElementById('sub-btn')?.addEventListener('click', async () => {
+    const r = await api.req(`/channels/${ch.id}/subscribe`, { method: 'POST' });
+    if (r.ok) openChannelDetail(ch.id, container);
+  });
+  document.getElementById('unsub-btn')?.addEventListener('click', async () => {
+    const r = await api.req(`/channels/${ch.id}/subscribe`, { method: 'DELETE' });
+    if (r.ok) openChannelDetail(ch.id, container);
+  });
+
+  // Unpin
+  document.getElementById('unpin-btn')?.addEventListener('click', async () => {
+    await api.req(`/channels/${ch.id}/pin`, { method: 'DELETE' });
+    openChannelDetail(ch.id, container);
+  });
+
+  // Admin actions
+  if (isAdmin) {
+    document.getElementById('admin-post-btn')?.addEventListener('click', () => showPostDialog(ch.id, false, container));
+    document.getElementById('admin-schedule-btn')?.addEventListener('click', () => showPostDialog(ch.id, true, container));
+    document.getElementById('admin-scheduled-btn')?.addEventListener('click', () => showScheduledPosts(ch.id));
+    document.getElementById('admin-analytics-btn')?.addEventListener('click', () => showAnalytics(ch.id));
+
+    // Load scheduled count
+    api.req<{ posts: unknown[] }>(`/channels/${ch.id}/scheduled`, { method: 'GET' }).then(r => {
+      const btn = document.getElementById('admin-scheduled-btn');
+      if (btn && r.data?.posts) btn.textContent = `📋 Scheduled (${r.data.posts.length})`;
+    });
+  }
+
+  loadChannelPosts(ch.id, isAdmin);
+}
+
+async function loadChannelPosts(channelId: string, isAdmin: boolean) {
+  const postsEl = document.getElementById('channel-posts');
+  if (!postsEl) return;
+
+  try {
+    // Load recent messages for this channel
+    const res = await api.req<{ messages: Array<{ id: string; sender_id: string; ciphertext: string; message_type: string; created_at: number }> }>(`/messages/${channelId}?limit=50`, { method: 'GET' });
+    if (!res.ok || !res.data?.messages?.length) {
+      postsEl.innerHTML = `<div style="text-align:center;padding:var(--sp-6);color:var(--text-secondary)">No posts yet</div>`;
+      return;
+    }
+
+    postsEl.innerHTML = res.data.messages.map(msg => `
+      <div class="channel-post" data-id="${msg.id}" style="padding:var(--sp-4);border-radius:var(--radius-lg);border:1px solid var(--border-weak);background:var(--bg-card)">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--sp-2)">
+          <span style="font-size:var(--fs-xs);color:var(--text-tertiary)">${new Date(msg.created_at * 1000).toLocaleString()}</span>
+          ${isAdmin ? `<div style="display:flex;gap:4px">
+            <button class="pin-post-btn btn-secondary" data-msg-id="${msg.id}" style="padding:2px 8px;font-size:var(--fs-xs)" title="Pin this post">📌</button>
+          </div>` : ''}
+        </div>
+        <div style="font-size:var(--fs-base);color:var(--text-primary);word-break:break-word">${msg.ciphertext.length > 100 ? '[Encrypted post]' : '[Encrypted]'}</div>
+      </div>
+    `).join('');
+
+    // Mark posts as read
+    for (const msg of res.data.messages) {
+      api.req(`/channels/${channelId}/read/${msg.id}`, { method: 'POST' }).catch(() => {});
+    }
+
+    // Pin buttons
+    postsEl.querySelectorAll('.pin-post-btn').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const msgId = (btn as HTMLElement).dataset.msgId!;
+        await api.req(`/channels/${channelId}/pin/${msgId}`, { method: 'POST' });
+        const container = postsEl.closest('.channels-view')!.parentElement!;
+        openChannelDetail(channelId, container);
+      });
+    });
+  } catch {
+    postsEl.innerHTML = `<div style="color:var(--danger);text-align:center;padding:var(--sp-4)">Failed to load posts</div>`;
+  }
+}
+
+function showPostDialog(channelId: string, isScheduled: boolean, container: HTMLElement) {
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;z-index:9999';
+  overlay.innerHTML = `
+    <div style="background:var(--bg-elevated);border-radius:var(--radius-xl);padding:var(--sp-6);width:440px;max-width:90vw;box-shadow:var(--shadow-xl)">
+      <h3 style="margin:0 0 var(--sp-4)">${isScheduled ? '🕐 Schedule Post' : '📝 New Post'}</h3>
+      <textarea id="post-content" rows="5" placeholder="Write your broadcast message..."
+        style="width:100%;padding:12px;border-radius:var(--radius-md);border:1px solid var(--border-norm);background:var(--bg-input);color:var(--text-primary);resize:vertical;font-family:inherit;font-size:var(--fs-base)"></textarea>
+      ${isScheduled ? `
+        <label style="display:block;margin-top:var(--sp-3);font-size:var(--fs-sm);color:var(--text-secondary)">
+          Schedule for:
+          <input id="post-schedule-time" type="datetime-local" style="display:block;margin-top:4px;width:100%;padding:8px;border-radius:var(--radius-md);border:1px solid var(--border-norm);background:var(--bg-input);color:var(--text-primary)">
+        </label>
+      ` : ''}
+      <div style="display:flex;gap:var(--sp-2);justify-content:flex-end;margin-top:var(--sp-4)">
+        <button id="post-cancel" class="btn-secondary" style="padding:8px 16px">Cancel</button>
+        <button id="post-send" class="btn-primary" style="padding:8px 16px">${isScheduled ? 'Schedule' : 'Post'}</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+  overlay.querySelector('#post-cancel')?.addEventListener('click', () => overlay.remove());
+
+  overlay.querySelector('#post-send')?.addEventListener('click', async () => {
+    const content = (overlay.querySelector('#post-content') as HTMLTextAreaElement).value.trim();
+    if (!content) return;
+
+    // For simplicity, send as plaintext ciphertext (channels use sender keys in production)
+    const ciphertext = btoa(unescape(encodeURIComponent(content)));
+
+    if (isScheduled) {
+      const timeInput = overlay.querySelector('#post-schedule-time') as HTMLInputElement;
+      if (!timeInput.value) return;
+      const scheduledAt = Math.floor(new Date(timeInput.value).getTime() / 1000);
+      const r = await api.req(`/channels/${channelId}/schedule`, {
+        method: 'POST',
+        body: JSON.stringify({ ciphertext, iv: '', scheduled_at: scheduledAt }),
+      });
+      if (r.ok) {
+        overlay.remove();
+        openChannelDetail(channelId, container);
+      }
+    } else {
+      const r = await api.req(`/channels/${channelId}/post`, {
+        method: 'POST',
+        body: JSON.stringify({ ciphertext, iv: '', ratchet_header: '{}', message_type: 'text' }),
+      });
+      if (r.ok) {
+        overlay.remove();
+        openChannelDetail(channelId, container);
+      }
+    }
+  });
+}
+
+function showScheduledPosts(channelId: string) {
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;z-index:9999';
+  overlay.innerHTML = `
+    <div style="background:var(--bg-elevated);border-radius:var(--radius-xl);padding:var(--sp-6);width:480px;max-width:90vw;max-height:70vh;overflow-y:auto;box-shadow:var(--shadow-xl)">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--sp-4)">
+        <h3 style="margin:0">📋 Scheduled Posts</h3>
+        <button id="sched-close" class="btn-secondary" style="padding:4px 12px">✕</button>
+      </div>
+      <div id="sched-list" style="display:flex;flex-direction:column;gap:var(--sp-3)">
+        <div style="text-align:center;color:var(--text-secondary)">Loading...</div>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+  overlay.querySelector('#sched-close')?.addEventListener('click', () => overlay.remove());
+
+  api.req<{ posts: Array<{ id: string; ciphertext: string; scheduled_at: number; created_at: number }> }>(`/channels/${channelId}/scheduled`, { method: 'GET' }).then(r => {
+    const list = overlay.querySelector('#sched-list')!;
+    if (!r.data?.posts?.length) {
+      list.innerHTML = `<div style="text-align:center;color:var(--text-secondary)">No scheduled posts</div>`;
+      return;
+    }
+    list.innerHTML = r.data.posts.map(p => `
+      <div style="padding:var(--sp-3);border:1px solid var(--border-weak);border-radius:var(--radius-md);background:var(--bg-card)">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <span style="font-size:var(--fs-sm);color:var(--text-secondary)">⏰ ${new Date(p.scheduled_at * 1000).toLocaleString()}</span>
+          <button class="cancel-sched btn-secondary" data-id="${p.id}" style="padding:2px 8px;font-size:var(--fs-xs);color:var(--danger)">Cancel</button>
+        </div>
+        <div style="margin-top:4px;font-size:var(--fs-sm);color:var(--text-primary)">[Encrypted content]</div>
+      </div>
+    `).join('');
+
+    list.querySelectorAll('.cancel-sched').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const postId = (btn as HTMLElement).dataset.id!;
+        await api.req(`/channels/${channelId}/scheduled/${postId}`, { method: 'DELETE' });
+        (btn as HTMLElement).closest('div[style*="padding"]')!.remove();
+      });
+    });
+  });
+}
+
+function showAnalytics(channelId: string) {
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;z-index:9999';
+  overlay.innerHTML = `
+    <div style="background:var(--bg-elevated);border-radius:var(--radius-xl);padding:var(--sp-6);width:520px;max-width:90vw;max-height:70vh;overflow-y:auto;box-shadow:var(--shadow-xl)">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--sp-4)">
+        <h3 style="margin:0">📊 Channel Analytics</h3>
+        <button id="analytics-close" class="btn-secondary" style="padding:4px 12px">✕</button>
+      </div>
+      <div id="analytics-content">
+        <div style="text-align:center;color:var(--text-secondary)">Loading...</div>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+  overlay.querySelector('#analytics-close')?.addEventListener('click', () => overlay.remove());
+
+  api.req<{ subscriber_count: number; posts: Array<{ id: string; created_at: number; read_count: number }> }>(`/channels/${channelId}/analytics`, { method: 'GET' }).then(r => {
+    const content = overlay.querySelector('#analytics-content')!;
+    if (!r.ok || !r.data) {
+      content.innerHTML = `<div style="color:var(--danger)">Failed to load analytics</div>`;
+      return;
+    }
+
+    const totalReads = r.data.posts.reduce((sum, p) => sum + (p.read_count || 0), 0);
+    const avgReads = r.data.posts.length ? Math.round(totalReads / r.data.posts.length) : 0;
+
+    content.innerHTML = `
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:var(--sp-3);margin-bottom:var(--sp-4)">
+        <div style="text-align:center;padding:var(--sp-4);background:var(--bg-card);border-radius:var(--radius-md);border:1px solid var(--border-weak)">
+          <div style="font-size:var(--fs-2xl);font-weight:700;color:var(--roc-gold)">${r.data.subscriber_count}</div>
+          <div style="font-size:var(--fs-xs);color:var(--text-secondary)">Subscribers</div>
+        </div>
+        <div style="text-align:center;padding:var(--sp-4);background:var(--bg-card);border-radius:var(--radius-md);border:1px solid var(--border-weak)">
+          <div style="font-size:var(--fs-2xl);font-weight:700;color:var(--roc-gold)">${r.data.posts.length}</div>
+          <div style="font-size:var(--fs-xs);color:var(--text-secondary)">Total Posts</div>
+        </div>
+        <div style="text-align:center;padding:var(--sp-4);background:var(--bg-card);border-radius:var(--radius-md);border:1px solid var(--border-weak)">
+          <div style="font-size:var(--fs-2xl);font-weight:700;color:var(--roc-gold)">${avgReads}</div>
+          <div style="font-size:var(--fs-xs);color:var(--text-secondary)">Avg Reads/Post</div>
+        </div>
+      </div>
+
+      <h4 style="margin:0 0 var(--sp-3);font-size:var(--fs-base)">Post Performance</h4>
+      <div style="display:flex;flex-direction:column;gap:var(--sp-2)">
+        ${r.data.posts.map(p => {
+          const pct = r.data!.subscriber_count > 0 ? Math.round((p.read_count / r.data!.subscriber_count) * 100) : 0;
+          return `
+            <div style="display:flex;align-items:center;gap:var(--sp-3);padding:var(--sp-2) var(--sp-3);border:1px solid var(--border-weak);border-radius:var(--radius-sm);background:var(--bg-card)">
+              <span style="font-size:var(--fs-xs);color:var(--text-tertiary);min-width:120px">${new Date(p.created_at * 1000).toLocaleDateString()}</span>
+              <div style="flex:1;height:8px;background:var(--bg-input);border-radius:4px;overflow:hidden">
+                <div style="height:100%;width:${Math.min(pct, 100)}%;background:var(--roc-gold);border-radius:4px;transition:width 0.3s"></div>
+              </div>
+              <span style="font-size:var(--fs-xs);color:var(--text-secondary);min-width:80px;text-align:right">${p.read_count} reads (${pct}%)</span>
+            </div>
+          `;
+        }).join('')}
+      </div>
+    `;
+  });
 }
 
 async function loadCommunities(query = '') {
@@ -158,7 +467,7 @@ async function loadCommunities(query = '') {
   }
 }
 
-function showCreateChannelDialog() {
+function showCreateChannelDialog(container: HTMLElement) {
   const existing = document.querySelector('.create-channel-overlay');
   if (existing) existing.remove();
 
@@ -212,7 +521,7 @@ function showCreateChannelDialog() {
 
     if (res.ok) {
       overlay.remove();
-      loadChannels();
+      renderDiscoverView(container);
     } else {
       alert('Failed to create channel');
     }

@@ -19,6 +19,8 @@
  *   POST   /api/channels/:id/schedule     -> schedule a post (admin only)
  *   GET    /api/channels/:id/scheduled    -> list scheduled posts (admin)
  *   DELETE /api/channels/:id/scheduled/:p -> cancel scheduled post
+ *   POST   /api/channels/:id/pin/:msgId   -> pin a post (admin only)
+ *   DELETE /api/channels/:id/pin          -> unpin (admin only)
  *   POST   /api/channels/:id/read/:msgId  -> mark post as read (analytics)
  *   GET    /api/channels/:id/analytics    -> post read counts (admin only)
  *   POST   /api/communities               -> create community
@@ -318,6 +320,39 @@ export async function handleChannels(
       `UPDATE channel_scheduled_posts SET status = 'cancelled' WHERE id = ? AND channel_id = ?`
     ).bind(postId, channelId).run();
     return jsonResponse({ ok: true, cancelled: true });
+  }
+
+  // ─── Pin / Unpin ───
+
+  // POST /api/channels/:id/pin/:messageId — pin a post (admin only)
+  const pinMatch = path.match(/^\/api\/channels\/([^/]+)\/pin\/([^/]+)$/);
+  if (pinMatch && request.method === 'POST') {
+    const channelId = pinMatch[1];
+    const messageId = pinMatch[2];
+    const member = await env.DB.prepare(
+      `SELECT role FROM conversation_members WHERE conversation_id = ? AND user_id = ?`
+    ).bind(channelId, session.userId).first<{ role: string }>();
+    if (!member || member.role === 'member') return apiError('FORBIDDEN', 'Admin only');
+
+    await env.DB.prepare(
+      `UPDATE channels SET pinned_post_id = ? WHERE id = ?`
+    ).bind(messageId, channelId).run();
+    return jsonResponse({ ok: true, pinned: messageId });
+  }
+
+  // DELETE /api/channels/:id/pin — unpin (admin only)
+  const unpinMatch = path.match(/^\/api\/channels\/([^/]+)\/pin$/);
+  if (unpinMatch && request.method === 'DELETE') {
+    const channelId = unpinMatch[1];
+    const member = await env.DB.prepare(
+      `SELECT role FROM conversation_members WHERE conversation_id = ? AND user_id = ?`
+    ).bind(channelId, session.userId).first<{ role: string }>();
+    if (!member || member.role === 'member') return apiError('FORBIDDEN', 'Admin only');
+
+    await env.DB.prepare(
+      `UPDATE channels SET pinned_post_id = NULL WHERE id = ?`
+    ).bind(channelId).run();
+    return jsonResponse({ ok: true, pinned: null });
   }
 
   // ─── Channel Analytics ───

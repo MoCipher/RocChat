@@ -1378,14 +1378,29 @@ async function showContactsManager() {
               ${avatarHtml}
               <div>
                 <div class="setting-label">${escHtml(name)}</div>
-                <div class="setting-desc">@${escHtml(c.username)}</div>
+                <div class="setting-desc">@${escHtml(c.username)}${c.nickname ? ` · Nickname: ${escHtml(c.nickname)}` : ''}</div>
               </div>
             </div>
-            <button class="btn-secondary" style="font-size:var(--text-xs);color:var(--danger);border-color:var(--danger);padding:var(--sp-1) var(--sp-2)" data-remove-contact="${c.contact_id}">Remove</button>
+            <div style="display:flex;gap:var(--sp-2)">
+              <button class="btn-secondary" style="font-size:var(--text-xs);padding:var(--sp-1) var(--sp-2)" data-edit-nickname="${c.contact_id}" data-current-nick="${escHtml(c.nickname || '')}">Nickname</button>
+              <button class="btn-secondary" style="font-size:var(--text-xs);color:var(--danger);border-color:var(--danger);padding:var(--sp-1) var(--sp-2)" data-remove-contact="${c.contact_id}">Remove</button>
+            </div>
           </div>
         `;
       }).join('')}
     `;
+
+    body.querySelectorAll('[data-edit-nickname]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const id = (btn as HTMLElement).dataset.editNickname!;
+        const current = (btn as HTMLElement).dataset.currentNick || '';
+        const nickname = prompt('Set nickname (leave empty to clear):', current);
+        if (nickname === null) return;
+        await api.saveContact(id, nickname || undefined);
+        showToast(nickname ? 'Nickname set' : 'Nickname cleared');
+        showContactsManager();
+      });
+    });
 
     body.querySelectorAll('[data-remove-contact]').forEach(btn => {
       btn.addEventListener('click', async () => {

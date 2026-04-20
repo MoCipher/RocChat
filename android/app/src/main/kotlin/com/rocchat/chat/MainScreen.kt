@@ -2333,6 +2333,9 @@ fun SettingsTab(onLogout: () -> Unit) {
     // Saved contacts
     var showSavedContacts by remember { mutableStateOf(false) }
     var savedContacts by remember { mutableStateOf<List<JSONObject>>(emptyList()) }
+    var showNicknameDialog by remember { mutableStateOf(false) }
+    var editNicknameContactId by remember { mutableStateOf("") }
+    var editNicknameText by remember { mutableStateOf("") }
     var appTheme by remember { mutableStateOf(context.getSharedPreferences("rocchat", Context.MODE_PRIVATE).getString("app_theme", "system") ?: "system") }
 
     val importFileLauncher = rememberLauncherForActivityResult(
@@ -3635,6 +3638,11 @@ fun SettingsTab(onLogout: () -> Unit) {
                                     if (nickname.isNotEmpty()) Text(nickname, fontSize = 12.sp, color = RocColors.RocGold)
                                 }
                                 TextButton(onClick = {
+                                    editNicknameContactId = cid
+                                    editNicknameText = nickname
+                                    showNicknameDialog = true
+                                }) { Text("Nickname") }
+                                TextButton(onClick = {
                                     scope.launch {
                                         try { APIClient.delete("/features/contacts/$cid") } catch (_: Exception) {}
                                         try { val data = APIClient.getArray("/features/contacts"); savedContacts = (0 until data.length()).map { data.getJSONObject(it) } } catch (_: Exception) {}
@@ -3647,6 +3655,36 @@ fun SettingsTab(onLogout: () -> Unit) {
                 },
                 confirmButton = {},
                 dismissButton = { TextButton(onClick = { showSavedContacts = false }) { Text("Done") } },
+            )
+        }
+
+        // Nickname edit dialog
+        if (showNicknameDialog) {
+            AlertDialog(
+                onDismissRequest = { showNicknameDialog = false },
+                title = { Text("Set Nickname") },
+                text = {
+                    OutlinedTextField(
+                        value = editNicknameText,
+                        onValueChange = { editNicknameText = it },
+                        label = { Text("Nickname") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        showNicknameDialog = false
+                        scope.launch {
+                            try {
+                                val body = JSONObject().put("contact_id", editNicknameContactId).put("nickname", editNicknameText)
+                                APIClient.post("/features/contacts", body)
+                            } catch (_: Exception) {}
+                            try { val data = APIClient.getArray("/features/contacts"); savedContacts = (0 until data.length()).map { data.getJSONObject(it) } } catch (_: Exception) {}
+                        }
+                    }) { Text("Save") }
+                },
+                dismissButton = { TextButton(onClick = { showNicknameDialog = false }) { Text("Cancel") } },
             )
         }
     }

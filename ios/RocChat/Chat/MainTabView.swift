@@ -2689,6 +2689,9 @@ struct SettingsView: View {
     // Saved contacts
     @State private var showSavedContacts = false
     @State private var savedContacts: [[String: Any]] = []
+    @State private var showNicknameAlert = false
+    @State private var editNicknameContactId = ""
+    @State private var editNicknameText = ""
 
     var body: some View {
         NavigationStack {
@@ -3728,6 +3731,12 @@ struct SettingsView: View {
                                 }
                             }
                             Spacer()
+                            Button("Nickname") {
+                                editNicknameContactId = cid
+                                editNicknameText = nickname
+                                showNicknameAlert = true
+                            }
+                            .font(.caption)
                             Button("Remove") {
                                 Task { await removeSavedContact(id: cid) }
                             }
@@ -3744,6 +3753,18 @@ struct SettingsView: View {
                     }
                 }
             }
+        }
+        .alert("Set Nickname", isPresented: $showNicknameAlert) {
+            TextField("Nickname", text: $editNicknameText)
+            Button("Save") {
+                Task { await saveContactNickname(id: editNicknameContactId, nickname: editNicknameText) }
+            }
+            Button("Clear", role: .destructive) {
+                Task { await saveContactNickname(id: editNicknameContactId, nickname: "") }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Enter a nickname for this contact")
         }
         .task {
             do {
@@ -4257,6 +4278,13 @@ struct SettingsView: View {
     }
     private func removeSavedContact(id: String) async {
         _ = try? await APIClient.shared.deleteRaw("/features/contacts/\(id)")
+        await loadSavedContacts()
+    }
+    private func saveContactNickname(id: String, nickname: String) async {
+        let body: [String: Any] = ["contact_id": id, "nickname": nickname]
+        if let data = try? JSONSerialization.data(withJSONObject: body) {
+            _ = try? await APIClient.shared.postRaw("/features/contacts", body: data)
+        }
         await loadSavedContacts()
     }
 }

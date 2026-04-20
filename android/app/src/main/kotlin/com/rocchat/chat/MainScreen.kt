@@ -2303,6 +2303,36 @@ fun SettingsTab(onLogout: () -> Unit) {
     var defaultDisappearTimer by remember { mutableIntStateOf(0) }
     var showRecoveryPhrase by remember { mutableStateOf(false) }
     var recoveryPhrase by remember { mutableStateOf("") }
+
+    // Decoy conversations
+    var showDecoyManager by remember { mutableStateOf(false) }
+    var decoyConversations by remember { mutableStateOf<List<JSONObject>>(emptyList()) }
+    var decoyNameInput by remember { mutableStateOf("") }
+    var decoyMessageInput by remember { mutableStateOf("") }
+
+    // Custom emoji
+    var showEmojiManager by remember { mutableStateOf(false) }
+    var customEmojis by remember { mutableStateOf<List<JSONObject>>(emptyList()) }
+    var emojiShortcodeInput by remember { mutableStateOf("") }
+
+    // Donation
+    var showDonationSheet by remember { mutableStateOf(false) }
+    var donorTier by remember { mutableStateOf("") }
+    var donorSince by remember { mutableStateOf("") }
+
+    // Business/Org
+    var showBusinessSheet by remember { mutableStateOf(false) }
+    var organizations by remember { mutableStateOf<List<JSONObject>>(emptyList()) }
+    var newOrgName by remember { mutableStateOf("") }
+
+    // Encrypted backup
+    var showBackupSheet by remember { mutableStateOf(false) }
+    var backupPassphrase by remember { mutableStateOf("") }
+    var backupStatus by remember { mutableStateOf("") }
+
+    // Saved contacts
+    var showSavedContacts by remember { mutableStateOf(false) }
+    var savedContacts by remember { mutableStateOf<List<JSONObject>>(emptyList()) }
     var appTheme by remember { mutableStateOf(context.getSharedPreferences("rocchat", Context.MODE_PRIVATE).getString("app_theme", "system") ?: "system") }
 
     val importFileLauncher = rememberLauncherForActivityResult(
@@ -3045,6 +3075,32 @@ fun SettingsTab(onLogout: () -> Unit) {
 
         HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
 
+        // Power-User Features
+        Text("Power-User Features", modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp), fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = RocColors.RocGold)
+        listOf(
+            Triple("Decoy Conversations", Icons.Default.TheaterComedy, { showDecoyManager = true; val prefs = context.getSharedPreferences("rocchat", Context.MODE_PRIVATE); val raw = prefs.getString("rocchat_decoy_convs", "[]") ?: "[]"; try { val arr = org.json.JSONArray(raw); decoyConversations = (0 until arr.length()).map { arr.getJSONObject(it) } } catch (_: Exception) {} }),
+            Triple("Custom Emoji", Icons.Default.EmojiEmotions, { showEmojiManager = true; val prefs = context.getSharedPreferences("rocchat", Context.MODE_PRIVATE); val raw = prefs.getString("rocchat_custom_emoji", "[]") ?: "[]"; try { val arr = org.json.JSONArray(raw); customEmojis = (0 until arr.length()).map { arr.getJSONObject(it) } } catch (_: Exception) {} }),
+            Triple("Encrypted Backup", Icons.Default.Backup, { showBackupSheet = true }),
+        ).forEach { (label, icon, action) ->
+            Row(modifier = Modifier.fillMaxWidth().clickable { action() }.padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                Icon(icon, contentDescription = null, tint = RocColors.TextSecondary, modifier = Modifier.size(20.dp))
+                Spacer(Modifier.width(12.dp))
+                Text(label)
+            }
+        }
+
+        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+
+        // Saved Contacts
+        Text("Saved Contacts", modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp), fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = RocColors.RocGold)
+        Row(modifier = Modifier.fillMaxWidth().clickable { showSavedContacts = true; scope.launch { try { val data = APIClient.getArray("/features/contacts"); savedContacts = (0 until data.length()).map { data.getJSONObject(it) } } catch (_: Exception) {} } }.padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Default.Contacts, contentDescription = null, tint = RocColors.TextSecondary, modifier = Modifier.size(20.dp))
+            Spacer(Modifier.width(12.dp))
+            Text("Manage Saved Contacts")
+        }
+
+        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+
         // Support RocChat
         Text("Support RocChat", modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp), fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = RocColors.RocGold)
         Row(modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
@@ -3057,6 +3113,30 @@ fun SettingsTab(onLogout: () -> Unit) {
             fontSize = 12.sp,
             color = RocColors.TextSecondary,
         )
+        Row(modifier = Modifier.fillMaxWidth().clickable { showDonationSheet = true; scope.launch { try { val data = APIClient.get("/features/donor"); donorTier = data.optString("tier", ""); donorSince = data.optString("donor_since", "") } catch (_: Exception) {} } }.padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Default.Favorite, contentDescription = null, tint = RocColors.RocGold, modifier = Modifier.size(20.dp))
+            Spacer(Modifier.width(12.dp))
+            Text("Donate", color = RocColors.RocGold)
+        }
+        if (donorTier.isNotEmpty()) {
+            val badge = when (donorTier.lowercase()) { "coffee" -> "☕"; "feather" -> "🪶"; "wing" -> "🦅"; "mountain" -> "🏔️"; "patron" -> "👑"; else -> "💛" }
+            Row(modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
+                Text(badge, fontSize = 20.sp)
+                Spacer(Modifier.width(8.dp))
+                Text("${donorTier.replaceFirstChar { it.uppercase() }} Supporter", color = RocColors.RocGold, fontWeight = FontWeight.SemiBold)
+            }
+        }
+
+        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+
+        // Business
+        Text("Business", modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp), fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = RocColors.RocGold)
+        Row(modifier = Modifier.fillMaxWidth().clickable { showBusinessSheet = true; scope.launch { try { val data = APIClient.getArray("/business/org"); organizations = (0 until data.length()).map { data.getJSONObject(it) } } catch (_: Exception) {} } }.padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Default.Business, contentDescription = null, tint = RocColors.TextSecondary, modifier = Modifier.size(20.dp))
+            Spacer(Modifier.width(12.dp))
+            Text("Organization Management")
+        }
+        Text("\$3.99/user/month — RBAC, SSO, compliance, remote wipe", modifier = Modifier.padding(horizontal = 16.dp), fontSize = 12.sp, color = RocColors.TextSecondary)
 
         HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
 
@@ -3213,6 +3293,301 @@ fun SettingsTab(onLogout: () -> Unit) {
                 },
                 confirmButton = {},
                 dismissButton = { TextButton(onClick = { showRecoveryPhrase = false }) { Text("Done") } },
+            )
+        }
+
+        // Decoy Conversations dialog
+        if (showDecoyManager) {
+            AlertDialog(
+                onDismissRequest = { showDecoyManager = false },
+                title = { Text("Decoy Conversations") },
+                text = {
+                    Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                        OutlinedTextField(value = decoyNameInput, onValueChange = { decoyNameInput = it }, label = { Text("Contact name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                        Spacer(Modifier.height(8.dp))
+                        OutlinedTextField(value = decoyMessageInput, onValueChange = { decoyMessageInput = it }, label = { Text("Messages (sender|text per line)") }, modifier = Modifier.fillMaxWidth().heightIn(min = 80.dp), maxLines = 6)
+                        Spacer(Modifier.height(8.dp))
+                        Button(onClick = {
+                            val name = decoyNameInput.trim()
+                            if (name.isNotEmpty()) {
+                                val msgs = org.json.JSONArray()
+                                decoyMessageInput.lines().filter { it.isNotBlank() }.forEach { line ->
+                                    val parts = line.split("|", limit = 2)
+                                    val m = JSONObject()
+                                    m.put("sender", if (parts.size > 1) parts[0] else "Them")
+                                    m.put("text", if (parts.size > 1) parts[1] else line)
+                                    msgs.put(m)
+                                }
+                                val decoy = JSONObject().put("id", "decoy_${java.util.UUID.randomUUID().toString().take(8)}").put("name", name).put("messages", msgs)
+                                val list = decoyConversations.toMutableList()
+                                list.add(decoy)
+                                decoyConversations = list
+                                val prefs = context.getSharedPreferences("rocchat", Context.MODE_PRIVATE)
+                                prefs.edit().putString("rocchat_decoy_convs", org.json.JSONArray(list.map { it }).toString()).apply()
+                                decoyNameInput = ""; decoyMessageInput = ""
+                            }
+                        }, modifier = Modifier.fillMaxWidth()) { Text("Add Decoy") }
+                        Spacer(Modifier.height(12.dp))
+                        if (decoyConversations.isEmpty()) {
+                            Text("No decoy conversations", color = RocColors.TextSecondary, fontSize = 12.sp)
+                        }
+                        decoyConversations.forEachIndexed { idx, decoy ->
+                            Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(decoy.optString("name", "Unnamed"), fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                                    Text("${decoy.optJSONArray("messages")?.length() ?: 0} messages", fontSize = 12.sp, color = RocColors.TextSecondary)
+                                }
+                                TextButton(onClick = {
+                                    val list = decoyConversations.toMutableList()
+                                    list.removeAt(idx)
+                                    decoyConversations = list
+                                    val prefs = context.getSharedPreferences("rocchat", Context.MODE_PRIVATE)
+                                    prefs.edit().putString("rocchat_decoy_convs", org.json.JSONArray(list.map { it }).toString()).apply()
+                                }) { Text("Delete", color = RocColors.Danger) }
+                            }
+                            HorizontalDivider()
+                        }
+                        Spacer(Modifier.height(8.dp))
+                        Text("Decoy conversations appear in your chat list with fake messages. Stored locally only.", fontSize = 11.sp, color = RocColors.TextSecondary)
+                    }
+                },
+                confirmButton = {},
+                dismissButton = { TextButton(onClick = { showDecoyManager = false }) { Text("Done") } },
+            )
+        }
+
+        // Custom Emoji dialog
+        if (showEmojiManager) {
+            AlertDialog(
+                onDismissRequest = { showEmojiManager = false },
+                title = { Text("Custom Emoji (${customEmojis.size}/64)") },
+                text = {
+                    Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                        OutlinedTextField(value = emojiShortcodeInput, onValueChange = { emojiShortcodeInput = it.lowercase().replace(" ", "_") }, label = { Text("Shortcode") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                        Spacer(Modifier.height(8.dp))
+                        Text("Pick an image from your gallery, max 1MB. Use :shortcode: in messages.", fontSize = 12.sp, color = RocColors.TextSecondary)
+                        Spacer(Modifier.height(12.dp))
+                        if (customEmojis.isEmpty()) {
+                            Text("No custom emoji yet", color = RocColors.TextSecondary, fontSize = 12.sp)
+                        }
+                        customEmojis.forEachIndexed { idx, emoji ->
+                            Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Text(":${emoji.optString("shortcode")}:", fontFamily = FontFamily.Monospace, modifier = Modifier.weight(1f))
+                                TextButton(onClick = {
+                                    val list = customEmojis.toMutableList()
+                                    list.removeAt(idx)
+                                    customEmojis = list
+                                    val prefs = context.getSharedPreferences("rocchat", Context.MODE_PRIVATE)
+                                    prefs.edit().putString("rocchat_custom_emoji", org.json.JSONArray(list.map { it }).toString()).apply()
+                                }) { Text("Delete", color = RocColors.Danger) }
+                            }
+                            HorizontalDivider()
+                        }
+                    }
+                },
+                confirmButton = {},
+                dismissButton = { TextButton(onClick = { showEmojiManager = false }) { Text("Done") } },
+            )
+        }
+
+        // Donation dialog
+        if (showDonationSheet) {
+            AlertDialog(
+                onDismissRequest = { showDonationSheet = false },
+                title = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.Favorite, contentDescription = null, tint = RocColors.RocGold)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Support RocChat")
+                    }
+                },
+                text = {
+                    Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                        Text("All features are free forever. Donations support development and server costs.", fontSize = 12.sp, color = RocColors.TextSecondary)
+                        Spacer(Modifier.height(12.dp))
+                        if (donorTier.isNotEmpty()) {
+                            val badge = when (donorTier.lowercase()) { "coffee" -> "☕"; "feather" -> "🪶"; "wing" -> "🦅"; "mountain" -> "🏔️"; "patron" -> "👑"; else -> "💛" }
+                            Row(modifier = Modifier.fillMaxWidth().background(RocColors.RocGold.copy(alpha = 0.1f), RoundedCornerShape(12.dp)).padding(12.dp)) {
+                                Text(badge, fontSize = 24.sp)
+                                Spacer(Modifier.width(8.dp))
+                                Column {
+                                    Text("${donorTier.replaceFirstChar { it.uppercase() }} Supporter", fontWeight = FontWeight.SemiBold, color = RocColors.RocGold)
+                                    if (donorSince.isNotEmpty()) Text("Since ${donorSince.take(10)}", fontSize = 12.sp, color = RocColors.TextSecondary)
+                                }
+                            }
+                            Spacer(Modifier.height(12.dp))
+                        }
+                        listOf("coffee" to "☕ Coffee · \$3", "feather" to "🪶 Feather · \$5", "wing" to "🦅 Wing · \$10", "mountain" to "🏔️ Mountain · \$25", "patron" to "👑 Patron · \$50").forEach { (tier, label) ->
+                            val amount = when (tier) { "coffee" -> 3; "feather" -> 5; "wing" -> 10; "mountain" -> 25; "patron" -> 50; else -> 0 }
+                            OutlinedButton(onClick = {
+                                scope.launch {
+                                    try {
+                                        APIClient.post("/billing/crypto/checkout", JSONObject().put("type", "crypto").put("amount", amount).put("recurring", false))
+                                        APIClient.post("/features/donor", JSONObject().put("tier", tier))
+                                        donorTier = tier
+                                    } catch (_: Exception) {}
+                                }
+                            }, modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)) { Text(label) }
+                        }
+                        if (donorTier.isNotEmpty()) {
+                            Spacer(Modifier.height(12.dp))
+                            TextButton(onClick = { scope.launch { try { APIClient.delete("/features/donor"); donorTier = "" } catch (_: Exception) {} } }) { Text("Remove Badge", color = RocColors.Danger) }
+                        }
+                    }
+                },
+                confirmButton = {},
+                dismissButton = { TextButton(onClick = { showDonationSheet = false }) { Text("Done") } },
+            )
+        }
+
+        // Business/Org dialog
+        if (showBusinessSheet) {
+            AlertDialog(
+                onDismissRequest = { showBusinessSheet = false },
+                title = { Text("Organizations") },
+                text = {
+                    Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                        OutlinedTextField(value = newOrgName, onValueChange = { newOrgName = it }, label = { Text("Organization name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                        Spacer(Modifier.height(8.dp))
+                        Button(onClick = {
+                            if (newOrgName.trim().isNotEmpty()) {
+                                scope.launch {
+                                    try { APIClient.post("/business/org", JSONObject().put("name", newOrgName.trim())); newOrgName = "" } catch (_: Exception) {}
+                                    try { val data = APIClient.getArray("/business/org"); organizations = (0 until data.length()).map { data.getJSONObject(it) } } catch (_: Exception) {}
+                                }
+                            }
+                        }, modifier = Modifier.fillMaxWidth()) { Text("Create") }
+                        Spacer(Modifier.height(12.dp))
+                        if (organizations.isEmpty()) {
+                            Text("No organizations yet", color = RocColors.TextSecondary, fontSize = 12.sp)
+                        }
+                        organizations.forEach { org ->
+                            val name = org.optString("name", "Unnamed")
+                            val memberCount = org.optInt("member_count", 0)
+                            Row(modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(name, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                                    Text("$memberCount members", fontSize = 12.sp, color = RocColors.TextSecondary)
+                                }
+                                Icon(Icons.Default.ChevronRight, contentDescription = null, tint = RocColors.TextSecondary)
+                            }
+                            HorizontalDivider()
+                        }
+                        Spacer(Modifier.height(8.dp))
+                        Text("\$3.99/user/month — RBAC, SSO, compliance export, retention, remote wipe.", fontSize = 11.sp, color = RocColors.TextSecondary)
+                    }
+                },
+                confirmButton = {},
+                dismissButton = { TextButton(onClick = { showBusinessSheet = false }) { Text("Done") } },
+            )
+        }
+
+        // Encrypted Backup dialog
+        if (showBackupSheet) {
+            AlertDialog(
+                onDismissRequest = { showBackupSheet = false },
+                title = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.Backup, contentDescription = null, tint = RocColors.RocGold)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Encrypted Backup")
+                    }
+                },
+                text = {
+                    Column {
+                        Text("Export or import an encrypted backup of your keys, sessions, and settings.", fontSize = 12.sp, color = RocColors.TextSecondary)
+                        Spacer(Modifier.height(12.dp))
+                        OutlinedTextField(value = backupPassphrase, onValueChange = { backupPassphrase = it }, label = { Text("Passphrase (12+ chars)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                        Spacer(Modifier.height(12.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Button(onClick = {
+                                if (backupPassphrase.length < 12) { backupStatus = "Passphrase must be 12+ characters"; return@Button }
+                                scope.launch {
+                                    backupStatus = "Exporting..."
+                                    try {
+                                        val prefs = context.getSharedPreferences("rocchat", Context.MODE_PRIVATE)
+                                        val backup = JSONObject()
+                                        listOf("identity_key_public", "identity_key_private", "recovery_phrase", "rocchat_custom_emoji", "rocchat_decoy_convs", "default_disappear_timer").forEach { key ->
+                                            prefs.getString(key, null)?.let { backup.put(key, it) }
+                                        }
+                                        val plainBytes = backup.toString().toByteArray()
+                                        val salt = ByteArray(16).also { java.security.SecureRandom().nextBytes(it) }
+                                        val md = java.security.MessageDigest.getInstance("SHA-256")
+                                        md.update(backupPassphrase.toByteArray())
+                                        md.update(salt)
+                                        val keyBytes = md.digest()
+                                        val key = javax.crypto.spec.SecretKeySpec(keyBytes, "AES")
+                                        val iv = ByteArray(12).also { java.security.SecureRandom().nextBytes(it) }
+                                        val cipher = javax.crypto.Cipher.getInstance("AES/GCM/NoPadding")
+                                        cipher.init(javax.crypto.Cipher.ENCRYPT_MODE, key, javax.crypto.spec.GCMParameterSpec(128, iv))
+                                        val encrypted = cipher.doFinal(plainBytes)
+                                        val header = "ROCCHAT-BACKUP-2".toByteArray()
+                                        val output = header + salt + iv + encrypted
+                                        val filename = "rocchat-backup-${System.currentTimeMillis() / 1000}.enc"
+                                        val file = java.io.File(context.cacheDir, filename)
+                                        file.writeBytes(output)
+                                        backupStatus = "✅ Backup saved: $filename"
+                                    } catch (e: Exception) {
+                                        backupStatus = "Export failed: ${e.message}"
+                                    }
+                                }
+                            }, modifier = Modifier.weight(1f)) {
+                                Icon(Icons.Default.Upload, contentDescription = null)
+                                Spacer(Modifier.width(4.dp))
+                                Text("Export")
+                            }
+                            OutlinedButton(onClick = {
+                                if (backupPassphrase.length < 12) { backupStatus = "Passphrase must be 12+ characters"; return@OutlinedButton }
+                                backupStatus = "Use Import Chat History to select backup file."
+                            }, modifier = Modifier.weight(1f)) {
+                                Icon(Icons.Default.Download, contentDescription = null)
+                                Spacer(Modifier.width(4.dp))
+                                Text("Import")
+                            }
+                        }
+                        if (backupStatus.isNotEmpty()) {
+                            Spacer(Modifier.height(8.dp))
+                            Text(backupStatus, fontSize = 12.sp, color = if (backupStatus.startsWith("✅")) RocColors.Success else RocColors.TextSecondary)
+                        }
+                    }
+                },
+                confirmButton = {},
+                dismissButton = { TextButton(onClick = { showBackupSheet = false }) { Text("Done") } },
+            )
+        }
+
+        // Saved Contacts dialog
+        if (showSavedContacts) {
+            AlertDialog(
+                onDismissRequest = { showSavedContacts = false },
+                title = { Text("Saved Contacts") },
+                text = {
+                    Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                        if (savedContacts.isEmpty()) {
+                            Text("No saved contacts", color = RocColors.TextSecondary, fontSize = 12.sp)
+                        }
+                        savedContacts.forEach { contact ->
+                            val name = contact.optString("display_name", contact.optString("username", "Unknown"))
+                            val nickname = contact.optString("nickname", "")
+                            val cid = contact.optString("contact_id", contact.optString("id", ""))
+                            Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(name, fontSize = 14.sp)
+                                    if (nickname.isNotEmpty()) Text(nickname, fontSize = 12.sp, color = RocColors.RocGold)
+                                }
+                                TextButton(onClick = {
+                                    scope.launch {
+                                        try { APIClient.delete("/features/contacts/$cid") } catch (_: Exception) {}
+                                        try { val data = APIClient.getArray("/features/contacts"); savedContacts = (0 until data.length()).map { data.getJSONObject(it) } } catch (_: Exception) {}
+                                    }
+                                }) { Text("Remove", color = RocColors.Danger) }
+                            }
+                            HorizontalDivider()
+                        }
+                    }
+                },
+                confirmButton = {},
+                dismissButton = { TextButton(onClick = { showSavedContacts = false }) { Text("Done") } },
             )
         }
     }

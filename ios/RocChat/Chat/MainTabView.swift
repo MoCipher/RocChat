@@ -2626,6 +2626,38 @@ struct SettingsView: View {
     @State private var showRecoveryPhrase = false
     @State private var recoveryPhrase = ""
 
+    // Decoy conversations
+    @State private var showDecoyManager = false
+    @State private var decoyConversations: [[String: Any]] = []
+    @State private var decoyNameInput = ""
+    @State private var decoyMessageInput = ""
+
+    // Custom emoji
+    @State private var showEmojiManager = false
+    @State private var customEmojis: [[String: String]] = []
+    @State private var emojiShortcodeInput = ""
+    @State private var showEmojiPhotoPicker = false
+    @State private var emojiPhotoItem: PhotosPickerItem?
+
+    // Donation
+    @State private var showDonationSheet = false
+    @State private var donorTier = ""
+    @State private var donorSince = ""
+
+    // Business/Org
+    @State private var showBusinessSheet = false
+    @State private var organizations: [[String: Any]] = []
+    @State private var newOrgName = ""
+
+    // Encrypted backup
+    @State private var showBackupSheet = false
+    @State private var backupPassphrase = ""
+    @State private var backupStatus = ""
+
+    // Saved contacts
+    @State private var showSavedContacts = false
+    @State private var savedContacts: [[String: Any]] = []
+
     var body: some View {
         NavigationStack {
             List {
@@ -3131,6 +3163,35 @@ struct SettingsView: View {
                     }
                 }
 
+                Section("Power-User Features") {
+                    Button {
+                        loadDecoys()
+                        showDecoyManager = true
+                    } label: {
+                        Label("Decoy Conversations", systemImage: "theatermask.and.paintbrush.fill")
+                    }
+                    Button {
+                        loadCustomEmojis()
+                        showEmojiManager = true
+                    } label: {
+                        Label("Custom Emoji", systemImage: "face.smiling.inverse")
+                    }
+                    Button {
+                        showBackupSheet = true
+                    } label: {
+                        Label("Encrypted Backup", systemImage: "externaldrive.badge.checkmark")
+                    }
+                }
+
+                Section("Saved Contacts") {
+                    Button {
+                        Task { await loadSavedContacts() }
+                        showSavedContacts = true
+                    } label: {
+                        Label("Manage Saved Contacts", systemImage: "person.crop.rectangle.stack.fill")
+                    }
+                }
+
                 Section("Support RocChat") {
                     VStack(alignment: .leading, spacing: 6) {
                         HStack(spacing: 6) {
@@ -3144,6 +3205,32 @@ struct SettingsView: View {
                             .foregroundColor(.textSecondary)
                     }
                     .padding(.vertical, 4)
+
+                    Button {
+                        Task { await loadDonorStatus() }
+                        showDonationSheet = true
+                    } label: {
+                        Label("Donate", systemImage: "heart.fill")
+                    }
+                    if !donorTier.isEmpty {
+                        HStack {
+                            Text("Current Badge:")
+                            Text(donorBadgeEmoji(donorTier)).font(.title2)
+                            Text(donorTier.capitalized).foregroundColor(.rocGold).font(.caption)
+                        }
+                    }
+                }
+
+                Section("Business") {
+                    Button {
+                        Task { await loadOrganizations() }
+                        showBusinessSheet = true
+                    } label: {
+                        Label("Organization Management", systemImage: "building.2.fill")
+                    }
+                    Text("$3.99/user/month — RBAC, SSO, compliance, remote wipe")
+                        .font(.caption)
+                        .foregroundColor(.textSecondary)
                 }
 
                 Section("About") {
@@ -3305,6 +3392,307 @@ struct SettingsView: View {
                 }
             }
             .presentationDetents([.medium, .large])
+        }
+        // MARK: Decoy Conversations Sheet
+        .sheet(isPresented: $showDecoyManager) {
+            NavigationStack {
+                List {
+                    Section("Add Decoy") {
+                        TextField("Contact name", text: $decoyNameInput)
+                        TextField("Messages (sender|text per line)", text: $decoyMessageInput, axis: .vertical)
+                            .lineLimit(3...6)
+                        Button("Add Decoy") { addDecoy() }
+                            .disabled(decoyNameInput.trimmingCharacters(in: .whitespaces).isEmpty)
+                    }
+                    Section("Decoys") {
+                        if decoyConversations.isEmpty {
+                            Text("No decoy conversations").foregroundColor(.secondary)
+                        }
+                        ForEach(Array(decoyConversations.enumerated()), id: \.offset) { idx, decoy in
+                            let name = decoy["name"] as? String ?? "Unnamed"
+                            let msgs = decoy["messages"] as? [[String: String]] ?? []
+                            VStack(alignment: .leading) {
+                                Text(name).font(.subheadline.bold())
+                                Text("\(msgs.count) messages").font(.caption).foregroundColor(.secondary)
+                            }
+                            .swipeActions(edge: .trailing) {
+                                Button("Delete", role: .destructive) { removeDecoy(at: idx) }
+                            }
+                        }
+                    }
+                    Section(footer: Text("Decoy conversations appear in your chat list but contain only fake messages. They are stored locally and never sent over the network.")) { EmptyView() }
+                }
+                .navigationTitle("Decoy Conversations")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Done") { showDecoyManager = false }
+                    }
+                }
+            }
+        }
+        // MARK: Custom Emoji Sheet
+        .sheet(isPresented: $showEmojiManager) {
+            NavigationStack {
+                List {
+                    Section("Add Emoji") {
+                        TextField("Shortcode (e.g. thumbsup)", text: $emojiShortcodeInput)
+                            .autocapitalization(.none)
+                        PhotosPicker(selection: $emojiPhotoItem, matching: .images) {
+                            Label("Pick Image", systemImage: "photo")
+                        }
+                        Text("Max 64 emoji, 1MB each").font(.caption).foregroundColor(.secondary)
+                    }
+                    Section("Your Emoji (\(customEmojis.count)/64)") {
+                        if customEmojis.isEmpty {
+                            Text("No custom emoji yet").foregroundColor(.secondary)
+                        }
+                        ForEach(Array(customEmojis.enumerated()), id: \.offset) { idx, emoji in
+                            HStack {
+                                if let dataUrl = emoji["data_url"],
+                                   let base64 = dataUrl.components(separatedBy: "base64,").last,
+                                   let imgData = Data(base64Encoded: base64),
+                                   let uiImg = UIImage(data: imgData) {
+                                    Image(uiImage: uiImg).resizable().frame(width: 28, height: 28)
+                                }
+                                Text(":\(emoji["shortcode"] ?? ""):")
+                                    .font(.system(.body, design: .monospaced))
+                                Spacer()
+                            }
+                            .swipeActions(edge: .trailing) {
+                                Button("Delete", role: .destructive) {
+                                    customEmojis.remove(at: idx)
+                                    saveCustomEmojis()
+                                }
+                            }
+                        }
+                    }
+                }
+                .navigationTitle("Custom Emoji")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Done") { showEmojiManager = false }
+                    }
+                }
+                .onChange(of: emojiPhotoItem) { _, newItem in
+                    guard let newItem else { return }
+                    Task {
+                        if let data = try? await newItem.loadTransferable(type: Data.self) {
+                            addCustomEmoji(imageData: data)
+                        }
+                        emojiPhotoItem = nil
+                    }
+                }
+            }
+        }
+        // MARK: Donation Sheet
+        .sheet(isPresented: $showDonationSheet) {
+            NavigationStack {
+                ScrollView {
+                    VStack(spacing: 16) {
+                        Image(systemName: "heart.fill")
+                            .font(.system(size: 48))
+                            .foregroundColor(.rocGold)
+                        Text("Support RocChat")
+                            .font(.title2.bold())
+                        Text("All features are free forever. Donations support development and server costs.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal)
+
+                        if !donorTier.isEmpty {
+                            HStack {
+                                Text(donorBadgeEmoji(donorTier)).font(.largeTitle)
+                                VStack(alignment: .leading) {
+                                    Text(donorTier.capitalized + " Supporter").font(.headline).foregroundColor(.rocGold)
+                                    if !donorSince.isEmpty {
+                                        Text("Since \(donorSince.prefix(10))").font(.caption).foregroundColor(.secondary)
+                                    }
+                                }
+                            }
+                            .padding()
+                            .background(RoundedRectangle(cornerRadius: 12).fill(Color.rocGold.opacity(0.1)))
+                        }
+
+                        let tiers: [(String, String, Int)] = [
+                            ("coffee", "☕ Coffee", 3),
+                            ("feather", "🪶 Feather", 5),
+                            ("wing", "🦅 Wing", 10),
+                            ("mountain", "🏔️ Mountain", 25),
+                            ("patron", "👑 Patron", 50),
+                        ]
+                        ForEach(tiers, id: \.0) { tier, label, amount in
+                            Button {
+                                Task { await submitDonation(tier: tier, amount: amount) }
+                            } label: {
+                                HStack {
+                                    Text(label).font(.headline)
+                                    Spacer()
+                                    Text("$\(amount)").font(.headline).foregroundColor(.rocGold)
+                                }
+                                .padding()
+                                .background(RoundedRectangle(cornerRadius: 12).stroke(Color.rocGold, lineWidth: 1))
+                            }
+                            .buttonStyle(.plain)
+                        }
+
+                        if !donorTier.isEmpty {
+                            Button("Remove Badge", role: .destructive) {
+                                Task {
+                                    _ = try? await APIClient.shared.deleteRaw("/features/donor")
+                                    donorTier = ""
+                                }
+                            }
+                            .font(.caption)
+                        }
+                    }
+                    .padding()
+                }
+                .navigationTitle("Donate")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Done") { showDonationSheet = false }
+                    }
+                }
+            }
+        }
+        // MARK: Business/Org Sheet
+        .sheet(isPresented: $showBusinessSheet) {
+            NavigationStack {
+                List {
+                    Section("Create Organization") {
+                        TextField("Organization name", text: $newOrgName)
+                        Button("Create") {
+                            Task { await createOrganization() }
+                        }
+                        .disabled(newOrgName.trimmingCharacters(in: .whitespaces).isEmpty)
+                    }
+                    Section("Your Organizations") {
+                        if organizations.isEmpty {
+                            Text("No organizations yet").foregroundColor(.secondary)
+                        }
+                        ForEach(Array(organizations.enumerated()), id: \.offset) { _, org in
+                            let name = org["name"] as? String ?? "Unnamed"
+                            let id = org["id"] as? String ?? ""
+                            let memberCount = org["member_count"] as? Int ?? 0
+                            NavigationLink {
+                                OrgDetailView(orgId: id, orgName: name)
+                            } label: {
+                                VStack(alignment: .leading) {
+                                    Text(name).font(.subheadline.bold())
+                                    Text("\(memberCount) members").font(.caption).foregroundColor(.secondary)
+                                }
+                            }
+                        }
+                    }
+                    Section(footer: Text("Business tier: $3.99/user/month. Includes RBAC, SSO, compliance export, retention policies, and remote device wipe.")) { EmptyView() }
+                }
+                .navigationTitle("Organizations")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Done") { showBusinessSheet = false }
+                    }
+                }
+            }
+        }
+        // MARK: Encrypted Backup Sheet
+        .sheet(isPresented: $showBackupSheet) {
+            NavigationStack {
+                VStack(spacing: 20) {
+                    Image(systemName: "externaldrive.badge.checkmark")
+                        .font(.system(size: 48))
+                        .foregroundColor(.rocGold)
+                    Text("Encrypted Backup")
+                        .font(.title2.bold())
+                    Text("Export or import an encrypted backup of your keys, sessions, and settings.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal)
+
+                    SecureField("Passphrase (12+ characters)", text: $backupPassphrase)
+                        .textFieldStyle(.roundedBorder)
+                        .padding(.horizontal)
+
+                    HStack(spacing: 16) {
+                        Button {
+                            Task { await exportBackup() }
+                        } label: {
+                            Label("Export", systemImage: "arrow.up.doc.fill")
+                                .frame(maxWidth: .infinity)
+                                .padding()
+                                .background(RoundedRectangle(cornerRadius: 12).fill(Color.rocGold))
+                                .foregroundColor(.white)
+                        }
+                        Button {
+                            Task { await importBackup() }
+                        } label: {
+                            Label("Import", systemImage: "arrow.down.doc.fill")
+                                .frame(maxWidth: .infinity)
+                                .padding()
+                                .background(RoundedRectangle(cornerRadius: 12).stroke(Color.rocGold, lineWidth: 1))
+                        }
+                    }
+                    .padding(.horizontal)
+
+                    if !backupStatus.isEmpty {
+                        Text(backupStatus)
+                            .font(.caption)
+                            .foregroundColor(backupStatus.starts(with: "✅") ? .green : .secondary)
+                            .multilineTextAlignment(.center)
+                    }
+
+                    Spacer()
+                }
+                .padding()
+                .navigationTitle("Backup")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Done") { showBackupSheet = false }
+                    }
+                }
+            }
+        }
+        // MARK: Saved Contacts Sheet
+        .sheet(isPresented: $showSavedContacts) {
+            NavigationStack {
+                List {
+                    if savedContacts.isEmpty {
+                        Text("No saved contacts").foregroundColor(.secondary)
+                    }
+                    ForEach(Array(savedContacts.enumerated()), id: \.offset) { _, contact in
+                        let name = contact["display_name"] as? String ?? contact["username"] as? String ?? "Unknown"
+                        let nickname = contact["nickname"] as? String ?? ""
+                        let cid = contact["contact_id"] as? String ?? contact["id"] as? String ?? ""
+                        HStack {
+                            VStack(alignment: .leading) {
+                                Text(name).font(.subheadline)
+                                if !nickname.isEmpty {
+                                    Text(nickname).font(.caption).foregroundColor(.rocGold)
+                                }
+                            }
+                            Spacer()
+                            Button("Remove") {
+                                Task { await removeSavedContact(id: cid) }
+                            }
+                            .foregroundColor(.danger)
+                            .font(.caption)
+                        }
+                    }
+                }
+                .navigationTitle("Saved Contacts")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Done") { showSavedContacts = false }
+                    }
+                }
+            }
         }
         .task {
             do {
@@ -3513,6 +3901,274 @@ struct SettingsView: View {
             }
             isLinkingDevice = false
         }
+    }
+
+    // MARK: - Decoy Conversations Helpers
+    private func loadDecoys() {
+        if let data = UserDefaults.standard.data(forKey: "rocchat_decoy_convs"),
+           let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
+            decoyConversations = arr
+        }
+    }
+    private func saveDecoys() {
+        if let data = try? JSONSerialization.jsonObject(with: JSONSerialization.data(withJSONObject: decoyConversations)) {
+            UserDefaults.standard.set(try? JSONSerialization.data(withJSONObject: decoyConversations), forKey: "rocchat_decoy_convs")
+        }
+    }
+    private func addDecoy() {
+        let name = decoyNameInput.trimmingCharacters(in: .whitespaces)
+        guard !name.isEmpty else { return }
+        let msgs = decoyMessageInput.components(separatedBy: "\n").filter { !$0.isEmpty }.map { line -> [String: String] in
+            let parts = line.split(separator: "|", maxSplits: 1)
+            return ["sender": parts.count > 1 ? String(parts[0]) : "Them", "text": parts.count > 1 ? String(parts[1]) : String(line)]
+        }
+        let id = "decoy_\(UUID().uuidString.prefix(8).lowercased())"
+        let decoy: [String: Any] = ["id": id, "name": name, "messages": msgs]
+        decoyConversations.append(decoy)
+        saveDecoys()
+        decoyNameInput = ""
+        decoyMessageInput = ""
+    }
+    private func removeDecoy(at idx: Int) {
+        guard idx < decoyConversations.count else { return }
+        decoyConversations.remove(at: idx)
+        saveDecoys()
+    }
+
+    // MARK: - Custom Emoji Helpers
+    private func loadCustomEmojis() {
+        if let data = UserDefaults.standard.data(forKey: "rocchat_custom_emoji"),
+           let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: String]] {
+            customEmojis = arr
+        }
+    }
+    private func saveCustomEmojis() {
+        UserDefaults.standard.set(try? JSONSerialization.data(withJSONObject: customEmojis), forKey: "rocchat_custom_emoji")
+    }
+    private func addCustomEmoji(imageData: Data) {
+        let sc = emojiShortcodeInput.trimmingCharacters(in: .whitespaces).lowercased().replacingOccurrences(of: " ", with: "_")
+        guard !sc.isEmpty, imageData.count <= 1_000_000, customEmojis.count < 64 else { return }
+        let b64 = imageData.base64EncodedString()
+        let dataUrl = "data:image/png;base64,\(b64)"
+        customEmojis.append(["shortcode": sc, "data_url": dataUrl])
+        saveCustomEmojis()
+        emojiShortcodeInput = ""
+    }
+
+    // MARK: - Donation Helpers
+    private func loadDonorStatus() async {
+        do {
+            let data = try await APIClient.shared.getRaw("/features/donor")
+            if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                donorTier = json["tier"] as? String ?? ""
+                donorSince = json["donor_since"] as? String ?? ""
+            }
+        } catch {}
+    }
+    private func donorBadgeEmoji(_ tier: String) -> String {
+        switch tier.lowercased() {
+        case "coffee": return "☕"
+        case "feather": return "🪶"
+        case "wing": return "🦅"
+        case "mountain": return "🏔️"
+        case "patron": return "👑"
+        default: return "💛"
+        }
+    }
+    private func submitDonation(tier: String, amount: Int) async {
+        do {
+            let body: [String: Any] = ["type": "crypto", "amount": amount, "recurring": false]
+            let data = try await APIClient.shared.postRaw("/billing/crypto/checkout", body: body)
+            if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let _ = json["intent_id"] as? String {
+                // Set donor tier badge
+                _ = try await APIClient.shared.postRaw("/features/donor", body: ["tier": tier])
+                await loadDonorStatus()
+            }
+        } catch {}
+    }
+
+    // MARK: - Business/Org Helpers
+    private func loadOrganizations() async {
+        do {
+            let data = try await APIClient.shared.getRaw("/business/org")
+            if let arr = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
+                organizations = arr
+            }
+        } catch {}
+    }
+    private func createOrganization() async {
+        let name = newOrgName.trimmingCharacters(in: .whitespaces)
+        guard !name.isEmpty else { return }
+        do {
+            _ = try await APIClient.shared.postRaw("/business/org", body: ["name": name])
+            await loadOrganizations()
+            newOrgName = ""
+        } catch {}
+    }
+
+    // MARK: - Encrypted Backup Helpers
+    private func exportBackup() async {
+        backupStatus = "Exporting..."
+        let passphrase = backupPassphrase
+        guard passphrase.count >= 12 else { backupStatus = "Passphrase must be 12+ characters"; return }
+        // Gather local data
+        var backupData: [String: Any] = [:]
+        let keysToBackup = ["identity_key_public", "identity_key_private", "recovery_phrase",
+                            "rocchat_custom_emoji", "rocchat_decoy_convs", "default_disappear_timer"]
+        for key in keysToBackup {
+            if let val = UserDefaults.standard.object(forKey: key) {
+                if let data = val as? Data {
+                    backupData[key] = data.base64EncodedString()
+                } else if let str = val as? String {
+                    backupData[key] = str
+                } else if let num = val as? Int {
+                    backupData[key] = num
+                }
+            }
+        }
+        guard let jsonData = try? JSONSerialization.data(withJSONObject: backupData) else {
+            backupStatus = "Failed to serialize"; return
+        }
+        // Encrypt with AES-GCM using passphrase
+        let salt = Data((0..<16).map { _ in UInt8.random(in: 0...255) })
+        let keyMaterial = SHA256.hash(data: passphrase.data(using: .utf8)! + salt)
+        let symKey = SymmetricKey(data: Data(keyMaterial.prefix(32)))
+        guard let sealed = try? AES.GCM.seal(jsonData, using: symKey) else {
+            backupStatus = "Encryption failed"; return
+        }
+        var output = Data("ROCCHAT-BACKUP-2".utf8)
+        output.append(salt)
+        output.append(sealed.nonce.withUnsafeBytes { Data($0) })
+        output.append(sealed.ciphertext)
+        output.append(sealed.tag)
+        // Save to files
+        let filename = "rocchat-backup-\(Int(Date().timeIntervalSince1970)).enc"
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(filename)
+        try? output.write(to: url)
+        await MainActor.run {
+            backupStatus = "✅ Backup saved to \(filename)"
+            let ac = UIActivityViewController(activityItems: [url], applicationActivities: nil)
+            if let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+               let root = scene.windows.first?.rootViewController {
+                root.present(ac, animated: true)
+            }
+        }
+    }
+    private func importBackup() async {
+        backupStatus = "Importing..."
+        let passphrase = backupPassphrase
+        guard passphrase.count >= 12 else { backupStatus = "Passphrase must be 12+ characters"; return }
+        // Will be triggered by fileImporter in real flow — here as placeholder
+        backupStatus = "Use 'Import Chat History' to select backup file, then decrypt here."
+    }
+
+    // MARK: - Saved Contacts Helpers
+    private func loadSavedContacts() async {
+        do {
+            let data = try await APIClient.shared.getRaw("/features/contacts")
+            if let arr = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
+                savedContacts = arr
+            }
+        } catch {}
+    }
+    private func removeSavedContact(id: String) async {
+        _ = try? await APIClient.shared.deleteRaw("/features/contacts/\(id)")
+        await loadSavedContacts()
+    }
+}
+
+// MARK: - Organization Detail View
+struct OrgDetailView: View {
+    let orgId: String
+    let orgName: String
+    @State private var members: [[String: Any]] = []
+    @State private var newMemberEmail = ""
+    @State private var retentionDays = 90
+    @State private var ssoEnabled = false
+
+    var body: some View {
+        List {
+            Section("Members") {
+                ForEach(Array(members.enumerated()), id: \.offset) { _, member in
+                    let name = member["display_name"] as? String ?? member["email"] as? String ?? "Unknown"
+                    let role = member["role"] as? String ?? "member"
+                    let uid = member["user_id"] as? String ?? ""
+                    HStack {
+                        VStack(alignment: .leading) {
+                            Text(name).font(.subheadline)
+                            Text(role).font(.caption).foregroundColor(.secondary)
+                        }
+                        Spacer()
+                        if role != "owner" {
+                            Button("Remove") {
+                                Task {
+                                    _ = try? await APIClient.shared.deleteRaw("/business/org/\(orgId)/members/\(uid)")
+                                    await loadMembers()
+                                }
+                            }
+                            .foregroundColor(.danger)
+                            .font(.caption)
+                        }
+                    }
+                }
+                HStack {
+                    TextField("Email to add", text: $newMemberEmail)
+                        .textContentType(.emailAddress)
+                        .autocapitalization(.none)
+                    Button("Add") {
+                        Task {
+                            _ = try? await APIClient.shared.postRaw("/business/org/\(orgId)/members", body: ["email": newMemberEmail])
+                            newMemberEmail = ""
+                            await loadMembers()
+                        }
+                    }
+                    .disabled(newMemberEmail.isEmpty)
+                }
+            }
+            Section("Compliance") {
+                Button("Export Compliance Report") {
+                    Task {
+                        _ = try? await APIClient.shared.getRaw("/business/org/\(orgId)/export")
+                    }
+                }
+                Stepper("Retention: \(retentionDays) days", value: $retentionDays, in: 1...365)
+                    .onChange(of: retentionDays) { _, days in
+                        Task {
+                            _ = try? await APIClient.shared.postRaw("/business/org/\(orgId)/retention", body: ["days": days], method: "PUT")
+                        }
+                    }
+            }
+            Section("Security") {
+                Toggle("SSO Enabled", isOn: $ssoEnabled)
+                    .onChange(of: ssoEnabled) { _, enabled in
+                        Task {
+                            if enabled {
+                                _ = try? await APIClient.shared.postRaw("/business/org/\(orgId)/sso", body: ["enabled": true], method: "PUT")
+                            } else {
+                                _ = try? await APIClient.shared.deleteRaw("/business/org/\(orgId)/sso")
+                            }
+                        }
+                    }
+                Button("Remote Wipe All Devices", role: .destructive) {
+                    Task {
+                        _ = try? await APIClient.shared.postRaw("/business/org/\(orgId)/wipe", body: [:])
+                    }
+                }
+            }
+        }
+        .navigationTitle(orgName)
+        .task { await loadMembers() }
+    }
+
+    private func loadMembers() async {
+        do {
+            let data = try await APIClient.shared.getRaw("/business/org/\(orgId)")
+            if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let arr = json["members"] as? [[String: Any]] {
+                members = arr
+            }
+        } catch {}
     }
 }
 
@@ -3757,7 +4413,9 @@ struct VaultItemView: View {
     }
 }
 
-// MARK: - Helpers(_ iso: String) -> String {
+// MARK: - Helpers
+
+func formatRelativeTime(_ iso: String) -> String {
     let formatter = ISO8601DateFormatter()
     formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
     guard let date = formatter.date(from: iso) ?? ISO8601DateFormatter().date(from: iso) else { return "" }

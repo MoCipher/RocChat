@@ -1,0 +1,47 @@
+Categories:
+  - Security
+  - Internet
+License: AGPL-3.0-or-later
+AuthorName: RocChat Team
+AuthorWebSite: https://chat.mocipher.com
+SourceCode: https://github.com/rocchat/rocchat
+IssueTracker: https://github.com/rocchat/rocchat/issues
+Donate: https://chat.mocipher.com/donate
+
+AutoName: RocChat
+Description: |
+  RocChat is a secure, private, end-to-end encrypted messaging and calling app.
+  
+  Features:
+  * End-to-end encryption (Double Ratchet, X3DH, Sender Keys)
+  * No phone number required — username + passphrase only
+  * Voice & video calls (encrypted WebRTC)
+  * Group chats with sender key rotation
+  * Disappearing messages
+  * Chat folders, pinned conversations, message reactions
+  * Import from WhatsApp, Telegram, Signal
+  * Public channels & communities
+  * Zero PII collected
+  
+  RocChat is part of the Roc Family (alongside RocMail and RocPass).
+
+RepoType: git
+Repo: https://github.com/rocchat/rocchat.git
+
+Builds:
+  - versionName: 1.0.0
+    versionCode: 1
+    commit: v1.0.0
+    subdir: android/app
+    gradle:
+      - yes
+    scandelete:
+      - ios
+      - web
+      - backend
+      - desktop
+
+AutoUpdateMode: Version
+UpdateCheckMode: Tags
+CurrentVersion: 1.0.0
+CurrentVersionCode: 1

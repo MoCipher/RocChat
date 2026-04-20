@@ -1,0 +1,19 @@
+RocChat is a fully end-to-end encrypted messenger that requires no phone number, no email, and collects zero personal information.
+
+Built on the same cryptographic foundations as Signal (X3DH key agreement, Double Ratchet, Sender Keys for groups), RocChat goes further:
+
+• Username + passphrase authentication — no SIM card needed
+• Voice & video calls with encrypted WebRTC
+• Group chats with automatic sender key rotation
+• Disappearing messages with configurable timers
+• Chat folders, pinned conversations, message reactions & replies
+• Import conversations from WhatsApp, Telegram, or Signal
+• Public channels & communities for broadcast messaging
+• Multi-device support via QR code linking
+• View-once media, voice messages, stickers & GIFs
+• Vault for encrypted notes
+• Zero metadata logging — we can't see who talks to whom
+
+All premium features are free forever. Privacy is a right, not a subscription.
+
+RocChat is part of the Roc Family, alongside RocMail (encrypted email) and RocPass (password manager).

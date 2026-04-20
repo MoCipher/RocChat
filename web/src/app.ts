@@ -366,37 +366,104 @@ function showOnboardingIfNeeded() {
   if (localStorage.getItem('rocchat_onboarded')) return;
   const overlay = document.createElement('div');
   overlay.className = 'rc-dialog-overlay';
-  overlay.innerHTML = `
-    <div class="rc-dialog" style="max-width:440px">
-      <div style="text-align:center;padding:var(--sp-6)">
-        <div style="font-size:56px;margin-bottom:var(--sp-4)">🔒</div>
-        <h2 style="margin:0 0 var(--sp-2);font-size:var(--text-xl);color:var(--roc-gold,#D4AF37)">Welcome to RocChat</h2>
-        <p style="color:var(--text-secondary);font-size:var(--text-sm);line-height:1.6;margin:0 0 var(--sp-4)">
-          Every message is <strong>end-to-end encrypted</strong> using the Double Ratchet protocol.
-          Nobody — not even RocChat — can read your messages.
-        </p>
-        <div style="text-align:left;background:var(--surface-primary);border-radius:12px;padding:var(--sp-4);margin-bottom:var(--sp-4)">
-          <div style="margin-bottom:var(--sp-3);font-size:var(--text-sm)">
-            <strong style="color:var(--turquoise,#40E0D0)">🔑 Safety Numbers</strong><br/>
-            <span style="color:var(--text-tertiary)">Verify your contact's identity to prevent impersonation.</span>
+
+  function renderStep(step: number) {
+    if (step === 1) {
+      overlay.innerHTML = `
+        <div class="rc-dialog" style="max-width:440px">
+          <div style="text-align:center;padding:var(--sp-6)">
+            <div style="font-size:56px;margin-bottom:var(--sp-4)">🔒</div>
+            <h2 style="margin:0 0 var(--sp-2);font-size:var(--text-xl);color:var(--roc-gold,#D4AF37)">Welcome to RocChat</h2>
+            <p style="color:var(--text-secondary);font-size:var(--text-sm);line-height:1.6;margin:0 0 var(--sp-4)">
+              Every message is <strong>end-to-end encrypted</strong> using the Double Ratchet protocol.
+              Nobody — not even RocChat — can read your messages.
+            </p>
+            <div style="text-align:left;background:var(--surface-primary);border-radius:12px;padding:var(--sp-4);margin-bottom:var(--sp-4)">
+              <div style="margin-bottom:var(--sp-3);font-size:var(--text-sm)">
+                <strong style="color:var(--turquoise,#40E0D0)">🔑 Safety Numbers</strong><br/>
+                <span style="color:var(--text-tertiary)">Verify your contact's identity to prevent impersonation.</span>
+              </div>
+              <div style="margin-bottom:var(--sp-3);font-size:var(--text-sm)">
+                <strong style="color:var(--turquoise,#40E0D0)">💨 Disappearing Messages</strong><br/>
+                <span style="color:var(--text-tertiary)">Set timers so messages auto-delete after reading.</span>
+              </div>
+              <div style="font-size:var(--text-sm)">
+                <strong style="color:var(--turquoise,#40E0D0)">📱 Multi-Device</strong><br/>
+                <span style="color:var(--text-tertiary)">Scan QR codes to link devices securely.</span>
+              </div>
+            </div>
+            <div style="display:flex;gap:var(--sp-2)">
+              <button class="btn btn-primary" style="flex:1" id="onboard-next">Next →</button>
+            </div>
+            <div style="margin-top:var(--sp-3);display:flex;justify-content:center;gap:6px">
+              <div style="width:8px;height:8px;border-radius:50%;background:var(--roc-gold,#D4AF37)"></div>
+              <div style="width:8px;height:8px;border-radius:50%;background:var(--border-norm)"></div>
+            </div>
           </div>
-          <div style="margin-bottom:var(--sp-3);font-size:var(--text-sm)">
-            <strong style="color:var(--turquoise,#40E0D0)">💨 Disappearing Messages</strong><br/>
-            <span style="color:var(--text-tertiary)">Set timers so messages auto-delete after reading.</span>
+        </div>`;
+      overlay.querySelector('#onboard-next')?.addEventListener('click', () => renderStep(2));
+    } else {
+      overlay.innerHTML = `
+        <div class="rc-dialog" style="max-width:440px">
+          <div style="text-align:center;padding:var(--sp-6)">
+            <div style="font-size:56px;margin-bottom:var(--sp-4)">📥</div>
+            <h2 style="margin:0 0 var(--sp-2);font-size:var(--text-xl);color:var(--roc-gold,#D4AF37)">Import Your Chats</h2>
+            <p style="color:var(--text-secondary);font-size:var(--text-sm);line-height:1.6;margin:0 0 var(--sp-4)">
+              Switching from another app? Drop your export file here to bring your conversations with you.
+            </p>
+            <div id="onboard-dropzone" style="border:2px dashed var(--border-norm);border-radius:12px;padding:var(--sp-6);cursor:pointer;margin-bottom:var(--sp-4);transition:border-color 0.2s,background 0.2s">
+              <div style="font-size:32px;margin-bottom:var(--sp-2)">📂</div>
+              <div style="font-size:var(--text-sm);color:var(--text-secondary)">Drop WhatsApp, Telegram, or Signal export</div>
+              <div style="font-size:var(--text-xs);color:var(--text-tertiary);margin-top:var(--sp-1)">.txt or .json files supported</div>
+            </div>
+            <input type="file" id="onboard-file-input" accept=".txt,.json,.zip" style="display:none">
+            <div id="onboard-import-status" style="font-size:var(--text-xs);color:var(--text-tertiary);margin-bottom:var(--sp-3);min-height:20px"></div>
+            <div style="display:flex;gap:var(--sp-2)">
+              <button class="btn btn-secondary" style="flex:1" id="onboard-skip">Skip for now</button>
+              <button class="btn btn-primary" style="flex:1" id="onboard-done">Get Started</button>
+            </div>
+            <div style="margin-top:var(--sp-3);display:flex;justify-content:center;gap:6px">
+              <div style="width:8px;height:8px;border-radius:50%;background:var(--border-norm)"></div>
+              <div style="width:8px;height:8px;border-radius:50%;background:var(--roc-gold,#D4AF37)"></div>
+            </div>
           </div>
-          <div style="font-size:var(--text-sm)">
-            <strong style="color:var(--turquoise,#40E0D0)">📱 Multi-Device</strong><br/>
-            <span style="color:var(--text-tertiary)">Scan QR codes to link devices securely.</span>
-          </div>
-        </div>
-        <button class="btn btn-primary" style="width:100%" id="onboard-dismiss">Get Started</button>
-      </div>
-    </div>`;
+        </div>`;
+
+      const dropzone = overlay.querySelector('#onboard-dropzone') as HTMLElement;
+      const fileInput = overlay.querySelector('#onboard-file-input') as HTMLInputElement;
+      const status = overlay.querySelector('#onboard-import-status') as HTMLElement;
+
+      const dismiss = () => { localStorage.setItem('rocchat_onboarded', '1'); overlay.remove(); };
+      overlay.querySelector('#onboard-skip')?.addEventListener('click', dismiss);
+      overlay.querySelector('#onboard-done')?.addEventListener('click', dismiss);
+
+      dropzone?.addEventListener('click', () => fileInput?.click());
+      dropzone?.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        dropzone.style.borderColor = 'var(--roc-gold,#D4AF37)';
+        dropzone.style.background = 'rgba(212,175,55,0.05)';
+      });
+      dropzone?.addEventListener('dragleave', () => {
+        dropzone.style.borderColor = 'var(--border-norm)';
+        dropzone.style.background = '';
+      });
+      dropzone?.addEventListener('drop', (e) => {
+        e.preventDefault();
+        dropzone.style.borderColor = 'var(--border-norm)';
+        dropzone.style.background = '';
+        const file = (e as DragEvent).dataTransfer?.files[0];
+        if (file) { status.textContent = `Selected: ${file.name} — go to Settings > Import to finish`; }
+      });
+      fileInput?.addEventListener('change', () => {
+        const file = fileInput.files?.[0];
+        if (file) { status.textContent = `Selected: ${file.name} — go to Settings > Import to finish`; }
+      });
+    }
+  }
+
   document.body.appendChild(overlay);
-  overlay.querySelector('#onboard-dismiss')?.addEventListener('click', () => {
-    localStorage.setItem('rocchat_onboarded', '1');
-    overlay.remove();
-  });
+  renderStep(1);
+
   overlay.addEventListener('click', (e) => {
     if (e.target === overlay) {
       localStorage.setItem('rocchat_onboarded', '1');

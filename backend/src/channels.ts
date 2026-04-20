@@ -16,6 +16,11 @@
  *   POST   /api/channels/:id/subscribe    -> subscribe
  *   DELETE /api/channels/:id/subscribe    -> unsubscribe
  *   POST   /api/channels/:id/post         -> broadcast message (admin only)
+ *   POST   /api/channels/:id/schedule     -> schedule a post (admin only)
+ *   GET    /api/channels/:id/scheduled    -> list scheduled posts (admin)
+ *   DELETE /api/channels/:id/scheduled/:p -> cancel scheduled post
+ *   POST   /api/channels/:id/read/:msgId  -> mark post as read (analytics)
+ *   GET    /api/channels/:id/analytics    -> post read counts (admin only)
  *   POST   /api/communities               -> create community
  *   GET    /api/communities/discover      -> search public communities
  *   GET    /api/communities/:id           -> get community + channels
@@ -257,6 +262,103 @@ export async function handleChannels(
       `UPDATE communities SET member_count = MAX(0, member_count - 1) WHERE id = ?`
     ).bind(commId).run();
     return jsonResponse({ ok: true, left: true });
+  }
+
+  // ─── Scheduled Posts ───
+
+  // POST /api/channels/:id/schedule — schedule a post (admin only)
+  const scheduleMatch = path.match(/^\/api\/channels\/([^/]+)\/schedule$/);
+  if (scheduleMatch && request.method === 'POST') {
+    const channelId = scheduleMatch[1];
+    const member = await env.DB.prepare(
+      `SELECT role FROM conversation_members WHERE conversation_id = ? AND user_id = ?`
+    ).bind(channelId, session.userId).first<{ role: string }>();
+    if (!member || member.role === 'member') return apiError('FORBIDDEN', 'Admin only');
+
+    const body = await request.json() as {
+      ciphertext: string; iv: string; scheduled_at: number;
+    };
+    if (!body.ciphertext || !body.scheduled_at) return apiError('BAD_REQUEST', 'Missing fields');
+
+    const id = crypto.randomUUID();
+    await env.DB.prepare(
+      `INSERT INTO channel_scheduled_posts (id, channel_id, author_id, ciphertext, iv, scheduled_at)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    ).bind(id, channelId, session.userId, body.ciphertext, body.iv || '', body.scheduled_at).run();
+    return jsonResponse({ ok: true, scheduled_post_id: id, scheduled_at: body.scheduled_at });
+  }
+
+  // GET /api/channels/:id/scheduled — list scheduled posts (admin only)
+  const listScheduledMatch = path.match(/^\/api\/channels\/([^/]+)\/scheduled$/);
+  if (listScheduledMatch && request.method === 'GET') {
+    const channelId = listScheduledMatch[1];
+    const member = await env.DB.prepare(
+      `SELECT role FROM conversation_members WHERE conversation_id = ? AND user_id = ?`
+    ).bind(channelId, session.userId).first<{ role: string }>();
+    if (!member || member.role === 'member') return apiError('FORBIDDEN', 'Admin only');
+
+    const posts = await env.DB.prepare(
+      `SELECT id, ciphertext, iv, scheduled_at, status, created_at FROM channel_scheduled_posts
+       WHERE channel_id = ? AND status = 'pending' ORDER BY scheduled_at ASC LIMIT 50`
+    ).bind(channelId).all();
+    return jsonResponse({ posts: posts.results });
+  }
+
+  // DELETE /api/channels/:id/scheduled/:postId — cancel scheduled post
+  const cancelScheduleMatch = path.match(/^\/api\/channels\/([^/]+)\/scheduled\/([^/]+)$/);
+  if (cancelScheduleMatch && request.method === 'DELETE') {
+    const channelId = cancelScheduleMatch[1];
+    const postId = cancelScheduleMatch[2];
+    const member = await env.DB.prepare(
+      `SELECT role FROM conversation_members WHERE conversation_id = ? AND user_id = ?`
+    ).bind(channelId, session.userId).first<{ role: string }>();
+    if (!member || member.role === 'member') return apiError('FORBIDDEN', 'Admin only');
+
+    await env.DB.prepare(
+      `UPDATE channel_scheduled_posts SET status = 'cancelled' WHERE id = ? AND channel_id = ?`
+    ).bind(postId, channelId).run();
+    return jsonResponse({ ok: true, cancelled: true });
+  }
+
+  // ─── Channel Analytics ───
+
+  // POST /api/channels/:id/read/:messageId — mark a channel post as read
+  const readMatch = path.match(/^\/api\/channels\/([^/]+)\/read\/([^/]+)$/);
+  if (readMatch && request.method === 'POST') {
+    const messageId = readMatch[2];
+    await env.DB.prepare(
+      `INSERT OR IGNORE INTO channel_post_reads (message_id, user_id) VALUES (?, ?)`
+    ).bind(messageId, session.userId).run();
+    return jsonResponse({ ok: true });
+  }
+
+  // GET /api/channels/:id/analytics — get post read counts (admin only)
+  const analyticsMatch = path.match(/^\/api\/channels\/([^/]+)\/analytics$/);
+  if (analyticsMatch && request.method === 'GET') {
+    const channelId = analyticsMatch[1];
+    const member = await env.DB.prepare(
+      `SELECT role FROM conversation_members WHERE conversation_id = ? AND user_id = ?`
+    ).bind(channelId, session.userId).first<{ role: string }>();
+    if (!member || member.role === 'member') return apiError('FORBIDDEN', 'Admin only');
+
+    const channel = await env.DB.prepare(
+      `SELECT subscriber_count FROM channels WHERE id = ?`
+    ).bind(channelId).first<{ subscriber_count: number }>();
+
+    const posts = await env.DB.prepare(
+      `SELECT m.id, m.created_at, COUNT(r.user_id) as read_count
+       FROM messages m
+       LEFT JOIN channel_post_reads r ON r.message_id = m.id
+       WHERE m.conversation_id = ?
+       GROUP BY m.id
+       ORDER BY m.created_at DESC
+       LIMIT 50`
+    ).bind(channelId).all();
+
+    return jsonResponse({
+      subscriber_count: channel?.subscriber_count || 0,
+      posts: posts.results,
+    });
   }
 
   return null; // not handled

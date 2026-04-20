@@ -835,247 +835,339 @@ struct ConversationView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // Encryption banner
-            HStack(spacing: 6) {
-                Image(systemName: "lock.fill").font(.caption2)
-                Text("Messages are end-to-end encrypted").font(.caption)
-            }
-            .foregroundColor(.turquoise)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 6)
-            .background(Color.turquoise.opacity(0.08))
-
-            // Messages
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(spacing: 4) {
-                        ForEach(filteredMessages) { msg in
-                            MessageBubbleView(
-                                message: msg,
-                                isMine: msg.senderId == userId,
-                                onReact: { emoji in Task { await reactToMessage(msg.id, emoji: emoji) } },
-                                onEdit: { editingMessageId = msg.id; inputText = msg.ciphertext },
-                                onDelete: { Task { await deleteMessage(msg.id) } },
-                                onPin: { Task { await pinMessage(msg.id) } },
-                                onReply: {
-                                    withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
-                                        replyingTo = msg
-                                    }
-                                },
-                                onForward: {
-                                    forwardMessage = msg
-                                    showForwardSheet = true
-                                },
-                                onBlock: {
-                                    Task {
-                                        _ = try? await APIClient.shared.postRaw("/contacts/block", body: ["userId": msg.senderId, "blocked": true])
-                                    }
-                                }
-                            )
-                                .id(msg.id)
-                                .transition(.asymmetric(
-                                    insertion: .scale(scale: 0.85, anchor: .bottomTrailing)
-                                        .combined(with: .opacity)
-                                        .combined(with: .offset(y: 12)),
-                                    removal: .opacity.combined(with: .scale(scale: 0.9))
-                                ))
-                        }
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                }
-                .onChange(of: messages.count) { _, _ in
-                    if let last = messages.last {
-                        #if canImport(UIKit)
-                        UIImpactFeedbackGenerator(style: .soft).impactOccurred()
-                        #endif
-                        withAnimation(.spring(response: 0.42, dampingFraction: 0.72)) {
-                            proxy.scrollTo(last.id, anchor: .bottom)
-                        }
-                    }
-                }
-            }
-
-            // Reply preview banner
-            if let reply = replyingTo {
-                HStack(spacing: 10) {
-                    Rectangle()
-                        .fill(Color.rocGold)
-                        .frame(width: 3)
-                        .cornerRadius(1.5)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Replying to \(reply.senderId == userId ? "yourself" : "message")")
-                            .font(.caption2)
-                            .foregroundColor(.rocGold)
-                        Text(reply.ciphertext.isEmpty ? "🔒 Encrypted" : reply.ciphertext)
-                            .font(.caption)
-                            .foregroundColor(.adaptiveTextSec)
-                            .lineLimit(1)
-                    }
-                    Spacer()
-                    Button {
-                        withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
-                            replyingTo = nil
-                        }
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: 18))
-                            .foregroundColor(.adaptiveTextSec)
-                    }
-                }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 8)
-                .background(Color.rocGold.opacity(0.08))
-                .transition(.move(edge: .bottom).combined(with: .opacity))
-            }
-
-            // Composer — Roc Family unique capsule style
-            if let url = pendingAudioURL {
-                AudioPreviewBar(
-                    url: url,
-                    duration: pendingAudioDuration,
-                    onDiscard: {
-                        try? FileManager.default.removeItem(at: url)
-                        pendingAudioURL = nil
-                    },
-                    onSend: {
-                        let u = url; let d = pendingAudioDuration
-                        pendingAudioURL = nil
-                        Task { await sendAudioNote(url: u, duration: d) }
-                    }
-                )
-                .padding(.horizontal, 12)
-                .padding(.vertical, 10)
-                .background(.ultraThinMaterial)
-                .transition(.move(edge: .bottom).combined(with: .opacity))
-            } else if isRecording {
-                RecordingBar(
-                    elapsed: recordingElapsed,
-                    levels: recordingLevels,
-                    onCancel: { cancelRecording() },
-                    onSend: { finishRecording() }
-                )
-                .padding(.horizontal, 12)
-                .padding(.vertical, 10)
-                .background(.ultraThinMaterial)
-                .transition(.move(edge: .bottom).combined(with: .opacity))
-            } else {
-            // Typing indicator
-            if isRemoteTyping {
-                HStack(spacing: 4) {
-                    Text("typing")
-                        .font(.caption2)
-                        .foregroundColor(.adaptiveTextSec)
-                    TypingDotsView()
-                }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 2)
-                .transition(.opacity)
-            }
-            // Online presence
-            if !remoteOnlineStatus.isEmpty {
-                HStack(spacing: 4) {
-                    Circle()
-                        .fill(remoteOnlineStatus == "online" ? Color.green : Color.gray)
-                        .frame(width: 8, height: 8)
-                    Text(remoteOnlineStatus == "online" ? "Online" : "Offline")
-                        .font(.caption2)
-                        .foregroundColor(remoteOnlineStatus == "online" ? .green : .secondary)
-                }
-                .padding(.horizontal, 16)
-                .padding(.bottom, 2)
-            }
-            HStack(alignment: .bottom, spacing: 10) {
-                // Attachment menu (photo, file, vault)
-                Menu {
-                    Button(action: { showPhotoPicker = true }) {
-                        Label("Photo & Video", systemImage: "photo.on.rectangle")
-                    }
-                    Button(action: { showFilePicker = true }) {
-                        Label("Document", systemImage: "doc.fill")
-                    }
-                    Button(action: { startRecording() }) {
-                        Label("Voice Note", systemImage: "mic.fill")
-                    }
-                    Button(action: { showVideoRecorder = true }) {
-                        Label("Video Message", systemImage: "video.fill")
-                    }
-                    Button(action: { showVaultComposer = true }) {
-                        Label("Vault Item", systemImage: "lock.shield")
-                    }
-                } label: {
-                    ZStack {
-                        Circle()
-                            .fill(Color.rocGold.opacity(0.12))
-                            .frame(width: 40, height: 40)
-                        Image(systemName: "plus")
-                            .font(.system(size: 18, weight: .semibold))
-                            .foregroundColor(.rocGold)
-                    }
-                }
-
-                // Capsule text field
-                HStack(alignment: .center, spacing: 6) {
-                    TextField("Type a message...", text: $inputText, axis: .vertical)
-                        .textFieldStyle(.plain)
-                        .lineLimit(1...5)
-                        .onSubmit { sendMessage() }
-                        .onChange(of: inputText) { _, _ in sendTypingIndicator() }
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 10)
-                }
-                .background(
-                    RoundedRectangle(cornerRadius: 22, style: .continuous)
-                        .fill(Color(.secondarySystemBackground))
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 22, style: .continuous)
-                        .stroke(Color.rocGold.opacity(inputText.isEmpty ? 0.0 : 0.4), lineWidth: 1)
-                )
-                .animation(.easeInOut(duration: 0.18), value: inputText.isEmpty)
-
-                // Send button (morphs based on content)
-                Button(action: sendMessage) {
-                    ZStack {
-                        Circle()
-                            .fill(
-                                inputText.trimmingCharacters(in: .whitespaces).isEmpty
-                                ? Color.gray.opacity(0.18)
-                                : Color.rocGold
-                            )
-                            .frame(width: 40, height: 40)
-                            .shadow(color: Color.rocGold.opacity(inputText.isEmpty ? 0 : 0.35), radius: 6, y: 2)
-                        Image(systemName: "arrow.up")
-                            .font(.system(size: 16, weight: .bold))
-                            .foregroundColor(
-                                inputText.trimmingCharacters(in: .whitespaces).isEmpty ? .gray : .white
-                            )
-                            .rotationEffect(.degrees(inputText.isEmpty ? 0 : -0))
-                    }
-                    .scaleEffect(inputText.trimmingCharacters(in: .whitespaces).isEmpty ? 0.92 : 1.0)
-                    .animation(.spring(response: 0.35, dampingFraction: 0.6), value: inputText)
-                }
-                .buttonStyle(.plain)
-                .disabled(inputText.trimmingCharacters(in: .whitespaces).isEmpty || isSending)
-                .contextMenu {
-                    Button {
-                        showScheduleSheet = true
-                    } label: {
-                        Label("Schedule Message", systemImage: "clock")
-                    }
-                }
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
-            .background(.ultraThinMaterial)
-            } // else !isRecording
+            encryptionBanner
+            messageListSection
+            replyBanner
+            composerSection
         }
         .background(chatTheme == "default" ? Color(.systemBackground) : activeTheme.bgColor)
         .navigationTitle(convName)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.hidden, for: .tabBar)
-        .toolbar {
-            ToolbarItemGroup(placement: .topBarTrailing) {
+        .toolbar { conversationToolbarItems }
+        .searchable(text: $searchText, isPresented: $isSearching, prompt: "Search messages")
+        .task { await loadMessages() }
+        .onAppear {
+            disappearTimer = UserDefaults.standard.integer(forKey: "disappear_\(conversation.id)")
+            connectWebSocket()
+            Task { await flushMessageQueue() }
+            NotificationCenter.default.addObserver(forName: UIApplication.userDidTakeScreenshotNotification, object: nil, queue: .main) { _ in
+                Task { await notifyScreenshot() }
+            }
+        }
+        .onDisappear { wsTask?.cancel(with: .goingAway, reason: nil); wsTask = nil }
+        .onChange(of: disappearTimer) { _, newValue in
+            UserDefaults.standard.set(newValue, forKey: "disappear_\(conversation.id)")
+        }
+        .confirmationDialog("Disappearing Messages", isPresented: $showDisappearMenu) {
+            Button("Off") { disappearTimer = 0 }
+            Button("5 minutes") { disappearTimer = 300 }
+            Button("1 hour") { disappearTimer = 3600 }
+            Button("24 hours") { disappearTimer = 86400 }
+            Button("7 days") { disappearTimer = 604800 }
+            Button("30 days") { disappearTimer = 2592000 }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("New messages will auto-delete after the selected time.")
+        }
+        .sheet(isPresented: $showSafetyNumber) {
+            SafetyNumberSheet(safetyNumber: safetyNumber, otherName: convName)
+        }
+        .sheet(isPresented: $showVideoRecorder) {
+            VideoMessageRecorder { url, duration in
+                showVideoRecorder = false
+                if let u = url {
+                    Task { await sendVideoNote(url: u, duration: duration) }
+                }
+            }
+        }
+        .sheet(isPresented: $showScheduleSheet) { scheduleSheetContent }
+        .sheet(isPresented: $showThemePicker) { themePickerContent }
+        .sheet(isPresented: $showVaultComposer) { vaultComposerContent }
+        .sheet(isPresented: $showPinnedMessages) { pinnedMessagesContent }
+        .sheet(isPresented: $showMediaGallery) { mediaGalleryContent }
+        .sheet(isPresented: $showGroupAdmin) { groupAdminContent }
+        .onAppear {
+            chatTheme = UserDefaults.standard.string(forKey: "theme_\(conversation.id)") ?? "default"
+        }
+        .photosPicker(isPresented: $showPhotoPicker, selection: $selectedPhotoItem, matching: .any(of: [.images, .videos]))
+        .onChange(of: selectedPhotoItem) { _, newItem in
+            guard let newItem else { return }
+            Task {
+                if let data = try? await newItem.loadTransferable(type: Data.self) {
+                    await sendPhotoAttachment(data: data)
+                }
+                selectedPhotoItem = nil
+            }
+        }
+        .fileImporter(isPresented: $showFilePicker, allowedContentTypes: [.data], allowsMultipleSelection: false) { result in
+            if case .success(let urls) = result, let url = urls.first {
+                guard url.startAccessingSecurityScopedResource() else { return }
+                defer { url.stopAccessingSecurityScopedResource() }
+                if let data = try? Data(contentsOf: url) {
+                    let filename = url.lastPathComponent
+                    let mime = url.mimeType
+                    Task { await sendFileAttachment(data: data, filename: filename, mime: mime) }
+                }
+            }
+        }
+        .sheet(isPresented: $showForwardSheet) {
+            ForwardMessageSheet(message: forwardMessage) { targetConversationId in
+                showForwardSheet = false
+                guard let msg = forwardMessage else { return }
+                Task { await forwardMessageTo(msg, targetConversationId: targetConversationId) }
+            }
+        }
+    }
+
+    // MARK: - Extracted Sub-Views
+
+    @ViewBuilder
+    private var encryptionBanner: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "lock.fill").font(.caption2)
+            Text("Messages are end-to-end encrypted").font(.caption)
+        }
+        .foregroundColor(.turquoise)
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 6)
+        .background(Color.turquoise.opacity(0.08))
+    }
+
+    @ViewBuilder
+    private var messageListSection: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(spacing: 4) {
+                    ForEach(filteredMessages) { msg in
+                        MessageBubbleView(
+                            message: msg,
+                            isMine: msg.senderId == userId,
+                            onReact: { emoji in Task { await reactToMessage(msg.id, emoji: emoji) } },
+                            onEdit: { editingMessageId = msg.id; inputText = msg.ciphertext },
+                            onDelete: { Task { await deleteMessage(msg.id) } },
+                            onPin: { Task { await pinMessage(msg.id) } },
+                            onReply: {
+                                withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                                    replyingTo = msg
+                                }
+                            },
+                            onForward: {
+                                forwardMessage = msg
+                                showForwardSheet = true
+                            },
+                            onBlock: {
+                                Task {
+                                    _ = try? await APIClient.shared.postRaw("/contacts/block", body: ["userId": msg.senderId, "blocked": true])
+                                }
+                            }
+                        )
+                            .id(msg.id)
+                            .transition(.asymmetric(
+                                insertion: .scale(scale: 0.85, anchor: .bottomTrailing)
+                                    .combined(with: .opacity)
+                                    .combined(with: .offset(y: 12)),
+                                removal: .opacity.combined(with: .scale(scale: 0.9))
+                            ))
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+            }
+            .onChange(of: messages.count) { _, _ in
+                if let last = messages.last {
+                    #if canImport(UIKit)
+                    UIImpactFeedbackGenerator(style: .soft).impactOccurred()
+                    #endif
+                    withAnimation(.spring(response: 0.42, dampingFraction: 0.72)) {
+                        proxy.scrollTo(last.id, anchor: .bottom)
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var replyBanner: some View {
+        if let reply = replyingTo {
+            HStack(spacing: 10) {
+                Rectangle()
+                    .fill(Color.rocGold)
+                    .frame(width: 3)
+                    .cornerRadius(1.5)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Replying to \(reply.senderId == userId ? "yourself" : "message")")
+                        .font(.caption2)
+                        .foregroundColor(.rocGold)
+                    Text(reply.ciphertext.isEmpty ? "🔒 Encrypted" : reply.ciphertext)
+                        .font(.caption)
+                        .foregroundColor(.adaptiveTextSec)
+                        .lineLimit(1)
+                }
+                Spacer()
+                Button {
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
+                        replyingTo = nil
+                    }
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 18))
+                        .foregroundColor(.adaptiveTextSec)
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            .background(Color.rocGold.opacity(0.08))
+            .transition(.move(edge: .bottom).combined(with: .opacity))
+        }
+    }
+
+    @ViewBuilder
+    private var composerSection: some View {
+        if let url = pendingAudioURL {
+            AudioPreviewBar(
+                url: url,
+                duration: pendingAudioDuration,
+                onDiscard: {
+                    try? FileManager.default.removeItem(at: url)
+                    pendingAudioURL = nil
+                },
+                onSend: {
+                    let u = url; let d = pendingAudioDuration
+                    pendingAudioURL = nil
+                    Task { await sendAudioNote(url: u, duration: d) }
+                }
+            )
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(.ultraThinMaterial)
+            .transition(.move(edge: .bottom).combined(with: .opacity))
+        } else if isRecording {
+            RecordingBar(
+                elapsed: recordingElapsed,
+                levels: recordingLevels,
+                onCancel: { cancelRecording() },
+                onSend: { finishRecording() }
+            )
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(.ultraThinMaterial)
+            .transition(.move(edge: .bottom).combined(with: .opacity))
+        } else {
+            typingAndInputBar
+        }
+    }
+
+    @ViewBuilder
+    private var typingAndInputBar: some View {
+        if isRemoteTyping {
+            HStack(spacing: 4) {
+                Text("typing")
+                    .font(.caption2)
+                    .foregroundColor(.adaptiveTextSec)
+                TypingDotsView()
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 2)
+            .transition(.opacity)
+        }
+        if !remoteOnlineStatus.isEmpty {
+            HStack(spacing: 4) {
+                Circle()
+                    .fill(remoteOnlineStatus == "online" ? Color.green : Color.gray)
+                    .frame(width: 8, height: 8)
+                Text(remoteOnlineStatus == "online" ? "Online" : "Offline")
+                    .font(.caption2)
+                    .foregroundColor(remoteOnlineStatus == "online" ? .green : .secondary)
+            }
+            .padding(.horizontal, 16)
+            .padding(.bottom, 2)
+        }
+        HStack(alignment: .bottom, spacing: 10) {
+            Menu {
+                Button(action: { showPhotoPicker = true }) {
+                    Label("Photo & Video", systemImage: "photo.on.rectangle")
+                }
+                Button(action: { showFilePicker = true }) {
+                    Label("Document", systemImage: "doc.fill")
+                }
+                Button(action: { startRecording() }) {
+                    Label("Voice Note", systemImage: "mic.fill")
+                }
+                Button(action: { showVideoRecorder = true }) {
+                    Label("Video Message", systemImage: "video.fill")
+                }
+                Button(action: { showVaultComposer = true }) {
+                    Label("Vault Item", systemImage: "lock.shield")
+                }
+            } label: {
+                ZStack {
+                    Circle()
+                        .fill(Color.rocGold.opacity(0.12))
+                        .frame(width: 40, height: 40)
+                    Image(systemName: "plus")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundColor(.rocGold)
+                }
+            }
+
+            HStack(alignment: .center, spacing: 6) {
+                TextField("Type a message...", text: $inputText, axis: .vertical)
+                    .textFieldStyle(.plain)
+                    .lineLimit(1...5)
+                    .onSubmit { sendMessage() }
+                    .onChange(of: inputText) { _, _ in sendTypingIndicator() }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+            }
+            .background(
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .fill(Color(.secondarySystemBackground))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .stroke(Color.rocGold.opacity(inputText.isEmpty ? 0.0 : 0.4), lineWidth: 1)
+            )
+            .animation(.easeInOut(duration: 0.18), value: inputText.isEmpty)
+
+            Button(action: sendMessage) {
+                ZStack {
+                    Circle()
+                        .fill(
+                            inputText.trimmingCharacters(in: .whitespaces).isEmpty
+                            ? Color.gray.opacity(0.18)
+                            : Color.rocGold
+                        )
+                        .frame(width: 40, height: 40)
+                        .shadow(color: Color.rocGold.opacity(inputText.isEmpty ? 0 : 0.35), radius: 6, y: 2)
+                    Image(systemName: "arrow.up")
+                        .font(.system(size: 16, weight: .bold))
+                        .foregroundColor(
+                            inputText.trimmingCharacters(in: .whitespaces).isEmpty ? .gray : .white
+                        )
+                        .rotationEffect(.degrees(inputText.isEmpty ? 0 : -0))
+                }
+                .scaleEffect(inputText.trimmingCharacters(in: .whitespaces).isEmpty ? 0.92 : 1.0)
+                .animation(.spring(response: 0.35, dampingFraction: 0.6), value: inputText)
+            }
+            .buttonStyle(.plain)
+            .disabled(inputText.trimmingCharacters(in: .whitespaces).isEmpty || isSending)
+            .contextMenu {
+                Button {
+                    showScheduleSheet = true
+                } label: {
+                    Label("Schedule Message", systemImage: "clock")
+                }
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(.ultraThinMaterial)
+    }
+
+    @ToolbarContentBuilder
+    private var conversationToolbarItems: some ToolbarContent {
+        ToolbarItemGroup(placement: .topBarTrailing) {
                 Button(action: {
                     let others = conversation.members.filter { $0.userId != userId }
                     if let peer = others.first, let task = wsTask {
@@ -1129,70 +1221,36 @@ struct ConversationView: View {
                     Image(systemName: "magnifyingglass").foregroundColor(.rocGold)
                 }
             }
-        }
-        .searchable(text: $searchText, isPresented: $isSearching, prompt: "Search messages")
-        .task { await loadMessages() }
-        .onAppear {
-            disappearTimer = UserDefaults.standard.integer(forKey: "disappear_\(conversation.id)")
-            connectWebSocket()
-            // Flush any queued messages on appear
-            Task { await flushMessageQueue() }
-            // Screenshot detection
-            NotificationCenter.default.addObserver(forName: UIApplication.userDidTakeScreenshotNotification, object: nil, queue: .main) { _ in
-                Task { await notifyScreenshot() }
-            }
-        }
-        .onDisappear { wsTask?.cancel(with: .goingAway, reason: nil); wsTask = nil }
-        .onChange(of: disappearTimer) { _, newValue in
-            UserDefaults.standard.set(newValue, forKey: "disappear_\(conversation.id)")
-        }
-        .confirmationDialog("Disappearing Messages", isPresented: $showDisappearMenu) {
-            Button("Off") { disappearTimer = 0 }
-            Button("5 minutes") { disappearTimer = 300 }
-            Button("1 hour") { disappearTimer = 3600 }
-            Button("24 hours") { disappearTimer = 86400 }
-            Button("7 days") { disappearTimer = 604800 }
-            Button("30 days") { disappearTimer = 2592000 }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("New messages will auto-delete after the selected time.")
-        }
-        .sheet(isPresented: $showSafetyNumber) {
-            SafetyNumberSheet(safetyNumber: safetyNumber, otherName: convName)
-        }
-        .sheet(isPresented: $showVideoRecorder) {
-            VideoMessageRecorder { url, duration in
-                showVideoRecorder = false
-                if let u = url {
-                    Task { await sendVideoNote(url: u, duration: duration) }
-                }
-            }
-        }
-        .sheet(isPresented: $showScheduleSheet) {
-            NavigationStack {
-                VStack(spacing: 20) {
-                    Text("Schedule Message").font(.headline)
-                    DatePicker("Send at", selection: $scheduleDate, in: Date()..., displayedComponents: [.date, .hourAndMinute])
-                        .datePickerStyle(.graphical)
-                        .tint(.rocGold)
-                    Button("Schedule") {
-                        scheduleMessage()
-                        showScheduleSheet = false
-                    }
-                    .buttonStyle(.borderedProminent)
+    }
+
+    @ViewBuilder
+    private var scheduleSheetContent: some View {
+        NavigationStack {
+            VStack(spacing: 20) {
+                Text("Schedule Message").font(.headline)
+                DatePicker("Send at", selection: $scheduleDate, in: Date()..., displayedComponents: [.date, .hourAndMinute])
+                    .datePickerStyle(.graphical)
                     .tint(.rocGold)
-                    .disabled(inputText.trimmingCharacters(in: .whitespaces).isEmpty)
+                Button("Schedule") {
+                    scheduleMessage()
+                    showScheduleSheet = false
                 }
-                .padding()
-                .toolbar {
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button("Cancel") { showScheduleSheet = false }
-                    }
+                .buttonStyle(.borderedProminent)
+                .tint(.rocGold)
+                .disabled(inputText.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+            .padding()
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { showScheduleSheet = false }
                 }
             }
-            .presentationDetents([.medium])
         }
-        .sheet(isPresented: $showThemePicker) {
+        .presentationDetents([.medium])
+    }
+
+    @ViewBuilder
+    private var themePickerContent: some View {
             NavigationStack {
                 List {
                     ForEach(chatThemeOptions, id: \.key) { theme in
@@ -1227,185 +1285,161 @@ struct ConversationView: View {
                 }
             }
             .presentationDetents([.medium])
-        }
-        .sheet(isPresented: $showVaultComposer) {
-            NavigationStack {
-                Form {
-                    Picker("Type", selection: $vaultType) {
-                        Text("🔑 Password").tag("password")
-                        Text("📶 WiFi").tag("wifi")
-                        Text("💳 Card").tag("card")
-                        Text("📝 Note").tag("note")
-                    }
-                    .onChange(of: vaultType) { _, _ in vaultFields = [:] }
-                    TextField("Label", text: $vaultLabel)
-                    switch vaultType {
-                    case "password":
-                        TextField("Username", text: Binding(get: { vaultFields["username"] ?? "" }, set: { vaultFields["username"] = $0 }))
-                        SecureField("Password", text: Binding(get: { vaultFields["password"] ?? "" }, set: { vaultFields["password"] = $0 }))
-                        TextField("URL (optional)", text: Binding(get: { vaultFields["url"] ?? "" }, set: { vaultFields["url"] = $0 }))
-                    case "wifi":
-                        TextField("Network Name", text: Binding(get: { vaultFields["ssid"] ?? "" }, set: { vaultFields["ssid"] = $0 }))
-                        SecureField("Password", text: Binding(get: { vaultFields["password"] ?? "" }, set: { vaultFields["password"] = $0 }))
-                    case "card":
-                        TextField("Card Number", text: Binding(get: { vaultFields["number"] ?? "" }, set: { vaultFields["number"] = $0 }))
-                            .keyboardType(.numberPad)
-                        TextField("Expiry (MM/YY)", text: Binding(get: { vaultFields["expiry"] ?? "" }, set: { vaultFields["expiry"] = $0 }))
-                        TextField("Cardholder Name", text: Binding(get: { vaultFields["name"] ?? "" }, set: { vaultFields["name"] = $0 }))
-                    case "note":
-                        TextEditor(text: Binding(get: { vaultFields["text"] ?? "" }, set: { vaultFields["text"] = $0 }))
-                            .frame(minHeight: 100)
-                    default: EmptyView()
-                    }
-                    Toggle("View once", isOn: $vaultViewOnce)
+    }
+
+    @ViewBuilder
+    private var vaultComposerContent: some View {
+        NavigationStack {
+            Form {
+                Picker("Type", selection: $vaultType) {
+                    Text("🔑 Password").tag("password")
+                    Text("📶 WiFi").tag("wifi")
+                    Text("💳 Card").tag("card")
+                    Text("📝 Note").tag("note")
                 }
-                .navigationTitle("Share Vault Item")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button("Cancel") { showVaultComposer = false }
-                    }
-                    ToolbarItem(placement: .confirmationAction) {
-                        Button("Send") { sendVaultItem() }
-                            .disabled(vaultLabel.isEmpty)
-                    }
+                .onChange(of: vaultType) { _, _ in vaultFields = [:] }
+                TextField("Label", text: $vaultLabel)
+                switch vaultType {
+                case "password":
+                    TextField("Username", text: Binding(get: { vaultFields["username"] ?? "" }, set: { vaultFields["username"] = $0 }))
+                    SecureField("Password", text: Binding(get: { vaultFields["password"] ?? "" }, set: { vaultFields["password"] = $0 }))
+                    TextField("URL (optional)", text: Binding(get: { vaultFields["url"] ?? "" }, set: { vaultFields["url"] = $0 }))
+                case "wifi":
+                    TextField("Network Name", text: Binding(get: { vaultFields["ssid"] ?? "" }, set: { vaultFields["ssid"] = $0 }))
+                    SecureField("Password", text: Binding(get: { vaultFields["password"] ?? "" }, set: { vaultFields["password"] = $0 }))
+                case "card":
+                    TextField("Card Number", text: Binding(get: { vaultFields["number"] ?? "" }, set: { vaultFields["number"] = $0 }))
+                        .keyboardType(.numberPad)
+                    TextField("Expiry (MM/YY)", text: Binding(get: { vaultFields["expiry"] ?? "" }, set: { vaultFields["expiry"] = $0 }))
+                    TextField("Cardholder Name", text: Binding(get: { vaultFields["name"] ?? "" }, set: { vaultFields["name"] = $0 }))
+                case "note":
+                    TextEditor(text: Binding(get: { vaultFields["text"] ?? "" }, set: { vaultFields["text"] = $0 }))
+                        .frame(minHeight: 100)
+                default: EmptyView()
+                }
+                Toggle("View once", isOn: $vaultViewOnce)
+            }
+            .navigationTitle("Share Vault Item")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { showVaultComposer = false }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Send") { sendVaultItem() }
+                        .disabled(vaultLabel.isEmpty)
                 }
             }
         }
-        .sheet(isPresented: $showPinnedMessages) {
-            NavigationStack {
-                List {
-                    if pinnedMessages.isEmpty {
-                        Text("No pinned messages").foregroundColor(.secondary)
-                    }
-                    ForEach(pinnedMessages) { msg in
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(msg.ciphertext.isEmpty ? "🔒 Encrypted" : msg.ciphertext)
-                                .lineLimit(3)
-                            Text(formatRelativeTime(msg.createdAt))
-                                .font(.caption).foregroundColor(.secondary)
-                        }
-                    }
+    }
+
+    @ViewBuilder
+    private var pinnedMessagesContent: some View {
+        NavigationStack {
+            List {
+                if pinnedMessages.isEmpty {
+                    Text("No pinned messages").foregroundColor(.secondary)
                 }
-                .navigationTitle("Pinned Messages")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button("Done") { showPinnedMessages = false }
+                ForEach(pinnedMessages) { msg in
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(msg.ciphertext.isEmpty ? "🔒 Encrypted" : msg.ciphertext)
+                            .lineLimit(3)
+                        Text(formatRelativeTime(msg.createdAt))
+                            .font(.caption).foregroundColor(.secondary)
                     }
                 }
             }
-            .presentationDetents([.medium, .large])
-        }
-        .sheet(isPresented: $showMediaGallery) {
-            NavigationStack {
-                let mediaMessages = messages.filter { msg in
-                    guard let data = msg.ciphertext.data(using: .utf8),
-                          let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return false }
-                    return json["blobId"] != nil
+            .navigationTitle("Pinned Messages")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") { showPinnedMessages = false }
                 }
-                ScrollView {
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 100))], spacing: 4) {
-                        ForEach(mediaMessages) { msg in
-                            if let data = msg.ciphertext.data(using: .utf8),
-                               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                               let blobId = json["blobId"] as? String {
-                                AsyncImage(url: URL(string: "https://chat.mocipher.com/api/media/\(blobId)?cid=\(conversation.id)")) { image in
-                                    image.resizable().scaledToFill()
-                                } placeholder: {
-                                    Rectangle().fill(Color.gray.opacity(0.2))
-                                        .overlay(Image(systemName: "doc.fill").foregroundColor(.secondary))
-                                }
-                                .frame(width: 100, height: 100)
-                                .clipped()
+            }
+        }
+        .presentationDetents([.medium, .large])
+    }
+
+    @ViewBuilder
+    private var mediaGalleryContent: some View {
+        NavigationStack {
+            let mediaMessages = messages.filter { msg in
+                guard let data = msg.ciphertext.data(using: .utf8),
+                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return false }
+                return json["blobId"] != nil
+            }
+            ScrollView {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 100))], spacing: 4) {
+                    ForEach(mediaMessages) { msg in
+                        if let data = msg.ciphertext.data(using: .utf8),
+                           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                           let blobId = json["blobId"] as? String {
+                            AsyncImage(url: URL(string: "https://chat.mocipher.com/api/media/\(blobId)?cid=\(conversation.id)")) { image in
+                                image.resizable().scaledToFill()
+                            } placeholder: {
+                                Rectangle().fill(Color.gray.opacity(0.2))
+                                    .overlay(Image(systemName: "doc.fill").foregroundColor(.secondary))
                             }
+                            .frame(width: 100, height: 100)
+                            .clipped()
                         }
                     }
-                    .padding(8)
                 }
-                .navigationTitle("Media")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button("Done") { showMediaGallery = false }
-                    }
+                .padding(8)
+            }
+            .navigationTitle("Media")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") { showMediaGallery = false }
                 }
             }
         }
-        .sheet(isPresented: $showGroupAdmin) {
-            NavigationStack {
-                List {
-                    Section("Members (\(groupMembers.count))") {
-                        ForEach(Array(groupMembers.enumerated()), id: \.offset) { _, member in
-                            let name = member["display_name"] as? String ?? member["username"] as? String ?? "Unknown"
-                            let role = member["role"] as? String ?? "member"
-                            let memberId = member["user_id"] as? String ?? ""
-                            HStack {
-                                VStack(alignment: .leading) {
-                                    Text(name).font(.body)
-                                    Text(role).font(.caption).foregroundColor(.secondary)
-                                }
-                                Spacer()
-                                if memberId != userId {
-                                    Menu {
-                                        Button("Promote to Admin") {
-                                            Task {
-                                                _ = try? await APIClient.shared.postRaw("/groups/\(conversation.id)/promote", body: ["user_id": memberId, "role": "admin"])
-                                                await loadGroupMembers()
-                                            }
+    }
+
+    @ViewBuilder
+    private var groupAdminContent: some View {
+        NavigationStack {
+            List {
+                Section("Members (\(groupMembers.count))") {
+                    ForEach(Array(groupMembers.enumerated()), id: \.offset) { _, member in
+                        let name = member["display_name"] as? String ?? member["username"] as? String ?? "Unknown"
+                        let role = member["role"] as? String ?? "member"
+                        let memberId = member["user_id"] as? String ?? ""
+                        HStack {
+                            VStack(alignment: .leading) {
+                                Text(name).font(.body)
+                                Text(role).font(.caption).foregroundColor(.secondary)
+                            }
+                            Spacer()
+                            if memberId != userId {
+                                Menu {
+                                    Button("Promote to Admin") {
+                                        Task {
+                                            _ = try? await APIClient.shared.postRaw("/groups/\(conversation.id)/promote", body: ["user_id": memberId, "role": "admin"])
+                                            await loadGroupMembers()
                                         }
-                                        Button("Remove", role: .destructive) {
-                                            Task {
-                                                _ = try? await APIClient.shared.postRaw("/groups/\(conversation.id)/kick", body: ["user_id": memberId])
-                                                await loadGroupMembers()
-                                            }
-                                        }
-                                    } label: {
-                                        Image(systemName: "ellipsis.circle").foregroundColor(.rocGold)
                                     }
+                                    Button("Remove", role: .destructive) {
+                                        Task {
+                                            _ = try? await APIClient.shared.postRaw("/groups/\(conversation.id)/kick", body: ["user_id": memberId])
+                                            await loadGroupMembers()
+                                        }
+                                    }
+                                } label: {
+                                    Image(systemName: "ellipsis.circle").foregroundColor(.rocGold)
                                 }
                             }
                         }
                     }
                 }
-                .navigationTitle("Group Admin")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button("Done") { showGroupAdmin = false }
-                    }
-                }
             }
-        }
-        .onAppear {
-            chatTheme = UserDefaults.standard.string(forKey: "theme_\(conversation.id)") ?? "default"
-        }
-        .photosPicker(isPresented: $showPhotoPicker, selection: $selectedPhotoItem, matching: .any(of: [.images, .videos]))
-        .onChange(of: selectedPhotoItem) { _, newItem in
-            guard let newItem else { return }
-            Task {
-                if let data = try? await newItem.loadTransferable(type: Data.self) {
-                    await sendPhotoAttachment(data: data)
+            .navigationTitle("Group Admin")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") { showGroupAdmin = false }
                 }
-                selectedPhotoItem = nil
-            }
-        }
-        .fileImporter(isPresented: $showFilePicker, allowedContentTypes: [.data], allowsMultipleSelection: false) { result in
-            if case .success(let urls) = result, let url = urls.first {
-                guard url.startAccessingSecurityScopedResource() else { return }
-                defer { url.stopAccessingSecurityScopedResource() }
-                if let data = try? Data(contentsOf: url) {
-                    let filename = url.lastPathComponent
-                    let mime = url.mimeType
-                    Task { await sendFileAttachment(data: data, filename: filename, mime: mime) }
-                }
-            }
-        }
-        .sheet(isPresented: $showForwardSheet) {
-            ForwardMessageSheet(message: forwardMessage) { targetConversationId in
-                showForwardSheet = false
-                guard let msg = forwardMessage else { return }
-                Task { await forwardMessageTo(msg, targetConversationId: targetConversationId) }
             }
         }
     }

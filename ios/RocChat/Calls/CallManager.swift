@@ -573,7 +573,7 @@ extension CallManager: P2PTransportDelegate {
                     channel.update(from: src, count: Int(frameCount))
                 }
             }
-            player.scheduleBuffer(buffer)
+            Task { try? await player.scheduleBuffer(buffer) }
         }
     }
 }

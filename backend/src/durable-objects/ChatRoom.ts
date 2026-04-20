@@ -280,6 +280,12 @@ export class ChatRoom implements DurableObject {
                ON CONFLICT(message_id, user_id) DO UPDATE SET status = 'read', created_at = datetime('now')`
             ).bind(messageId, sender.userId).run();
           } catch { /* table may not exist yet */ }
+          // Burn-on-read: delete view_once messages after recipient reads them
+          try {
+            await this.env.DB.prepare(
+              `DELETE FROM messages WHERE id = ? AND message_type = 'view_once'`
+            ).bind(messageId).run();
+          } catch { /* ignore */ }
         }
         break;
       }

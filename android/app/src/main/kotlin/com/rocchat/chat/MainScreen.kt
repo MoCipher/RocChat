@@ -3140,6 +3140,48 @@ fun SettingsTab(onLogout: () -> Unit) {
 
         HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
 
+        // Canary, Transparency, Supporters
+        var showCanary by remember { mutableStateOf(false) }
+        var showTransparency by remember { mutableStateOf(false) }
+        var showSupporters by remember { mutableStateOf(false) }
+
+        Row(
+            modifier = Modifier.fillMaxWidth().clickable { showCanary = true }.padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(Icons.Default.Shield, contentDescription = null, tint = RocColors.TextSecondary, modifier = Modifier.size(20.dp))
+            Spacer(Modifier.width(12.dp))
+            Text("Warrant Canary")
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth().clickable { showTransparency = true }.padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(Icons.Default.Description, contentDescription = null, tint = RocColors.TextSecondary, modifier = Modifier.size(20.dp))
+            Spacer(Modifier.width(12.dp))
+            Text("Transparency Reports")
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth().clickable { showSupporters = true }.padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(Icons.Default.Favorite, contentDescription = null, tint = RocColors.TextSecondary, modifier = Modifier.size(20.dp))
+            Spacer(Modifier.width(12.dp))
+            Text("Supporters")
+        }
+
+        if (showCanary) {
+            CanarySheet(onDismiss = { showCanary = false })
+        }
+        if (showTransparency) {
+            TransparencySheet(onDismiss = { showTransparency = false })
+        }
+        if (showSupporters) {
+            SupportersSheet(onDismiss = { showSupporters = false })
+        }
+
+        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+
         // About
         Row(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
             Text("Version", modifier = Modifier.weight(1f))
@@ -4087,4 +4129,101 @@ suspend fun flushMessageQueue(context: android.content.Context): Boolean {
     }
     saveQueue(context, remaining)
     return remaining.isEmpty()
+}
+
+// ── Canary Sheet ──
+@Composable
+fun CanarySheet(onDismiss: () -> Unit) {
+    var text by remember { mutableStateOf("Loading...") }
+    LaunchedEffect(Unit) {
+        try {
+            val json = com.rocchat.network.APIClient.get("/features/canary")
+            text = json.optString("statement", "No canary statement available.")
+        } catch (_: Exception) {
+            text = "Failed to load canary."
+        }
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Warrant Canary") },
+        text = { Text(text) },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
+    )
+}
+
+// ── Transparency Sheet ──
+@Composable
+fun TransparencySheet(onDismiss: () -> Unit) {
+    var reports by remember { mutableStateOf<List<org.json.JSONObject>>(emptyList()) }
+    var loading by remember { mutableStateOf(true) }
+    LaunchedEffect(Unit) {
+        try {
+            val json = com.rocchat.network.APIClient.get("/features/transparency")
+            val arr = json.optJSONArray("reports")
+            if (arr != null) {
+                reports = (0 until arr.length()).map { arr.getJSONObject(it) }
+            }
+        } catch (_: Exception) {}
+        loading = false
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Transparency Reports") },
+        text = {
+            Column {
+                if (loading) {
+                    CircularProgressIndicator(modifier = Modifier.align(Alignment.CenterHorizontally))
+                } else if (reports.isEmpty()) {
+                    Text("No reports available.", color = RocColors.TextSecondary)
+                } else {
+                    reports.forEach { r ->
+                        Text(r.optString("title", "Report"), fontWeight = FontWeight.Bold)
+                        Text(r.optString("period", ""), fontSize = 12.sp, color = RocColors.TextSecondary)
+                        Text(r.optString("summary", ""), fontSize = 14.sp)
+                        Spacer(Modifier.height(8.dp))
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
+    )
+}
+
+// ── Supporters Sheet ──
+@Composable
+fun SupportersSheet(onDismiss: () -> Unit) {
+    var supporters by remember { mutableStateOf<List<org.json.JSONObject>>(emptyList()) }
+    var loading by remember { mutableStateOf(true) }
+    LaunchedEffect(Unit) {
+        try {
+            val json = com.rocchat.network.APIClient.get("/features/supporters")
+            val arr = json.optJSONArray("supporters")
+            if (arr != null) {
+                supporters = (0 until arr.length()).map { arr.getJSONObject(it) }
+            }
+        } catch (_: Exception) {}
+        loading = false
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Supporters") },
+        text = {
+            Column {
+                if (loading) {
+                    CircularProgressIndicator(modifier = Modifier.align(Alignment.CenterHorizontally))
+                } else if (supporters.isEmpty()) {
+                    Text("No supporters listed yet.", color = RocColors.TextSecondary)
+                } else {
+                    supporters.forEach { s ->
+                        Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                            Text(s.optString("display_name", s.optString("username", "Anonymous")), modifier = Modifier.weight(1f))
+                            val tier = s.optString("tier", "")
+                            if (tier.isNotEmpty()) Text(tier, color = RocColors.RocGold, fontSize = 12.sp)
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
+    )
 }

@@ -25,9 +25,8 @@ name = "CHAT_ROOM"
 class_name = "ChatRoom"
 
 # ── Cron Triggers (scheduled worker) ──
-# Uncomment when cron slot is available (free plan: 5 triggers max across account)
-# [triggers]
-# crons = ["*/5 * * * *"]  # Every 5 minutes: send scheduled msgs, purge expired, retention cleanup
+[triggers]
+crons = ["*/5 * * * *"]  # Every 5 minutes: send scheduled msgs, purge expired, retention cleanup
 
 [[migrations]]
 tag = "v1"
@@ -37,7 +36,4 @@ new_sqlite_classes = ["ChatRoom"]
 [vars]
 POW_DIFFICULTY = "18"  # Proof-of-work difficulty (no Turnstile/CAPTCHA dependency)
 
-# ── Scheduled Workers (cron) ──
-# Disabled: free plan cron trigger limit reached
-# [triggers]
-# crons = ["*/5 * * * *"]  # Every 5 minutes: clean expired messages, used OPKs
+# ── Scheduled Workers (cron) ── (see [triggers] above)

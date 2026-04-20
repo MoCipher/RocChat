@@ -822,6 +822,17 @@ struct ConversationView: View {
         chatThemeOptions.first(where: { $0.key == chatTheme }) ?? chatThemeOptions[0]
     }
 
+    private var filteredMessages: [ChatMessage] {
+        let now = Int(Date().timeIntervalSince1970)
+        return messages.filter { msg in
+            if let expires = msg.expiresAt, expires <= now { return false }
+            if !searchText.isEmpty {
+                return msg.ciphertext.localizedCaseInsensitiveContains(searchText)
+            }
+            return true
+        }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             // Encryption banner
@@ -838,19 +849,7 @@ struct ConversationView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 4) {
-                        ForEach(messages.filter { msg in
-                            guard let expires = msg.expiresAt else {
-                                if !searchText.isEmpty {
-                                    return msg.ciphertext.localizedCaseInsensitiveContains(searchText)
-                                }
-                                return true
-                            }
-                            let notExpired = expires > Int(Date().timeIntervalSince1970)
-                            if !searchText.isEmpty {
-                                return notExpired && msg.ciphertext.localizedCaseInsensitiveContains(searchText)
-                            }
-                            return notExpired
-                        }) { msg in
+                        ForEach(filteredMessages) { msg in
                             MessageBubbleView(
                                 message: msg,
                                 isMine: msg.senderId == userId,
@@ -1508,7 +1507,7 @@ struct ConversationView: View {
 
     private func forwardMessageTo(_ msg: ChatMessage, targetConversationId: String) async {
         do {
-            var body: [String: Any] = [
+            let body: [String: Any] = [
                 "conversation_id": targetConversationId,
                 "message_type": msg.messageType,
                 "ciphertext": msg.ciphertext,
@@ -2394,43 +2393,42 @@ struct MessageBubbleView: View {
                 }
             }
 
-            .contextMenu {
-                // Quick reactions
-                ForEach(["❤️", "👍", "😂", "😮", "😢", "🙏"], id: \.self) { emoji in
-                    Button(emoji) { onReact?(emoji) }
-                }
-                Divider()
-                Button { onReply?() } label: {
-                    Label("Reply", systemImage: "arrowshape.turn.up.left")
-                }
-                Button { UIPasteboard.general.string = message.ciphertext } label: {
-                    Label("Copy", systemImage: "doc.on.doc")
-                }
-                if isMine {
-                    Button { onEdit?() } label: {
-                        Label("Edit", systemImage: "pencil")
-                    }
-                }
-                Button { onPin?() } label: {
-                    Label("Pin", systemImage: "pin")
-                }
-                Button { onForward?() } label: {
-                    Label("Forward", systemImage: "arrowshape.turn.up.right")
-                }
-                if isMine {
-                    Button(role: .destructive) { onDelete?() } label: {
-                        Label("Delete", systemImage: "trash")
-                    }
-                }
-                if !isMine {
-                    Divider()
-                    Button(role: .destructive) { onBlock?() } label: {
-                        Label("Block User", systemImage: "hand.raised.fill")
-                    }
+            if !isMine { Spacer(minLength: 60) }
+        }
+        .contextMenu {
+            // Quick reactions
+            ForEach(["❤️", "👍", "😂", "😮", "😢", "🙏"], id: \.self) { emoji in
+                Button(emoji) { onReact?(emoji) }
+            }
+            Divider()
+            Button { onReply?() } label: {
+                Label("Reply", systemImage: "arrowshape.turn.up.left")
+            }
+            Button { UIPasteboard.general.string = message.ciphertext } label: {
+                Label("Copy", systemImage: "doc.on.doc")
+            }
+            if isMine {
+                Button { onEdit?() } label: {
+                    Label("Edit", systemImage: "pencil")
                 }
             }
-
-            if !isMine { Spacer(minLength: 60) }
+            Button { onPin?() } label: {
+                Label("Pin", systemImage: "pin")
+            }
+            Button { onForward?() } label: {
+                Label("Forward", systemImage: "arrowshape.turn.up.right")
+            }
+            if isMine {
+                Button(role: .destructive) { onDelete?() } label: {
+                    Label("Delete", systemImage: "trash")
+                }
+            }
+            if !isMine {
+                Divider()
+                Button(role: .destructive) { onBlock?() } label: {
+                    Label("Block User", systemImage: "hand.raised.fill")
+                }
+            }
         }
         .overlay(alignment: isMine ? .trailing : .leading) {
             // Telegram-style swipe-to-reply indicator
@@ -3234,6 +3232,21 @@ struct SettingsView: View {
                 }
 
                 Section("About") {
+                    NavigationLink {
+                        CanaryView()
+                    } label: {
+                        Label("Warrant Canary", systemImage: "shield.checkered")
+                    }
+                    NavigationLink {
+                        TransparencyView()
+                    } label: {
+                        Label("Transparency Reports", systemImage: "doc.text.magnifyingglass")
+                    }
+                    NavigationLink {
+                        SupportersView()
+                    } label: {
+                        Label("Supporters", systemImage: "heart.circle")
+                    }
                     HStack {
                         Text("Version"); Spacer()
                         Text("0.1.0").foregroundColor(.textSecondary)
@@ -3763,7 +3776,7 @@ struct SettingsView: View {
         var phrase: [String] = []
         for _ in 0..<12 {
             var bytes = [UInt8](repeating: 0, count: 1)
-            _ = SecRandomCopyBuffer(count: 1, bytes: &bytes)
+            _ = SecRandomCopyBytes(kSecRandomDefault, 1, &bytes)
             phrase.append(words[Int(bytes[0]) % words.count])
         }
         recoveryPhrase = phrase.joined(separator: " ")
@@ -3911,8 +3924,8 @@ struct SettingsView: View {
         }
     }
     private func saveDecoys() {
-        if let data = try? JSONSerialization.jsonObject(with: JSONSerialization.data(withJSONObject: decoyConversations)) {
-            UserDefaults.standard.set(try? JSONSerialization.data(withJSONObject: decoyConversations), forKey: "rocchat_decoy_convs")
+        if let encoded = try? JSONSerialization.data(withJSONObject: decoyConversations) {
+            UserDefaults.standard.set(encoded, forKey: "rocchat_decoy_convs")
         }
     }
     private func addDecoy() {
@@ -4651,5 +4664,115 @@ extension URL {
             "mp3": "audio/mpeg", "m4a": "audio/mp4", "zip": "application/zip",
         ]
         return map[ext] ?? "application/octet-stream"
+    }
+}
+
+// MARK: - Canary View
+struct CanaryView: View {
+    @State private var canaryText = ""
+    @State private var loading = true
+
+    var body: some View {
+        ScrollView {
+            if loading {
+                ProgressView().padding()
+            } else {
+                Text(canaryText.isEmpty ? "No canary statement available." : canaryText)
+                    .padding()
+                    .font(.body)
+            }
+        }
+        .navigationTitle("Warrant Canary")
+        .task {
+            do {
+                let data = try await APIClient.shared.getRaw("/features/canary")
+                if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   let statement = json["statement"] as? String {
+                    canaryText = statement
+                } else if let text = String(data: data, encoding: .utf8) {
+                    canaryText = text
+                }
+            } catch {}
+            loading = false
+        }
+    }
+}
+
+// MARK: - Transparency View
+struct TransparencyView: View {
+    @State private var reports: [[String: Any]] = []
+    @State private var loading = true
+
+    var body: some View {
+        List {
+            if loading {
+                ProgressView()
+            } else if reports.isEmpty {
+                Text("No transparency reports yet.").foregroundColor(.textSecondary)
+            } else {
+                ForEach(0..<reports.count, id: \.self) { i in
+                    let report = reports[i]
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(report["title"] as? String ?? "Report")
+                            .font(.headline)
+                        Text(report["period"] as? String ?? "")
+                            .font(.caption).foregroundColor(.textSecondary)
+                        Text(report["summary"] as? String ?? "")
+                            .font(.subheadline)
+                    }
+                    .padding(.vertical, 4)
+                }
+            }
+        }
+        .navigationTitle("Transparency Reports")
+        .task {
+            do {
+                let data = try await APIClient.shared.getRaw("/features/transparency")
+                if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   let arr = json["reports"] as? [[String: Any]] {
+                    reports = arr
+                }
+            } catch {}
+            loading = false
+        }
+    }
+}
+
+// MARK: - Supporters View
+struct SupportersView: View {
+    @State private var supporters: [[String: Any]] = []
+    @State private var loading = true
+
+    var body: some View {
+        List {
+            if loading {
+                ProgressView()
+            } else if supporters.isEmpty {
+                Text("No supporters listed yet.").foregroundColor(.textSecondary)
+            } else {
+                ForEach(0..<supporters.count, id: \.self) { i in
+                    let s = supporters[i]
+                    HStack {
+                        Text(s["display_name"] as? String ?? s["username"] as? String ?? "Anonymous")
+                            .font(.body)
+                        Spacer()
+                        if let tier = s["tier"] as? String {
+                            Text(tier).font(.caption).foregroundColor(.rocGold)
+                        }
+                    }
+                }
+            }
+        }
+        .navigationTitle("Supporters")
+        .task {
+            do {
+                let data = try await APIClient.shared.getRaw("/features/supporters")
+                if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   let arr = json["supporters"] as? [[String: Any]] {
+                    supporters = arr
+                }
+            } catch {}
+            loading = false
+        }
     }
 }

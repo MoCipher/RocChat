@@ -1,9 +1,11 @@
 import Foundation
+import CommonCrypto
 
 class APIClient {
     static let shared = APIClient()
     
     var sessionToken: String?
+    var refreshToken: String?
     private let baseURL: String
     
     init(baseURL: String = "https://chat.mocipher.com/api") {
@@ -26,6 +28,7 @@ class APIClient {
               let userId = json["user_id"] as? String else {
             throw APIError.invalidResponse
         }
+        refreshToken = json["refresh_token"] as? String
         
         return LoginResult(
             sessionToken: token,
@@ -54,7 +57,10 @@ class APIClient {
         signedPreKeySignature: String,
         oneTimePreKeys: [String]
     ) async throws -> RegisterResult {
-        let body: [String: Any] = [
+        // Solve proof-of-work before registration
+        let pow = try await solvePoW()
+
+        var body: [String: Any] = [
             "username": username,
             "display_name": displayName,
             "auth_hash": authHash,
@@ -66,8 +72,11 @@ class APIClient {
             "signed_pre_key_private_encrypted": signedPreKeyPrivateEncrypted,
             "signed_pre_key_signature": signedPreKeySignature,
             "one_time_pre_keys": oneTimePreKeys,
-
         ]
+        if let token = pow["token"], let nonce = pow["nonce"] {
+            body["pow_token"] = token
+            body["pow_nonce"] = nonce
+        }
         let data = try await post("/auth/register", body: body)
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let token = json["session_token"] as? String,
@@ -121,7 +130,7 @@ class APIClient {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await requestWithRetry(request)
         try validateResponse(response)
         return data
     }
@@ -136,7 +145,7 @@ class APIClient {
             request.setValue(value, forHTTPHeaderField: key)
         }
         request.httpBody = data
-        let (respData, response) = try await URLSession.shared.data(for: request)
+        let (respData, response) = try await requestWithRetry(request)
         try validateResponse(response)
         return respData
     }
@@ -147,7 +156,7 @@ class APIClient {
         if let token = sessionToken {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await requestWithRetry(request)
         try validateResponse(response)
         return data
     }
@@ -160,7 +169,7 @@ class APIClient {
         if let token = sessionToken {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await requestWithRetry(request)
         try validateResponse(response)
         return data
     }
@@ -173,7 +182,7 @@ class APIClient {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await requestWithRetry(request)
         try validateResponse(response)
         return data
     }
@@ -204,5 +213,77 @@ class APIClient {
             return str
         }
         throw APIError.invalidResponse
+    }
+
+    // MARK: - Proof-of-Work Solver
+
+    func solvePoW() async throws -> [String: String] {
+        let challengeData = try await getRaw("/features/pow/challenge")
+        guard let json = try JSONSerialization.jsonObject(with: challengeData) as? [String: Any],
+              let token = json["token"] as? String,
+              let challenge = json["challenge"] as? String,
+              let difficulty = json["difficulty"] as? Int else {
+            return [:]
+        }
+        if difficulty == 0 { return ["token": token, "nonce": "0"] }
+
+        for nonce in 0..<10_000_000 {
+            let input = "\(challenge):\(nonce)"
+            guard let inputData = input.data(using: .utf8) else { continue }
+            var hash = [UInt8](repeating: 0, count: Int(CC_SHA256_DIGEST_LENGTH))
+            inputData.withUnsafeBytes { ptr in
+                _ = CC_SHA256(ptr.baseAddress, CC_LONG(inputData.count), &hash)
+            }
+            if leadingZeroBits(hash) >= difficulty {
+                return ["token": token, "nonce": String(nonce)]
+            }
+        }
+        return [:]
+    }
+
+    private func leadingZeroBits(_ bytes: [UInt8]) -> Int {
+        var bits = 0
+        for b in bytes {
+            if b == 0 { bits += 8; continue }
+            var mask: UInt8 = 0x80
+            while mask > 0 && (b & mask) == 0 {
+                bits += 1
+                mask >>= 1
+            }
+            return bits
+        }
+        return bits
+    }
+
+    // MARK: - Refresh Token Rotation
+
+    func refreshSession() async throws -> Bool {
+        guard let rt = refreshToken else { return false }
+        var request = URLRequest(url: URL(string: "\(baseURL)/auth/refresh")!)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["refresh_token": rt])
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else { return false }
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let newSession = json["session_token"] as? String else { return false }
+        sessionToken = newSession
+        refreshToken = json["refresh_token"] as? String
+        return true
+    }
+
+    private func requestWithRetry(_ request: URLRequest) async throws -> (Data, URLResponse) {
+        let (data, response) = try await URLSession.shared.data(for: request)
+        if let http = response as? HTTPURLResponse, http.statusCode == 401 {
+            // Try to refresh and retry once
+            if try await refreshSession() {
+                var retryReq = request
+                if let token = sessionToken {
+                    retryReq.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+                }
+                return try await URLSession.shared.data(for: retryReq)
+            }
+        }
+        return (data, response)
     }
 }

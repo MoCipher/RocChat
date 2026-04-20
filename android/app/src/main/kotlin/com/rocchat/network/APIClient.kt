@@ -5,6 +5,7 @@ import org.json.JSONObject
 import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
+import java.security.MessageDigest
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -12,6 +13,7 @@ object APIClient {
     private const val BASE_URL = "https://chat.mocipher.com/api"
 
     var sessionToken: String? = null
+    var refreshToken: String? = null
 
     // ── Auth ──
 
@@ -28,6 +30,7 @@ object APIClient {
             put("auth_hash", authHash)
         }
         val json = post("/auth/login", body)
+        refreshToken = json.optString("refresh_token", null)
         return LoginResult(
             sessionToken = json.getString("session_token"),
             userId = json.getString("user_id"),
@@ -49,6 +52,9 @@ object APIClient {
         signedPreKeySignature: String,
         oneTimePreKeys: List<String>,
     ): JSONObject {
+        // Solve proof-of-work before registration
+        val pow = solvePoW()
+
         val body = JSONObject().apply {
             put("username", username)
             put("display_name", displayName)
@@ -61,7 +67,8 @@ object APIClient {
             put("signed_pre_key_private_encrypted", signedPreKeyPrivateEncrypted)
             put("signed_pre_key_signature", signedPreKeySignature)
             put("one_time_pre_keys", JSONArray(oneTimePreKeys))
-
+            pow["token"]?.let { put("pow_token", it) }
+            pow["nonce"]?.let { put("pow_nonce", it) }
         }
         return post("/auth/register", body)
     }
@@ -276,20 +283,22 @@ object APIClient {
     suspend fun postPublic(path: String, body: JSONObject): JSONObject = post(path, body)
 
     suspend fun get(path: String): JSONObject = withContext(Dispatchers.IO) {
-        val conn = (URL("$BASE_URL$path").openConnection() as HttpURLConnection).apply {
-            requestMethod = "GET"
-            sessionToken?.let { setRequestProperty("Authorization", "Bearer $it") }
-            connectTimeout = 15_000
-            readTimeout = 15_000
-        }
-        try {
-            val code = conn.responseCode
-            val body = (if (code in 200..299) conn.inputStream else conn.errorStream)
-                ?.bufferedReader()?.use { it.readText() } ?: "{}"
-            if (code !in 200..299) throw IOException("HTTP $code: $body")
-            JSONObject(body)
-        } finally {
-            conn.disconnect()
+        executeWithRetry {
+            val conn = (URL("$BASE_URL$path").openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                sessionToken?.let { setRequestProperty("Authorization", "Bearer $it") }
+                connectTimeout = 15_000
+                readTimeout = 15_000
+            }
+            try {
+                val code = conn.responseCode
+                val body = (if (code in 200..299) conn.inputStream else conn.errorStream)
+                    ?.bufferedReader()?.use { it.readText() } ?: "{}"
+                if (code !in 200..299) throw IOException("HTTP $code: $body")
+                JSONObject(body)
+            } finally {
+                conn.disconnect()
+            }
         }
     }
 
@@ -347,24 +356,26 @@ object APIClient {
 
     suspend fun post(path: String, body: JSONObject, method: String = "POST"): JSONObject =
         withContext(Dispatchers.IO) {
-            val conn = (URL("$BASE_URL$path").openConnection() as HttpURLConnection).apply {
-                requestMethod = if (method == "PATCH") "POST" else method
-                if (method == "PATCH") setRequestProperty("X-HTTP-Method-Override", "PATCH")
-                setRequestProperty("Content-Type", "application/json; charset=utf-8")
-                sessionToken?.let { setRequestProperty("Authorization", "Bearer $it") }
-                doOutput = true
-                connectTimeout = 15_000
-                readTimeout = 15_000
-            }
-            try {
-                conn.outputStream.bufferedWriter().use { it.write(body.toString()) }
-                val code = conn.responseCode
-                val respBody = (if (code in 200..299) conn.inputStream else conn.errorStream)
-                    ?.bufferedReader()?.use { it.readText() } ?: "{}"
-                if (code !in 200..299) throw IOException("HTTP $code: $respBody")
-                JSONObject(respBody)
-            } finally {
-                conn.disconnect()
+            executeWithRetry {
+                val conn = (URL("$BASE_URL$path").openConnection() as HttpURLConnection).apply {
+                    requestMethod = if (method == "PATCH") "POST" else method
+                    if (method == "PATCH") setRequestProperty("X-HTTP-Method-Override", "PATCH")
+                    setRequestProperty("Content-Type", "application/json; charset=utf-8")
+                    sessionToken?.let { setRequestProperty("Authorization", "Bearer $it") }
+                    doOutput = true
+                    connectTimeout = 15_000
+                    readTimeout = 15_000
+                }
+                try {
+                    conn.outputStream.bufferedWriter().use { it.write(body.toString()) }
+                    val code = conn.responseCode
+                    val respBody = (if (code in 200..299) conn.inputStream else conn.errorStream)
+                        ?.bufferedReader()?.use { it.readText() } ?: "{}"
+                    if (code !in 200..299) throw IOException("HTTP $code: $respBody")
+                    JSONObject(respBody)
+                } finally {
+                    conn.disconnect()
+                }
             }
         }
 
@@ -387,6 +398,97 @@ object APIClient {
             json.optString("blob_id", respBody.trim())
         } finally {
             conn.disconnect()
+        }
+    }
+
+    // ── Proof-of-Work Solver ──
+
+    private suspend fun solvePoW(): Map<String, String> = withContext(Dispatchers.IO) {
+        try {
+            val conn = (URL("$BASE_URL/features/pow/challenge").openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = 15_000
+                readTimeout = 15_000
+            }
+            val json = try {
+                val code = conn.responseCode
+                val body = (if (code in 200..299) conn.inputStream else conn.errorStream)
+                    ?.bufferedReader()?.use { it.readText() } ?: "{}"
+                if (code !in 200..299) return@withContext emptyMap()
+                JSONObject(body)
+            } finally {
+                conn.disconnect()
+            }
+            val token = json.optString("token", "") ?: ""
+            val challenge = json.optString("challenge", "") ?: ""
+            val difficulty = json.optInt("difficulty", 0)
+            if (token.isEmpty() || challenge.isEmpty()) return@withContext emptyMap()
+            if (difficulty == 0) return@withContext mapOf("token" to token, "nonce" to "0")
+
+            val md = MessageDigest.getInstance("SHA-256")
+            for (nonce in 0 until 10_000_000) {
+                md.reset()
+                val digest = md.digest("$challenge:$nonce".toByteArray(Charsets.UTF_8))
+                if (leadingZeroBits(digest) >= difficulty) {
+                    return@withContext mapOf("token" to token, "nonce" to nonce.toString())
+                }
+            }
+            emptyMap()
+        } catch (_: Exception) {
+            emptyMap()
+        }
+    }
+
+    private fun leadingZeroBits(bytes: ByteArray): Int {
+        var bits = 0
+        for (b in bytes) {
+            val unsigned = b.toInt() and 0xFF
+            if (unsigned == 0) { bits += 8; continue }
+            var mask = 0x80
+            while (mask > 0 && (unsigned and mask) == 0) { bits++; mask = mask shr 1 }
+            return bits
+        }
+        return bits
+    }
+
+    // ── Refresh Token Rotation ──
+
+    private suspend fun refreshSession(): Boolean = withContext(Dispatchers.IO) {
+        val rt = refreshToken ?: return@withContext false
+        val conn = (URL("$BASE_URL/auth/refresh").openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            setRequestProperty("Content-Type", "application/json; charset=utf-8")
+            doOutput = true
+            connectTimeout = 15_000
+            readTimeout = 15_000
+        }
+        try {
+            conn.outputStream.bufferedWriter().use {
+                it.write(JSONObject().apply { put("refresh_token", rt) }.toString())
+            }
+            val code = conn.responseCode
+            if (code !in 200..299) return@withContext false
+            val body = conn.inputStream.bufferedReader().use { it.readText() }
+            val json = JSONObject(body)
+            sessionToken = json.optString("session_token", null)
+            refreshToken = json.optString("refresh_token", null)
+            sessionToken != null
+        } catch (_: Exception) {
+            false
+        } finally {
+            conn.disconnect()
+        }
+    }
+
+    private suspend fun <T> executeWithRetry(block: () -> T): T {
+        return try {
+            block()
+        } catch (e: IOException) {
+            if (e.message?.startsWith("HTTP 401") == true && refreshSession()) {
+                block()
+            } else {
+                throw e
+            }
         }
     }
 }

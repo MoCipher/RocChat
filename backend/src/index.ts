@@ -143,6 +143,12 @@ export default {
         return withCors(await handleFeatures(request, env, { userId: '', username: '', tier: 'free', deviceId: '' } as Session, url));
       }
 
+      // VAPID public key — public, no auth
+      if (path === '/api/push/vapid-key' && request.method === 'GET') {
+        const vapidKey = await env.KV.get('vapid_public_key');
+        return withCors(jsonResponse({ vapid_public_key: vapidKey || null }));
+      }
+
       // QR auth — generate and poll are public, authorize requires auth
       if (path === '/api/auth/qr/generate' && request.method === 'POST') {
         return withCors(await handleQrAuth(request, env, 'generate', url));

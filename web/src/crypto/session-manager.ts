@@ -33,6 +33,20 @@ const DB_NAME = 'rocchat_sessions';
 const DB_VERSION = 1;
 const STORE_NAME = 'ratchet_states';
 
+// ── Identity key change detection ──
+const PEER_KEY_PREFIX = 'rocchat_peer_idkey_';
+
+function checkIdentityKeyChange(userId: string, identityKeyB64: string): void {
+  const stored = localStorage.getItem(`${PEER_KEY_PREFIX}${userId}`);
+  if (stored && stored !== identityKeyB64) {
+    // Key changed — invalidate verification
+    localStorage.removeItem(`rocchat_verified_${userId}`);
+    // Dispatch event for UI to show warning
+    window.dispatchEvent(new CustomEvent('rocchat:identity-key-changed', { detail: { userId } }));
+  }
+  localStorage.setItem(`${PEER_KEY_PREFIX}${userId}`, identityKeyB64);
+}
+
 function openDB(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     const req = indexedDB.open(DB_NAME, DB_VERSION);
@@ -253,6 +267,9 @@ async function performX3DH(conversationId: string, recipientUserId: string): Pro
       : undefined,
   };
 
+  // Identity key change detection
+  checkIdentityKeyChange(recipientUserId, bundleData.identityKey);
+
   // Get our identity keys
   const identityKeyPair = await getLocalIdentityKeyPair();
   if (!identityKeyPair) throw new Error('No local identity keys');
@@ -379,6 +396,9 @@ async function handleX3DHResponder(x3dhHeader: X3DHHeader): Promise<RatchetState
   // Perform X3DH responder
   const theirIdentityDHKey = fromBase64(x3dhHeader.identityDHKey);
   const theirEphemeralKey = fromBase64(x3dhHeader.ephemeralKey);
+
+  // Check for identity key change (sender's identity DH key)
+  checkIdentityKeyChange('_dh_' + x3dhHeader.identityDHKey.slice(0, 16), x3dhHeader.identityDHKey);
 
   const sharedSecret = await x3dhRespond(
     identityDHKeyPair,

@@ -2266,6 +2266,15 @@ function updateSafetyBadge(conv: Conversation) {
   badge.style.display = localStorage.getItem(verifiedKey) ? 'inline' : 'none';
 }
 
+// ── Identity key change warning ──
+window.addEventListener('rocchat:identity-key-changed', ((e: CustomEvent) => {
+  const { userId } = e.detail;
+  showToast('⚠️ A contact\'s identity key changed — re-verify their safety number', 'error');
+  // Show banner in active chat if it's this contact
+  const banner = document.getElementById('key-change-banner');
+  if (banner) { banner.style.display = 'flex'; banner.dataset.userId = userId; }
+}) as EventListener);
+
 // ── Helpers ──
 
 /** Add focus trap + Esc-to-close to an overlay dialog */

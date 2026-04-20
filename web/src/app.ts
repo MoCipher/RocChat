@@ -111,7 +111,7 @@ function initAfterUnlock() {
   renderApp();
   checkPreKeyReplenishment();
   cacheUserProfile();
-  registerWebPush();
+  bootstrapVapidKey().then(() => registerWebPush());
   showOnboardingIfNeeded();
 }
 
@@ -204,6 +204,16 @@ async function checkPreKeyReplenishment() {
       await uploadPreKeys(newKeys);
     }
   } catch { /* silently fail — will retry on next app load */ }
+}
+
+// Fetch VAPID public key from backend and cache it
+async function bootstrapVapidKey(): Promise<void> {
+  if (localStorage.getItem('rocchat_vapid_public')) return;
+  try {
+    const res = await fetch('/api/push/vapid-key');
+    const data = await res.json() as { vapid_public_key?: string };
+    if (data.vapid_public_key) localStorage.setItem('rocchat_vapid_public', data.vapid_public_key);
+  } catch { /* VAPID key not available */ }
 }
 
 // Web Push registration (only call when user explicitly opts in via Settings).

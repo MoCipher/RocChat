@@ -19,7 +19,8 @@ const STUN_SERVERS: RTCIceServer[] = [
   { urls: 'stun:stun.nextcloud.com:3478' },
 ];
 
-const MAGIC_AUDIO = 0xA0;
+const MAGIC_AUDIO = 0x52;
+const MAGIC_VIDEO = 0x56;
 const NONCE_SIZE = 12; // 4-byte salt + 8-byte counter
 
 export interface RocP2PDelegate {
@@ -27,6 +28,7 @@ export interface RocP2PDelegate {
   onConnected(): void;
   onFailed(reason: string): void;
   onAudioFrame(pcm: ArrayBuffer): void;
+  onVideoFrame?(frame: ArrayBuffer): void;
 }
 
 export class RocP2PWebTransport {
@@ -53,8 +55,8 @@ export class RocP2PWebTransport {
         {
           name: 'HKDF',
           hash: 'SHA-256',
-          salt: new Uint8Array(0),
-          info: new TextEncoder().encode('rocp2p-media-keys'),
+          salt: new TextEncoder().encode('rocchat-p2p-voice-v1'),
+          info: new TextEncoder().encode('rocchat.p2p'),
         },
         baseKey,
         72 * 8,
@@ -141,6 +143,16 @@ export class RocP2PWebTransport {
 
   /** Send an encrypted audio frame over the DataChannel. */
   async sendAudio(pcmData: ArrayBuffer): Promise<void> {
+    return this.sendEncrypted(pcmData, MAGIC_AUDIO);
+  }
+
+  /** Send an encrypted video frame over the DataChannel. */
+  async sendVideo(frameData: ArrayBuffer): Promise<void> {
+    return this.sendEncrypted(frameData, MAGIC_VIDEO);
+  }
+
+  /** Encrypt and send a frame with the given magic byte. */
+  private async sendEncrypted(data: ArrayBuffer, magic: number): Promise<void> {
     if (!this.dc || this.dc.readyState !== 'open' || !this.sendKey) return;
 
     this.sendSeq++;
@@ -153,11 +165,11 @@ export class RocP2PWebTransport {
     view.setUint32(4, Math.floor(seq / 0x100000000));
     view.setUint32(8, seq >>> 0);
 
-    const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv: nonce }, this.sendKey, pcmData);
+    const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv: nonce }, this.sendKey, data);
 
     // Wire format: magic(1) | seq(8) | ciphertext+tag
     const frame = new Uint8Array(1 + 8 + ct.byteLength);
-    frame[0] = MAGIC_AUDIO;
+    frame[0] = magic;
     frame.set(nonce.slice(4, 12), 1); // 8-byte seq
     frame.set(new Uint8Array(ct), 9);
 
@@ -169,7 +181,8 @@ export class RocP2PWebTransport {
     if (!this.recvKey) return;
     const frame = new Uint8Array(data);
     if (frame.length < 26) return; // 1 magic + 8 seq + 16 tag minimum
-    if (frame[0] !== MAGIC_AUDIO) return;
+    const magic = frame[0];
+    if (magic !== MAGIC_AUDIO && magic !== MAGIC_VIDEO) return;
 
     // Reconstruct nonce
     const nonce = new Uint8Array(12);
@@ -178,8 +191,12 @@ export class RocP2PWebTransport {
 
     const ct = frame.slice(9);
     try {
-      const pcm = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: nonce }, this.recvKey, ct);
-      this.delegate.onAudioFrame(pcm);
+      const plaintext = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: nonce }, this.recvKey, ct);
+      if (magic === MAGIC_AUDIO) {
+        this.delegate.onAudioFrame(plaintext);
+      } else if (magic === MAGIC_VIDEO) {
+        this.delegate.onVideoFrame?.(plaintext);
+      }
     } catch {
       // Corrupted or replayed frame — drop silently
     }

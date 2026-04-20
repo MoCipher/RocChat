@@ -439,26 +439,87 @@ async function loadCommunities(query = '') {
     }
 
     list.innerHTML = res.data.communities.map((c: Community) => `
-      <div class="community-card" data-id="${c.id}" style="padding:var(--sp-4);border-radius:var(--radius-lg);border:1px solid var(--border-weak);background:var(--bg-card);cursor:pointer;transition:background var(--duration-fast) var(--ease-out)">
-        <div style="display:flex;align-items:center;gap:var(--sp-3)">
+      <div class="community-card" data-id="${c.id}" style="border-radius:var(--radius-lg);border:1px solid var(--border-weak);background:var(--bg-card);overflow:hidden;transition:background var(--duration-fast) var(--ease-out)">
+        <div class="community-header" style="padding:var(--sp-4);cursor:pointer;display:flex;align-items:center;gap:var(--sp-3)">
           <div style="width:40px;height:40px;border-radius:var(--radius-md);background:rgba(64,224,208,0.1);display:flex;align-items:center;justify-content:center;font-size:18px">🏘️</div>
           <div style="flex:1">
             <div style="font-weight:600">${c.name}</div>
             <div style="font-size:var(--fs-sm);color:var(--text-secondary)">${c.description || 'No description'}</div>
           </div>
-          <div style="font-size:var(--fs-xs);color:var(--text-tertiary)">${c.member_count} members</div>
+          <div style="display:flex;align-items:center;gap:var(--sp-2)">
+            <span style="font-size:var(--fs-xs);color:var(--text-tertiary)">${c.member_count} members</span>
+            <span class="community-chevron" style="font-size:12px;color:var(--text-tertiary);transition:transform 0.2s">▶</span>
+          </div>
         </div>
+        <div class="community-channels" data-community-id="${c.id}" style="display:none;padding:0 var(--sp-4) var(--sp-3);border-top:1px solid var(--border-weak)"></div>
       </div>
     `).join('');
 
-    list.querySelectorAll('.community-card').forEach(card => {
-      card.addEventListener('click', async () => {
-        const id = (card as HTMLElement).dataset.id!;
-        const res = await api.req(`/communities/${id}/join`, { method: 'POST' });
-        if (res.ok) {
-          const nameEl = card.querySelector('div[style*="font-weight:600"]');
-          const name = nameEl?.textContent || 'Community';
-          card.innerHTML = `<div style="padding:var(--sp-2);color:var(--success);font-weight:500">✓ Joined ${name}</div>`;
+    list.querySelectorAll('.community-header').forEach(header => {
+      header.addEventListener('click', async () => {
+        const card = header.closest('.community-card') as HTMLElement;
+        const id = card.dataset.id!;
+        const channelsEl = card.querySelector('.community-channels') as HTMLElement;
+        const chevron = card.querySelector('.community-chevron') as HTMLElement;
+
+        if (channelsEl.style.display === 'none') {
+          channelsEl.style.display = 'block';
+          chevron.style.transform = 'rotate(90deg)';
+
+          if (!channelsEl.dataset.loaded) {
+            channelsEl.innerHTML = '<div style="padding:var(--sp-2);color:var(--text-secondary);font-size:var(--fs-sm)">Loading channels...</div>';
+            try {
+              const detail = await api.req<{ community: any; channels: Channel[]; role: string | null }>(`/communities/${id}`, { method: 'GET' });
+              if (detail.ok && detail.data?.channels?.length) {
+                channelsEl.innerHTML = detail.data.channels.map((ch: Channel) => `
+                  <div class="community-channel-row" data-channel-id="${ch.id}" style="padding:var(--sp-2) var(--sp-3);margin-top:var(--sp-2);border-radius:var(--radius-md);background:var(--bg-input);cursor:pointer;display:flex;align-items:center;gap:var(--sp-2);transition:background var(--duration-fast)">
+                    <span style="font-size:16px">#</span>
+                    <div style="flex:1">
+                      <div style="font-size:var(--fs-sm);font-weight:500">${ch.name}</div>
+                      ${ch.description ? `<div style="font-size:var(--fs-xs);color:var(--text-secondary)">${ch.description}</div>` : ''}
+                    </div>
+                    <span style="font-size:var(--fs-xs);color:var(--text-tertiary)">${ch.subscriber_count || 0} subs</span>
+                  </div>
+                `).join('');
+
+                channelsEl.querySelectorAll('.community-channel-row').forEach(row => {
+                  row.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    const chId = (row as HTMLElement).dataset.channelId!;
+                    const ch = detail.data!.channels.find((c: Channel) => c.id === chId);
+                    if (ch) {
+                      activeChannel = ch;
+                      currentView = 'detail';
+                      const container = document.querySelector('.channels-view')?.parentElement;
+                      if (container) renderChannelDetail(container as HTMLElement);
+                    }
+                  });
+                });
+
+                // Add join button if not a member
+                if (!detail.data?.role) {
+                  const joinBtn = document.createElement('button');
+                  joinBtn.className = 'btn-primary';
+                  joinBtn.style.cssText = 'margin-top:var(--sp-2);padding:6px 14px;font-size:var(--fs-sm);width:100%';
+                  joinBtn.textContent = 'Join Community';
+                  joinBtn.addEventListener('click', async (e) => {
+                    e.stopPropagation();
+                    const r = await api.req(`/communities/${id}/join`, { method: 'POST' });
+                    if (r.ok) { joinBtn.textContent = '✓ Joined'; joinBtn.disabled = true; }
+                  });
+                  channelsEl.appendChild(joinBtn);
+                }
+              } else {
+                channelsEl.innerHTML = '<div style="padding:var(--sp-2);color:var(--text-secondary);font-size:var(--fs-sm)">No channels in this community</div>';
+              }
+            } catch {
+              channelsEl.innerHTML = '<div style="padding:var(--sp-2);color:var(--danger);font-size:var(--fs-sm)">Failed to load</div>';
+            }
+            channelsEl.dataset.loaded = '1';
+          }
+        } else {
+          channelsEl.style.display = 'none';
+          chevron.style.transform = '';
         }
       });
     });

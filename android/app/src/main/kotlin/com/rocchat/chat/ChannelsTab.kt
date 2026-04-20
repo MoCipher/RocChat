@@ -1,6 +1,8 @@
 package com.rocchat.chat
 
 import com.rocchat.network.APIClient
+import android.content.Context
+import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -11,15 +13,19 @@ import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Campaign
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Groups
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Tag
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
@@ -137,15 +143,7 @@ private fun ChannelListScreen(onChannelClick: (String, String) -> Unit) {
                 }
 
                 items(communities, key = { it.id }) { community ->
-                    CommunityCard(community) {
-                        scope.launch {
-                            if (joinCommunity(community.id)) {
-                                communities = communities.map {
-                                    if (it.id == community.id) it.copy(joined = true) else it
-                                }
-                            }
-                        }
-                    }
+                    CommunityCard(community, onChannelClick = onChannelClick)
                 }
             }
         }
@@ -195,29 +193,107 @@ private fun ChannelCard(channel: ChannelData, onClick: () -> Unit, onSubscribe: 
 }
 
 @Composable
-private fun CommunityCard(community: CommunityData, onJoin: () -> Unit) {
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Row(
-            modifier = Modifier.padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Icon(Icons.Default.Groups, null, tint = MaterialTheme.colorScheme.tertiary,
-                modifier = Modifier.size(32.dp))
-            Spacer(Modifier.width(12.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text(community.name, style = MaterialTheme.typography.titleSmall)
-                community.description?.let {
-                    Text(it, style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+private fun CommunityCard(community: CommunityData, onChannelClick: (String, String) -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    var channels by remember { mutableStateOf<List<ChannelData>>(emptyList()) }
+    var role by remember { mutableStateOf<String?>(null) }
+    var isLoading by remember { mutableStateOf(false) }
+    var joined by remember { mutableStateOf(community.joined) }
+    val scope = rememberCoroutineScope()
+    val context = LocalContext.current
+
+    Card(modifier = Modifier.fillMaxWidth().animateContentSize()) {
+        Column {
+            Row(
+                modifier = Modifier
+                    .clickable {
+                        expanded = !expanded
+                        if (expanded && channels.isEmpty()) {
+                            scope.launch {
+                                isLoading = true
+                                val detail = fetchCommunityDetail(context, community.id)
+                                channels = detail.first
+                                role = detail.second
+                                joined = role != null
+                                isLoading = false
+                            }
+                        }
+                    }
+                    .padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(Icons.Default.Groups, null, tint = MaterialTheme.colorScheme.tertiary,
+                    modifier = Modifier.size(32.dp))
+                Spacer(Modifier.width(12.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(community.name, style = MaterialTheme.typography.titleSmall)
+                    community.description?.let {
+                        Text(it, style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+                    }
+                    Text("${community.memberCount} members",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-                Text("${community.memberCount} members",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Icon(
+                    if (expanded) Icons.Default.KeyboardArrowDown else Icons.Default.KeyboardArrowRight,
+                    contentDescription = "Expand",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
-            if (community.joined) {
-                Icon(Icons.Default.CheckCircle, "Joined", tint = MaterialTheme.colorScheme.primary)
-            } else {
-                FilledTonalButton(onClick = onJoin) { Text("Join") }
+
+            if (expanded) {
+                HorizontalDivider()
+                if (isLoading) {
+                    Box(Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(modifier = Modifier.size(24.dp), color = RocColors.RocGold)
+                    }
+                } else if (channels.isEmpty()) {
+                    Text("No channels in this community",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(16.dp))
+                } else {
+                    channels.forEach { ch ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { onChannelClick(ch.id, ch.name) }
+                                .padding(horizontal = 16.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(Icons.Default.Tag, null, tint = RocColors.RocGold.copy(alpha = 0.6f),
+                                modifier = Modifier.size(20.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text(ch.name, style = MaterialTheme.typography.bodyMedium)
+                                ch.description?.let {
+                                    Text(it, style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+                                }
+                            }
+                            Text("${ch.subscriberCount} subs",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                }
+
+                if (role == null && !isLoading) {
+                    FilledTonalButton(
+                        onClick = {
+                            scope.launch {
+                                if (joinCommunity(community.id)) {
+                                    joined = true; role = "member"
+                                }
+                            }
+                        },
+                        enabled = !joined,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp).fillMaxWidth()
+                    ) {
+                        Text(if (joined) "Joined" else "Join Community")
+                    }
+                }
             }
         }
     }
@@ -516,6 +592,18 @@ private suspend fun fetchCommunities(): List<CommunityData> = try {
 
 private suspend fun subscribeChannel(id: String): Boolean = apiPost("/api/channels/$id/subscribe")
 private suspend fun joinCommunity(id: String): Boolean = apiPost("/api/communities/$id/join")
+
+private suspend fun fetchCommunityDetail(context: Context, id: String): Pair<List<ChannelData>, String?> = try {
+    val json = apiGetJson("/api/communities/$id")
+    val role = json?.optString("role", null)?.takeIf { it != "null" }
+    val arr = json?.optJSONArray("channels") ?: return Pair(emptyList(), role)
+    val channels = (0 until arr.length()).map { i ->
+        val o = arr.getJSONObject(i)
+        ChannelData(o.getString("id"), o.getString("name"), o.optString("description", null),
+            o.optInt("subscriber_count", 0), o.optString("tags", null))
+    }
+    Pair(channels, role)
+} catch (_: Exception) { Pair(emptyList(), null) }
 
 private suspend fun createChannel(name: String, desc: String, tags: String, isPublic: Boolean): Boolean {
     val body = JSONObject().apply {

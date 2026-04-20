@@ -6,6 +6,7 @@ import * as api from '../api.js';
 import { generateQRCodeSVG } from '../auth/qr-login.js';
 import { clearAllSecrets } from '../crypto/secure-store.js';
 import { showToast } from './toast.js';
+import { encryptProfileField, decryptProfileField } from '../crypto/profile-crypto.js';
 
 async function saveSetting(fn: () => Promise<unknown>) {
   try {
@@ -966,8 +967,10 @@ export function renderSettings(container: HTMLElement) {
     const newName = prompt('Enter new display name:', current);
     if (newName && newName.trim() && newName.trim() !== current) {
       saveSetting(async () => {
-        await api.updateSettings({ display_name: newName.trim() });
+        const encrypted = await encryptProfileField(newName.trim());
+        await api.updateSettings({ display_name: encrypted });
         if (nameEl) nameEl.textContent = newName.trim();
+        localStorage.setItem('rocchat_display_name', newName.trim());
       });
     }
   });
@@ -980,7 +983,8 @@ export function renderSettings(container: HTMLElement) {
     if (newStatus !== null) {
       const text = newStatus.trim().slice(0, 140);
       saveSetting(async () => {
-        await api.updateSettings({ status_text: text });
+        const encrypted = await encryptProfileField(text);
+        await api.updateSettings({ status_text: encrypted });
         if (statusEl) {
           statusEl.textContent = text || 'Set a status...';
           statusEl.dataset.status = text;
@@ -2200,8 +2204,11 @@ async function loadProfile() {
     const res = await api.getMe();
     if (res.ok) {
       const user = res.data as unknown as Record<string, unknown>;
+      // Decrypt encrypted profile fields
+      const displayName = user.display_name ? await decryptProfileField(user.display_name as string) : '';
+      const statusText = user.status_text ? await decryptProfileField(user.status_text as string) : '';
       // Cache display name & avatar for sidebar
-      if (user.display_name) localStorage.setItem('rocchat_display_name', user.display_name as string);
+      if (displayName) localStorage.setItem('rocchat_display_name', displayName);
       else if (user.username) localStorage.setItem('rocchat_display_name', user.username as string);
       if (user.avatar_url) localStorage.setItem('rocchat_avatar_url', user.avatar_url as string);
       else localStorage.removeItem('rocchat_avatar_url');
@@ -2213,16 +2220,15 @@ async function loadProfile() {
       const removeBtn = document.getElementById('remove-avatar-btn') as HTMLElement;
 
       if (usernameEl) usernameEl.textContent = `@${user.username}`;
-      if (nameEl) nameEl.textContent = (user.display_name as string) || (user.username as string);
+      if (nameEl) nameEl.textContent = displayName || (user.username as string);
       if (keyEl) keyEl.textContent = (user.identity_key as string) || 'Not available';
       if (toggle) toggle.checked = !!user.discoverable;
 
       // Status text
       const statusEl = document.getElementById('setting-status');
       if (statusEl) {
-        const st = (user.status_text as string) || '';
-        statusEl.textContent = st || 'Set a status...';
-        statusEl.dataset.status = st;
+        statusEl.textContent = statusText || 'Set a status...';
+        statusEl.dataset.status = statusText;
       }
 
       // Avatar

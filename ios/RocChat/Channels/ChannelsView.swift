@@ -481,41 +481,128 @@ struct ChannelScheduledListView: View {
     }
 }
 
-// MARK: - Community Row
+// MARK: - Community Row (expandable with nested channels)
 
 struct CommunityRow: View {
     let community: CommunityItem
     @State private var joined = false
+    @State private var expanded = false
+    @State private var channels: [ChannelItem] = []
+    @State private var isLoadingChannels = false
+    @State private var role: String? = nil
 
     var body: some View {
-        HStack(spacing: 12) {
-            Image(systemName: "person.3.fill")
-                .font(.title3)
-                .foregroundStyle(.teal)
-                .frame(width: 40, height: 40)
-                .background(Color.teal.opacity(0.1))
-                .clipShape(RoundedRectangle(cornerRadius: 8))
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(community.name).font(.headline)
-                if let desc = community.description {
-                    Text(desc).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+        VStack(spacing: 0) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    expanded.toggle()
+                    if expanded && channels.isEmpty { Task { await loadCommunityDetail() } }
                 }
+            } label: {
+                HStack(spacing: 12) {
+                    Image(systemName: "person.3.fill")
+                        .font(.title3)
+                        .foregroundStyle(.teal)
+                        .frame(width: 40, height: 40)
+                        .background(Color.teal.opacity(0.1))
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(community.name).font(.headline).foregroundStyle(.primary)
+                        if let desc = community.description {
+                            Text(desc).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        }
+                    }
+
+                    Spacer()
+
+                    Text("\(community.member_count)")
+                        .font(.caption).foregroundStyle(.secondary)
+
+                    Image(systemName: "chevron.right")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .rotationEffect(.degrees(expanded ? 90 : 0))
+                }
+                .padding(.vertical, 4)
             }
+            .buttonStyle(.plain)
 
-            Spacer()
+            if expanded {
+                VStack(spacing: 0) {
+                    if isLoadingChannels {
+                        ProgressView()
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 8)
+                    } else if channels.isEmpty {
+                        Text("No channels in this community")
+                            .font(.caption).foregroundStyle(.secondary)
+                            .padding(.vertical, 8)
+                    } else {
+                        ForEach(channels) { ch in
+                            NavigationLink(destination: ChannelDetailView(channelId: ch.id, channelName: ch.name)) {
+                                HStack(spacing: 8) {
+                                    Text("#").font(.headline).foregroundStyle(Color.rocGold.opacity(0.6))
+                                    VStack(alignment: .leading, spacing: 1) {
+                                        Text(ch.name).font(.subheadline)
+                                        if let desc = ch.description {
+                                            Text(desc).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                                        }
+                                    }
+                                    Spacer()
+                                    Text("\(ch.subscriber_count) subs")
+                                        .font(.caption2).foregroundStyle(.tertiary)
+                                }
+                                .padding(.vertical, 4)
+                                .padding(.leading, 52)
+                            }
+                        }
+                    }
 
-            if joined {
-                Label("Joined", systemImage: "checkmark.circle.fill")
-                    .font(.caption).foregroundStyle(.green)
-            } else {
-                Button("Join") { Task { await join() } }
-                    .buttonStyle(.borderedProminent)
-                    .tint(.teal)
-                    .controlSize(.small)
+                    if role == nil && !isLoadingChannels {
+                        Button {
+                            Task { await join() }
+                        } label: {
+                            Label(joined ? "Joined" : "Join Community", systemImage: joined ? "checkmark.circle.fill" : "plus.circle")
+                                .font(.caption)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(joined ? .green : .teal)
+                        .controlSize(.small)
+                        .disabled(joined)
+                        .padding(.top, 6).padding(.leading, 52)
+                    }
+                }
+                .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
-        .padding(.vertical, 4)
+    }
+
+    @MainActor
+    private func loadCommunityDetail() async {
+        isLoadingChannels = true
+        defer { isLoadingChannels = false }
+        guard let token = UserDefaults.standard.string(forKey: "sessionToken"),
+              let url = URL(string: "\(APIConfig.baseURL)/api/communities/\(community.id)") else { return }
+        var req = URLRequest(url: url)
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        guard let (data, _) = try? await URLSession.shared.data(for: req),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
+        role = json["role"] as? String
+        joined = role != nil
+        if let arr = json["channels"] as? [[String: Any]] {
+            channels = arr.compactMap { dict in
+                guard let id = dict["id"] as? String, let name = dict["name"] as? String else { return nil }
+                return ChannelItem(
+                    id: id, name: name,
+                    description: dict["description"] as? String,
+                    subscriber_count: dict["subscriber_count"] as? Int ?? 0,
+                    tags: dict["tags"] as? String,
+                    avatar_url: dict["avatar_url"] as? String,
+                    is_public: dict["is_public"] as? Bool
+                )
+            }
+        }
     }
 
     private func join() async {
@@ -526,7 +613,7 @@ struct CommunityRow: View {
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         if let (_, resp) = try? await URLSession.shared.data(for: req),
            (resp as? HTTPURLResponse)?.statusCode == 200 {
-            await MainActor.run { joined = true }
+            await MainActor.run { joined = true; role = "member" }
         }
     }
 }

@@ -11,6 +11,7 @@ import { showToast } from '../components/toast.js';
 import { encryptMessage, decryptMessage, getOrCreateSession } from '../crypto/session-manager.js';
 import { groupEncrypt, groupDecrypt, isGroupEncrypted, handleSenderKeyDistribution } from '../crypto/group-session-manager.js';
 import { maybeRotateSignedPreKey } from '../crypto/client-crypto.js';
+import { encryptGroupMeta, decryptGroupMeta, decryptProfileField } from '../crypto/profile-crypto.js';
 import type { EncryptedMessage } from '@rocchat/shared';
 import { generateSafetyNumber, fromBase64, toBase64, randomBytes, sha256 as cryptoSha256 } from '@rocchat/shared';
 import { initEmojiPicker } from './emoji-picker.js';
@@ -63,6 +64,18 @@ interface ChatState {
   activeConversationId: string | null;
   messages: Map<string, Message[]>;
   ws: WebSocket | null;
+}
+
+// Decrypt encrypted_meta on conversations to populate readable names
+async function decryptConversationMeta(convs: Conversation[]): Promise<void> {
+  for (const c of convs) {
+    if (c.encrypted_meta && c.encrypted_meta.includes('.')) {
+      try {
+        const meta = await decryptGroupMeta(c.id, c.encrypted_meta);
+        if (meta.name) c.name = meta.name;
+      } catch { /* leave name as-is */ }
+    }
+  }
 }
 
 // Local encrypted plaintext cache keyed by server message id.
@@ -279,6 +292,7 @@ export async function renderChats(container: HTMLElement) {
     const [convRes, folderRes] = await Promise.all([api.getConversations(), api.getChatFolders()]);
     if (convRes.ok) {
       state.conversations = convRes.data.conversations || [];
+      await decryptConversationMeta(state.conversations);
     }
     if (folderRes.ok) {
       renderFolderTabs(folderRes.data as unknown as api.ChatFolder[]);
@@ -360,6 +374,7 @@ function attachPullToRefresh(el: HTMLElement | null) {
         const res = await api.getConversations();
         if (res.ok) {
           state.conversations = res.data.conversations || [];
+          await decryptConversationMeta(state.conversations);
           renderConversationsList();
         }
       } catch {}
@@ -1614,10 +1629,14 @@ function showNewChatDialog(container: HTMLElement) {
   createGroupBtn.addEventListener('click', async () => {
     if (selectedMembers.length < 1) return;
     const groupName = (overlay.querySelector('#group-name-input') as HTMLInputElement).value.trim() || 'Group';
+    // Generate a temporary conversation ID for key derivation, then use it
+    const tempId = crypto.randomUUID();
+    const encMeta = await encryptGroupMeta(tempId, { name: groupName });
     const convRes = await api.createConversation({
       type: 'group',
       member_ids: selectedMembers.map(m => m.userId),
       name: groupName,
+      encrypted_meta: encMeta,
     });
     if (convRes.ok) {
       overlay.remove();

@@ -7,6 +7,41 @@ import UniformTypeIdentifiers
 import Speech
 import CommonCrypto
 
+// MARK: - Profile & Group Meta Encryption
+// Key: SHA-256(identityKey + ":profile:encrypt") → AES-GCM-256
+// Format: base64(iv) + "." + base64(ciphertext+tag)
+
+func encryptProfileField(_ value: String) -> String {
+    guard !value.isEmpty else { return value }
+    let idKey = UserDefaults.standard.string(forKey: "identity_pub") ?? "default"
+    let raw = (idKey + ":profile:encrypt").data(using: .utf8)!
+    let hash = SHA256.hash(data: raw)
+    let key = SymmetricKey(data: hash)
+    let nonce = AES.GCM.Nonce()
+    guard let sealed = try? AES.GCM.seal(value.data(using: .utf8)!, using: key, nonce: nonce) else { return value }
+    return Data(nonce).base64EncodedString() + "." + (sealed.ciphertext + sealed.tag).base64EncodedString()
+}
+
+func decryptProfileField(_ value: String) -> String {
+    guard value.contains(".") else { return value }
+    let parts = value.split(separator: ".", maxSplits: 1)
+    guard parts.count == 2,
+          let ivData = Data(base64Encoded: String(parts[0])),
+          let ctData = Data(base64Encoded: String(parts[1])),
+          ivData.count == 12, ctData.count >= 16 else { return value }
+    let idKey = UserDefaults.standard.string(forKey: "identity_pub") ?? "default"
+    let raw = (idKey + ":profile:encrypt").data(using: .utf8)!
+    let hash = SHA256.hash(data: raw)
+    let key = SymmetricKey(data: hash)
+    guard let nonce = try? AES.GCM.Nonce(data: ivData) else { return value }
+    let ciphertext = ctData.prefix(ctData.count - 16)
+    let tag = ctData.suffix(16)
+    guard let box = try? AES.GCM.SealedBox(nonce: nonce, ciphertext: ciphertext, tag: tag),
+          let plain = try? AES.GCM.open(box, using: key),
+          let result = String(data: plain, encoding: .utf8) else { return value }
+    return result
+}
+
 // MARK: - Data Models
 
 struct ChatConversation: Identifiable {
@@ -1594,20 +1629,60 @@ struct ConversationView: View {
     private func sendTypingIndicator() {
         guard let task = wsTask, Date().timeIntervalSince(lastTypingSent) >= 3 else { return }
         lastTypingSent = Date()
-        let msg: [String: Any] = ["type": "typing", "payload": ["fromUserId": userId, "isTyping": true]]
-        if let data = try? JSONSerialization.data(withJSONObject: msg),
-           let str = String(data: data, encoding: .utf8) {
-            task.send(.string(str)) { _ in }
+        if let enc = encryptMeta(["isTyping": true]) {
+            let msg: [String: Any] = ["type": "typing", "payload": ["e": enc]]
+            if let data = try? JSONSerialization.data(withJSONObject: msg),
+               let str = String(data: data, encoding: .utf8) {
+                task.send(.string(str)) { _ in }
+            }
         }
     }
 
     private func sendReadReceipt(messageId: String) {
         guard let task = wsTask else { return }
-        let msg: [String: Any] = ["type": "read_receipt", "payload": ["message_id": messageId, "fromUserId": userId]]
-        if let data = try? JSONSerialization.data(withJSONObject: msg),
-           let str = String(data: data, encoding: .utf8) {
-            task.send(.string(str)) { _ in }
+        if let enc = encryptMeta(["message_id": messageId]) {
+            let msg: [String: Any] = ["type": "read_receipt", "payload": ["e": enc]]
+            if let data = try? JSONSerialization.data(withJSONObject: msg),
+               let str = String(data: data, encoding: .utf8) {
+                task.send(.string(str)) { _ in }
+            }
         }
+    }
+
+    // MARK: - Encrypted metadata (typing, presence, read receipts)
+    // Key: SHA256(identityKey + ":meta:" + conversationId) → AES-GCM-256
+    // Format: base64(iv) + "." + base64(ciphertext+tag) — matches web encryptMeta()
+
+    private func getMetaKey() -> SymmetricKey {
+        let idKey = UserDefaults.standard.string(forKey: "identity_pub") ?? conversation.id
+        let raw = (idKey + ":meta:" + conversation.id).data(using: .utf8)!
+        let hash = SHA256.hash(data: raw)
+        return SymmetricKey(data: hash)
+    }
+
+    private func encryptMeta(_ dict: [String: Any]) -> String? {
+        guard let plain = try? JSONSerialization.data(withJSONObject: dict) else { return nil }
+        let key = getMetaKey()
+        let nonce = AES.GCM.Nonce()
+        guard let sealed = try? AES.GCM.seal(plain, using: key, nonce: nonce) else { return nil }
+        let ivData = Data(nonce)
+        let ctAndTag = sealed.ciphertext + sealed.tag
+        return ivData.base64EncodedString() + "." + ctAndTag.base64EncodedString()
+    }
+
+    private func decryptMeta(_ payload: String) -> [String: Any]? {
+        let parts = payload.split(separator: ".", maxSplits: 1)
+        guard parts.count == 2,
+              let ivData = Data(base64Encoded: String(parts[0])),
+              let ctData = Data(base64Encoded: String(parts[1])),
+              ivData.count == 12, ctData.count >= 16 else { return nil }
+        let key = getMetaKey()
+        guard let nonce = try? AES.GCM.Nonce(data: ivData) else { return nil }
+        let ciphertext = ctData.prefix(ctData.count - 16)
+        let tag = ctData.suffix(16)
+        guard let box = try? AES.GCM.SealedBox(nonce: nonce, ciphertext: ciphertext, tag: tag),
+              let plain = try? AES.GCM.open(box, using: key) else { return nil }
+        return try? JSONSerialization.jsonObject(with: plain) as? [String: Any]
     }
 
     private func loadSafetyNumber() {
@@ -2315,28 +2390,57 @@ struct ConversationView: View {
                                 CallManager.shared.handleP2PCandidate(payload: payload)
                             }
                         } else if type == "delivery_receipt" || type == "read_receipt" {
-                            let msgId = payload["message_id"] as? String ?? ""
-                            let newStatus = type == "read_receipt" ? "read" : "delivered"
-                            DispatchQueue.main.async {
-                                if let idx = messages.firstIndex(where: { $0.id == msgId }) {
-                                    messages[idx].status = newStatus
+                            // Try encrypted payload first
+                            if let enc = payload["e"] as? String, let meta = decryptMeta(enc) {
+                                let msgId = meta["message_id"] as? String ?? ""
+                                let newStatus = type == "read_receipt" ? "read" : "delivered"
+                                DispatchQueue.main.async {
+                                    if let idx = messages.firstIndex(where: { $0.id == msgId }) {
+                                        messages[idx].status = newStatus
+                                    }
+                                }
+                            } else {
+                                let msgId = payload["message_id"] as? String ?? ""
+                                let newStatus = type == "read_receipt" ? "read" : "delivered"
+                                DispatchQueue.main.async {
+                                    if let idx = messages.firstIndex(where: { $0.id == msgId }) {
+                                        messages[idx].status = newStatus
+                                    }
                                 }
                             }
                         } else if type == "typing" {
-                            let fromUser = payload["fromUserId"] as? String ?? ""
+                            // Try encrypted payload first, fallback to plaintext
+                            var isTyping = false
+                            var fromUser = payload["fromUserId"] as? String ?? ""
+                            if let enc = payload["e"] as? String, let meta = decryptMeta(enc) {
+                                isTyping = meta["isTyping"] as? Bool ?? false
+                                fromUser = "" // encrypted = from other party
+                            } else {
+                                fromUser = payload["fromUserId"] as? String ?? ""
+                                isTyping = payload["isTyping"] as? Bool ?? false
+                            }
                             if fromUser != userId {
                                 DispatchQueue.main.async {
-                                    withAnimation { isRemoteTyping = true }
-                                    DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
+                                    if isTyping {
+                                        withAnimation { isRemoteTyping = true }
+                                        DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
+                                            withAnimation { isRemoteTyping = false }
+                                        }
+                                    } else {
                                         withAnimation { isRemoteTyping = false }
                                     }
                                 }
                             }
                         } else if type == "presence" {
-                            let fromUser = payload["fromUserId"] as? String ?? ""
-                            let status = payload["status"] as? String ?? ""
-                            if fromUser != userId {
+                            if let enc = payload["e"] as? String, let meta = decryptMeta(enc) {
+                                let status = meta["status"] as? String ?? ""
                                 DispatchQueue.main.async { remoteOnlineStatus = status }
+                            } else {
+                                let fromUser = payload["fromUserId"] as? String ?? ""
+                                let status = payload["status"] as? String ?? ""
+                                if fromUser != userId {
+                                    DispatchQueue.main.async { remoteOnlineStatus = status }
+                                }
                             }
                         } else if type == "reaction" {
                             let msgId = payload["message_id"] as? String ?? ""
@@ -3549,7 +3653,8 @@ struct SettingsView: View {
                 guard !newName.isEmpty else { return }
                 displayName = newName
                 Task {
-                    _ = try? await APIClient.shared.postRaw("/me/settings", body: ["display_name": newName], method: "PATCH")
+                    let encrypted = encryptProfileField(newName)
+                    _ = try? await APIClient.shared.postRaw("/me/settings", body: ["display_name": encrypted], method: "PATCH")
                 }
             }
             Button("Cancel", role: .cancel) {}
@@ -3560,7 +3665,8 @@ struct SettingsView: View {
                 let text = String(editStatusText.trimmingCharacters(in: .whitespaces).prefix(140))
                 statusText = text
                 Task {
-                    _ = try? await APIClient.shared.postRaw("/me/settings", body: ["status_text": text], method: "PATCH")
+                    let encrypted = encryptProfileField(text)
+                    _ = try? await APIClient.shared.postRaw("/me/settings", body: ["status_text": encrypted], method: "PATCH")
                 }
             }
             Button("Clear") {
@@ -3984,8 +4090,10 @@ struct SettingsView: View {
             do {
                 let me = try await APIClient.shared.getMe()
                 username = me["username"] as? String ?? "unknown"
-                displayName = me["display_name"] as? String ?? username
-                statusText = me["status_text"] as? String ?? ""
+                let rawName = me["display_name"] as? String ?? username
+                displayName = decryptProfileField(rawName)
+                let rawStatus = me["status_text"] as? String ?? ""
+                statusText = decryptProfileField(rawStatus)
                 avatarUrl = me["avatar_url"] as? String
                 if let disc = me["discoverable"] as? Bool { discoverable = disc }
                 if let disc = me["discoverable"] as? Int { discoverable = disc != 0 }

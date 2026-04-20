@@ -193,6 +193,7 @@ export function createConversation(body: {
   type: 'direct' | 'group';
   member_ids: string[];
   name?: string;
+  encrypted_meta?: string;
 }) {
   return req<{ conversation_id: string }>('/messages/conversations', {
     method: 'POST',
@@ -528,6 +529,7 @@ export interface Conversation {
   id: string;
   type: 'direct' | 'group';
   name?: string;
+  encrypted_meta?: string;
   members: { user_id: string; username: string; display_name: string; avatar_url?: string; account_tier?: string }[];
   muted?: boolean;
   archived?: boolean;

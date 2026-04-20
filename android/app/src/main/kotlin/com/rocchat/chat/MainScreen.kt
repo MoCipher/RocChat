@@ -87,6 +87,85 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.text.SimpleDateFormat
 import java.util.*
+import java.security.MessageDigest
+import javax.crypto.Cipher
+import javax.crypto.spec.GCMParameterSpec
+import javax.crypto.spec.SecretKeySpec
+
+// ── Encrypted metadata helpers (typing, presence, read receipts) ──
+// Key: SHA256(identityKey + ":meta:" + conversationId) → AES-GCM-256
+// Format: base64(iv) + "." + base64(ciphertext+tag) — matches web/iOS encryptMeta()
+
+private fun getMetaKeyBytes(context: Context, conversationId: String): ByteArray {
+    val prefs = context.getSharedPreferences("rocchat", Context.MODE_PRIVATE)
+    val idKey = prefs.getString("identity_pub", conversationId) ?: conversationId
+    val raw = "$idKey:meta:$conversationId".toByteArray(Charsets.UTF_8)
+    return MessageDigest.getInstance("SHA-256").digest(raw)
+}
+
+private fun encryptMeta(context: Context, conversationId: String, data: JSONObject): String? {
+    return try {
+        val keyBytes = getMetaKeyBytes(context, conversationId)
+        val key = SecretKeySpec(keyBytes, "AES")
+        val iv = ByteArray(12).also { java.security.SecureRandom().nextBytes(it) }
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(Cipher.ENCRYPT_MODE, key, GCMParameterSpec(128, iv))
+        val ct = cipher.doFinal(data.toString().toByteArray(Charsets.UTF_8))
+        android.util.Base64.encodeToString(iv, android.util.Base64.NO_WRAP) + "." +
+                android.util.Base64.encodeToString(ct, android.util.Base64.NO_WRAP)
+    } catch (_: Exception) { null }
+}
+
+private fun decryptMeta(context: Context, conversationId: String, payload: String): JSONObject? {
+    return try {
+        val parts = payload.split(".", limit = 2)
+        if (parts.size != 2) return null
+        val iv = android.util.Base64.decode(parts[0], android.util.Base64.DEFAULT)
+        val ct = android.util.Base64.decode(parts[1], android.util.Base64.DEFAULT)
+        if (iv.size != 12) return null
+        val keyBytes = getMetaKeyBytes(context, conversationId)
+        val key = SecretKeySpec(keyBytes, "AES")
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(128, iv))
+        val plain = cipher.doFinal(ct)
+        JSONObject(String(plain, Charsets.UTF_8))
+    } catch (_: Exception) { null }
+}
+
+// Profile field encryption: SHA256(identityKey + ":profile:encrypt") → AES-GCM-256
+private fun encryptProfileField(context: Context, value: String): String {
+    if (value.isEmpty()) return value
+    return try {
+        val prefs = context.getSharedPreferences("rocchat", Context.MODE_PRIVATE)
+        val idKey = prefs.getString("identity_pub", "default") ?: "default"
+        val keyBytes = MessageDigest.getInstance("SHA-256").digest("$idKey:profile:encrypt".toByteArray(Charsets.UTF_8))
+        val key = SecretKeySpec(keyBytes, "AES")
+        val iv = ByteArray(12).also { java.security.SecureRandom().nextBytes(it) }
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(Cipher.ENCRYPT_MODE, key, GCMParameterSpec(128, iv))
+        val ct = cipher.doFinal(value.toByteArray(Charsets.UTF_8))
+        android.util.Base64.encodeToString(iv, android.util.Base64.NO_WRAP) + "." +
+                android.util.Base64.encodeToString(ct, android.util.Base64.NO_WRAP)
+    } catch (_: Exception) { value }
+}
+
+private fun decryptProfileField(context: Context, value: String): String {
+    if (!value.contains(".")) return value
+    return try {
+        val parts = value.split(".", limit = 2)
+        if (parts.size != 2) return value
+        val iv = android.util.Base64.decode(parts[0], android.util.Base64.DEFAULT)
+        val ct = android.util.Base64.decode(parts[1], android.util.Base64.DEFAULT)
+        if (iv.size != 12 || ct.size < 16) return value
+        val prefs = context.getSharedPreferences("rocchat", Context.MODE_PRIVATE)
+        val idKey = prefs.getString("identity_pub", "default") ?: "default"
+        val keyBytes = MessageDigest.getInstance("SHA-256").digest("$idKey:profile:encrypt".toByteArray(Charsets.UTF_8))
+        val key = SecretKeySpec(keyBytes, "AES")
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(128, iv))
+        String(cipher.doFinal(ct), Charsets.UTF_8)
+    } catch (_: Exception) { value }
+}
 
 // ── Main Screen with 3 Tabs ──
 
@@ -875,16 +954,18 @@ fun ConversationScreen(conversationId: String, conversationName: String, recipie
                     msg.copy(ciphertext = displayText)
                 } else msg
             }
-            // Send read receipt for last message from the other user
+            // Send encrypted read receipt for last message from the other user
             val lastFromOther = messages.lastOrNull { it.senderId != userId }
             if (lastFromOther != null) {
-                ws?.send(JSONObject().apply {
-                    put("type", "read_receipt")
-                    put("payload", JSONObject().apply {
-                        put("message_id", lastFromOther.id)
-                        put("fromUserId", userId)
-                    })
-                }.toString())
+                val enc = encryptMeta(context, conversationId, JSONObject().apply {
+                    put("message_id", lastFromOther.id)
+                })
+                if (enc != null) {
+                    ws?.send(JSONObject().apply {
+                        put("type", "read_receipt")
+                        put("payload", JSONObject().apply { put("e", enc) })
+                    }.toString())
+                }
             }
         } catch (_: Exception) {}
     }
@@ -933,40 +1014,65 @@ fun ConversationScreen(conversationId: String, conversationName: String, recipie
                                     createdAt = payload.optString("created_at", Date().toString()),
                                 )
                                 messages = messages + newMsg
-                                // Send delivery receipt back
+                                // Send encrypted delivery receipt back
                                 if (newMsg.senderId != userId) {
-                                    val receipt = JSONObject().apply {
-                                        put("type", "delivery_receipt")
-                                        put("payload", JSONObject().apply {
-                                            put("message_id", newMsg.id)
-                                            put("fromUserId", userId)
-                                        })
+                                    val enc = encryptMeta(context, conversationId, JSONObject().apply {
+                                        put("message_id", newMsg.id)
+                                    })
+                                    if (enc != null) {
+                                        ws?.send(JSONObject().apply {
+                                            put("type", "delivery_receipt")
+                                            put("payload", JSONObject().apply { put("e", enc) })
+                                        }.toString())
                                     }
-                                    ws?.send(receipt.toString())
                                 }
                             }
                             "delivery_receipt", "read_receipt" -> {
                                 val payload = data.getJSONObject("payload")
-                                val msgId = payload.optString("message_id")
+                                val enc = payload.optString("e", "")
+                                val msgId = if (enc.isNotEmpty()) {
+                                    decryptMeta(context, conversationId, enc)?.optString("message_id") ?: ""
+                                } else payload.optString("message_id")
                                 val newStatus = if (data.optString("type") == "read_receipt") "read" else "delivered"
-                                messages = messages.map { if (it.id == msgId) it.copy(status = newStatus) else it }
+                                if (msgId.isNotEmpty()) {
+                                    messages = messages.map { if (it.id == msgId) it.copy(status = newStatus) else it }
+                                }
                             }
                             "typing" -> {
                                 val payload = data.getJSONObject("payload")
-                                val fromUser = payload.optString("fromUserId")
-                                if (fromUser != userId) {
+                                val enc = payload.optString("e", "")
+                                val isTyping: Boolean
+                                val fromUser: String
+                                if (enc.isNotEmpty()) {
+                                    val meta = decryptMeta(context, conversationId, enc)
+                                    isTyping = meta?.optBoolean("isTyping", false) ?: false
+                                    fromUser = "" // encrypted = from other party
+                                } else {
+                                    fromUser = payload.optString("fromUserId")
+                                    isTyping = payload.optBoolean("isTyping", false)
+                                }
+                                if (fromUser != userId && isTyping) {
                                     isRemoteTyping = true
                                     scope.launch {
                                         delay(4000)
                                         isRemoteTyping = false
                                     }
+                                } else if (!isTyping) {
+                                    isRemoteTyping = false
                                 }
                             }
                             "presence" -> {
                                 val payload = data.getJSONObject("payload")
-                                val fromUser = payload.optString("fromUserId")
-                                val status = payload.optString("status")
-                                if (fromUser != userId) remoteOnlineStatus = status
+                                val enc = payload.optString("e", "")
+                                if (enc.isNotEmpty()) {
+                                    val meta = decryptMeta(context, conversationId, enc)
+                                    val status = meta?.optString("status") ?: ""
+                                    if (status.isNotEmpty()) remoteOnlineStatus = status
+                                } else {
+                                    val fromUser = payload.optString("fromUserId")
+                                    val status = payload.optString("status")
+                                    if (fromUser != userId) remoteOnlineStatus = status
+                                }
                             }
                             "reaction" -> {
                                 val payload = data.getJSONObject("payload")
@@ -1435,17 +1541,19 @@ fun ConversationScreen(conversationId: String, conversationName: String, recipie
                     value = inputText,
                     onValueChange = { newVal ->
                         inputText = newVal
-                        // Send typing indicator (throttled to 3s)
+                        // Send encrypted typing indicator (throttled to 3s)
                         val now = System.currentTimeMillis()
                         if (now - lastTypingSent > 3000) {
                             lastTypingSent = now
-                            ws?.send(JSONObject().apply {
-                                put("type", "typing")
-                                put("payload", JSONObject().apply {
-                                    put("fromUserId", userId)
-                                    put("isTyping", true)
-                                })
-                            }.toString())
+                            val enc = encryptMeta(context, conversationId, JSONObject().apply {
+                                put("isTyping", true)
+                            })
+                            if (enc != null) {
+                                ws?.send(JSONObject().apply {
+                                    put("type", "typing")
+                                    put("payload", JSONObject().apply { put("e", enc) })
+                                }.toString())
+                            }
                         }
                     },
                     modifier = Modifier.weight(1f),
@@ -2607,8 +2715,8 @@ fun SettingsTab(onLogout: () -> Unit) {
         try {
             val me = APIClient.getMe()
             username = me.optString("username", "unknown")
-            displayName = me.optString("display_name", username)
-            statusText = me.optString("status_text", "")
+            displayName = decryptProfileField(context, me.optString("display_name", username))
+            statusText = decryptProfileField(context, me.optString("status_text", ""))
             avatarUrl = me.optString("avatar_url", null)
             discoverable = me.optBoolean("discoverable", true)
             if (me.has("show_read_receipts")) readReceipts = me.optInt("show_read_receipts", 1) != 0
@@ -3583,7 +3691,7 @@ fun SettingsTab(onLogout: () -> Unit) {
                         val newName = editNameText.trim()
                         if (newName.isNotEmpty()) {
                             displayName = newName
-                            scope.launch { try { APIClient.updateSettings(mapOf("display_name" to newName)) } catch (_: Exception) {} }
+                            scope.launch { try { APIClient.updateSettings(mapOf("display_name" to encryptProfileField(context, newName))) } catch (_: Exception) {} }
                         }
                         showEditName = false
                     }) { Text("Save") }
@@ -3604,7 +3712,7 @@ fun SettingsTab(onLogout: () -> Unit) {
                     TextButton(onClick = {
                         val text = editStatusText.trim().take(140)
                         statusText = text
-                        scope.launch { try { APIClient.updateSettings(mapOf("status_text" to text)) } catch (_: Exception) {} }
+                        scope.launch { try { APIClient.updateSettings(mapOf("status_text" to encryptProfileField(context, text))) } catch (_: Exception) {} }
                         showStatusDialog = false
                     }) { Text("Save") }
                 },

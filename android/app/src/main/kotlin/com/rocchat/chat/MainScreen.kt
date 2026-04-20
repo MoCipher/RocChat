@@ -2703,6 +2703,8 @@ fun SettingsTab(onLogout: () -> Unit) {
                     try {
                         val res = APIClient.post("/devices/verify/initiate", JSONObject())
                         verifyCode = res.optString("code", "")
+                        // Poll for key transfer requests from new device
+                        pollForKeyTransferRequests(scope, context)
                     } catch (_: Exception) {}
                 }
             },
@@ -2736,8 +2738,10 @@ fun SettingsTab(onLogout: () -> Unit) {
                         try {
                             val res = APIClient.post("/devices/verify/confirm", JSONObject().apply { put("code", verifyInput) })
                             if (res.optBoolean("verified", false)) {
-                                linkMessage = "✓ Device verified"
+                                linkMessage = "✓ Verified — requesting keys..."
                                 verifyInput = ""
+                                // Request key transfer as new device
+                                requestKeyTransferAsNewDevice(scope, context) { msg -> linkMessage = msg }
                             } else {
                                 linkMessage = "Invalid or expired code"
                             }
@@ -3038,15 +3042,28 @@ fun SettingsTab(onLogout: () -> Unit) {
             leadingContent = { Icon(Icons.Default.Key, contentDescription = null, tint = RocColors.RocGold) },
             modifier = Modifier.clickable {
                 if (recoveryPhrase.isEmpty()) {
-                    val words = listOf("abandon","ability","able","about","above","absent","absorb","abstract","absurd","abuse",
-                        "access","accident","account","accuse","achieve","acid","across","act","action","actor",
-                        "address","adjust","admit","adult","advance","advice","afford","again","age","agent",
-                        "agree","ahead","aim","air","alert","alien","all","alley","allow","almost",
-                        "alone","alpha","already","also","alter","always","amount","ancient","anger","angle",
-                        "animal","answer","any","apart","april","area","arena","argue","arm","armor")
-                    val rng = java.security.SecureRandom()
-                    recoveryPhrase = (1..12).map { words[rng.nextInt(words.size)] }.joinToString(" ")
-                    context.getSharedPreferences("rocchat", Context.MODE_PRIVATE).edit().putString("recovery_phrase", recoveryPhrase).apply()
+                    val result = com.rocchat.crypto.BIP39.generate()
+                    recoveryPhrase = result.mnemonic
+                    // Derive recovery key and encrypt identity keys for server backup
+                    val recoveryKey = com.rocchat.crypto.BIP39.deriveRecoveryKey(result.entropy)
+                    val prefs = context.getSharedPreferences("rocchat", Context.MODE_PRIVATE)
+                    val identityPriv = prefs.getString("identity_key_private", null)
+                    if (identityPriv != null) {
+                        try {
+                            val bundle = org.json.JSONObject().apply {
+                                put("identityPrivate", identityPriv)
+                            }
+                            val encrypted = com.rocchat.crypto.BIP39.encryptForRecovery(
+                                bundle.toString().toByteArray(), recoveryKey
+                            )
+                            val blob = android.util.Base64.encodeToString(encrypted, android.util.Base64.NO_WRAP)
+                            // Upload recovery vault blob
+                            kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+                                try { apiClient.post("/recovery/vault", mapOf("blob" to blob)) } catch (_: Exception) {}
+                            }
+                        } catch (_: Exception) {}
+                    }
+                    prefs.edit().putString("recovery_phrase", recoveryPhrase).apply()
                 }
                 showRecoveryPhrase = true
             },
@@ -4226,4 +4243,166 @@ fun SupportersSheet(onDismiss: () -> Unit) {
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
     )
+}
+
+// ── Key Transfer Functions ───────────────────────────────────────────
+
+private fun pollForKeyTransferRequests(scope: kotlinx.coroutines.CoroutineScope, context: android.content.Context) {
+    scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+        repeat(30) {
+            kotlinx.coroutines.delay(2000)
+            try {
+                val res = APIClient.get("/devices/key-transfer/pending")
+                val requests = res.optJSONArray("requests") ?: return@repeat
+                if (requests.length() == 0) return@repeat
+                val first = requests.getJSONObject(0)
+                val requestId = first.getString("requestId")
+                val remoteEphPub = first.getString("ephemeralPub")
+
+                // Generate ephemeral X25519 key pair
+                val kpg = java.security.KeyPairGenerator.getInstance("X25519")
+                val myEphemeral = kpg.generateKeyPair()
+                val myEphPubRaw = (myEphemeral.public as java.security.interfaces.XECPublicKey).let { pub ->
+                    val u = pub.u
+                    val bytes = u.toByteArray()
+                    val result = ByteArray(32)
+                    for (i in bytes.indices.reversed()) {
+                        val ri = bytes.size - 1 - i
+                        if (ri < 32) result[ri] = bytes[i]
+                    }
+                    result
+                }
+                val myEphPubB64 = android.util.Base64.encodeToString(myEphPubRaw, android.util.Base64.NO_WRAP)
+
+                // ECDH with remote ephemeral
+                val remotePubData = android.util.Base64.decode(remoteEphPub, android.util.Base64.NO_WRAP)
+                val remoteKeySpec = java.security.spec.XECPublicKeySpec(
+                    java.security.spec.NamedParameterSpec.X25519,
+                    java.math.BigInteger(1, remotePubData.reversedArray())
+                )
+                val remotePubKey = java.security.KeyFactory.getInstance("X25519").generatePublic(remoteKeySpec)
+                val ka = javax.crypto.KeyAgreement.getInstance("X25519")
+                ka.init(myEphemeral.private)
+                ka.doPhase(remotePubKey, true)
+                val sharedSecret = ka.generateSecret()
+
+                // HKDF → AES key
+                val hkdfKey = run {
+                    val mac = javax.crypto.Mac.getInstance("HmacSHA256")
+                    mac.init(javax.crypto.spec.SecretKeySpec(ByteArray(32), "HmacSHA256"))
+                    val prk = mac.doFinal(sharedSecret)
+                    mac.init(javax.crypto.spec.SecretKeySpec(prk, "HmacSHA256"))
+                    mac.update("rocchat-key-transfer".toByteArray())
+                    mac.update(byteArrayOf(1))
+                    mac.doFinal().copyOfRange(0, 32)
+                }
+
+                // Gather local keys
+                val prefs = context.getSharedPreferences("rocchat", android.content.Context.MODE_PRIVATE)
+                val keyBundle = org.json.JSONObject().apply {
+                    put("identityPrivate", prefs.getString("identity_key_private", "") ?: "")
+                    put("identityPublic", prefs.getString("identity_key_public", "") ?: "")
+                }
+
+                // Encrypt with AES-GCM
+                val iv = ByteArray(12).also { java.security.SecureRandom().nextBytes(it) }
+                val cipher = javax.crypto.Cipher.getInstance("AES/GCM/NoPadding")
+                cipher.init(javax.crypto.Cipher.ENCRYPT_MODE, javax.crypto.spec.SecretKeySpec(hkdfKey, "AES"), javax.crypto.spec.GCMParameterSpec(128, iv))
+                val ct = cipher.doFinal(keyBundle.toString().toByteArray())
+                val combined = iv + ct
+                val encryptedBundle = android.util.Base64.encodeToString(combined, android.util.Base64.NO_WRAP)
+
+                APIClient.post("/devices/key-transfer/bundle", org.json.JSONObject().apply {
+                    put("requestId", requestId)
+                    put("encryptedBundle", encryptedBundle)
+                    put("ephemeralPub", myEphPubB64)
+                })
+                return@launch
+            } catch (_: Exception) {}
+        }
+    }
+}
+
+private fun requestKeyTransferAsNewDevice(
+    scope: kotlinx.coroutines.CoroutineScope,
+    context: android.content.Context,
+    onStatus: (String) -> Unit
+) {
+    scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+        try {
+            val kpg = java.security.KeyPairGenerator.getInstance("X25519")
+            val myEphemeral = kpg.generateKeyPair()
+            val myEphPubRaw = (myEphemeral.public as java.security.interfaces.XECPublicKey).let { pub ->
+                val u = pub.u
+                val bytes = u.toByteArray()
+                val result = ByteArray(32)
+                for (i in bytes.indices.reversed()) {
+                    val ri = bytes.size - 1 - i
+                    if (ri < 32) result[ri] = bytes[i]
+                }
+                result
+            }
+            val myEphPubB64 = android.util.Base64.encodeToString(myEphPubRaw, android.util.Base64.NO_WRAP)
+
+            val reqRes = APIClient.post("/devices/key-transfer/request", org.json.JSONObject().apply {
+                put("ephemeralPub", myEphPubB64)
+            })
+            val requestId = reqRes.optString("requestId", "")
+            if (requestId.isEmpty()) {
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) { onStatus("Key transfer request failed") }
+                return@launch
+            }
+
+            repeat(30) {
+                kotlinx.coroutines.delay(2000)
+                try {
+                    val res = APIClient.get("/devices/key-transfer/bundle?requestId=$requestId")
+                    if (res.optBoolean("ready", false)) {
+                        val encryptedBundle = res.getString("encryptedBundle")
+                        val remoteEphPub = res.getString("ephemeralPub")
+
+                        val remotePubData = android.util.Base64.decode(remoteEphPub, android.util.Base64.NO_WRAP)
+                        val remoteKeySpec = java.security.spec.XECPublicKeySpec(
+                            java.security.spec.NamedParameterSpec.X25519,
+                            java.math.BigInteger(1, remotePubData.reversedArray())
+                        )
+                        val remotePubKey = java.security.KeyFactory.getInstance("X25519").generatePublic(remoteKeySpec)
+                        val ka = javax.crypto.KeyAgreement.getInstance("X25519")
+                        ka.init(myEphemeral.private)
+                        ka.doPhase(remotePubKey, true)
+                        val sharedSecret = ka.generateSecret()
+
+                        val hkdfKey = run {
+                            val mac = javax.crypto.Mac.getInstance("HmacSHA256")
+                            mac.init(javax.crypto.spec.SecretKeySpec(ByteArray(32), "HmacSHA256"))
+                            val prk = mac.doFinal(sharedSecret)
+                            mac.init(javax.crypto.spec.SecretKeySpec(prk, "HmacSHA256"))
+                            mac.update("rocchat-key-transfer".toByteArray())
+                            mac.update(byteArrayOf(1))
+                            mac.doFinal().copyOfRange(0, 32)
+                        }
+
+                        val combinedBytes = android.util.Base64.decode(encryptedBundle, android.util.Base64.NO_WRAP)
+                        val iv = combinedBytes.copyOfRange(0, 12)
+                        val ct = combinedBytes.copyOfRange(12, combinedBytes.size)
+                        val cipher = javax.crypto.Cipher.getInstance("AES/GCM/NoPadding")
+                        cipher.init(javax.crypto.Cipher.DECRYPT_MODE, javax.crypto.spec.SecretKeySpec(hkdfKey, "AES"), javax.crypto.spec.GCMParameterSpec(128, iv))
+                        val pt = cipher.doFinal(ct)
+                        val keyBundle = org.json.JSONObject(String(pt))
+
+                        val prefs = context.getSharedPreferences("rocchat", android.content.Context.MODE_PRIVATE).edit()
+                        keyBundle.optString("identityPrivate", "").takeIf { it.isNotEmpty() }?.let { prefs.putString("identity_key_private", it) }
+                        keyBundle.optString("identityPublic", "").takeIf { it.isNotEmpty() }?.let { prefs.putString("identity_key_public", it) }
+                        prefs.apply()
+
+                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) { onStatus("✓ Keys received — encryption ready") }
+                        return@launch
+                    }
+                } catch (_: Exception) {}
+            }
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) { onStatus("Key transfer timed out") }
+        } catch (_: Exception) {
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) { onStatus("Key transfer failed") }
+        }
+    }
 }

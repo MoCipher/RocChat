@@ -507,7 +507,7 @@ export function renderSettings(container: HTMLElement) {
   loadProfile();
   loadDevices();
 
-  // Device verification — generate code
+  // Device verification — generate code (SOURCE device)
   document.getElementById('btn-device-verify')?.addEventListener('click', async () => {
     const btn = document.getElementById('btn-device-verify') as HTMLButtonElement;
     btn.disabled = true;
@@ -537,13 +537,28 @@ export function renderSettings(container: HTMLElement) {
           updateTimer();
           if (remaining < 0) clearInterval(interval);
         }, 1000);
+
+        // Poll for pending key transfer requests from new devices
+        const pollInterval = setInterval(async () => {
+          if (remaining <= 0) { clearInterval(pollInterval); return; }
+          try {
+            const pending = await api.getPendingKeyTransfers();
+            if (pending.ok && pending.data.requests.length > 0) {
+              clearInterval(pollInterval);
+              for (const req of pending.data.requests) {
+                await handleKeyTransferAsSource(req.requestId, req.ephemeralPub);
+              }
+              showToast('Keys transferred to new device!');
+            }
+          } catch { /* retry */ }
+        }, 2000);
       }
     } catch { /* */ }
     btn.disabled = false;
     btn.textContent = 'Generate Code';
   });
 
-  // Device verification — confirm code
+  // Device verification — confirm code (NEW device)
   document.getElementById('btn-device-confirm')?.addEventListener('click', async () => {
     const input = document.getElementById('device-verify-input') as HTMLInputElement;
     const code = input.value.replace(/\s/g, '');
@@ -551,8 +566,10 @@ export function renderSettings(container: HTMLElement) {
     try {
       const res = await api.confirmDeviceVerification(code);
       if (res.ok && res.data.verified) {
-        showToast('Device verified successfully!');
+        showToast('Device verified! Requesting key transfer...');
         input.value = '';
+        // Start key transfer as new device
+        await requestKeyTransferAsNewDevice();
       } else {
         showToast('Invalid or expired code', 'error');
       }
@@ -1932,3 +1949,137 @@ async function loadDevices() {
 }
 
 function escHtml(s: string): string { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+// ── Key transfer: Source device (has keys, sends them) ──────────────
+async function handleKeyTransferAsSource(requestId: string, remoteEphemeralPub: string) {
+  try {
+    // Generate our ephemeral X25519 key pair
+    const ephemeral = await crypto.subtle.generateKey({ name: 'X25519' } as any, true, ['deriveBits']) as CryptoKeyPair;
+    const ephPubRaw = await crypto.subtle.exportKey('raw', ephemeral.publicKey);
+    const ephPubB64 = btoa(String.fromCharCode(...new Uint8Array(ephPubRaw)));
+
+    // Import remote ephemeral public key
+    const remotePubBytes = Uint8Array.from(atob(remoteEphemeralPub), (c) => c.charCodeAt(0));
+    const remotePubKey = await crypto.subtle.importKey('raw', remotePubBytes, { name: 'X25519' } as any, false, []);
+
+    // ECDH → shared secret → HKDF → AES key
+    const sharedBits = await crypto.subtle.deriveBits(
+      { name: 'X25519', public: remotePubKey } as any,
+      ephemeral.privateKey,
+      256,
+    );
+    const aesKey = await crypto.subtle.importKey('raw', sharedBits, 'HKDF', false, ['deriveKey']);
+    const encKey = await crypto.subtle.deriveKey(
+      { name: 'HKDF', hash: 'SHA-256', salt: new Uint8Array(0), info: new TextEncoder().encode('rocchat-key-transfer') },
+      aesKey,
+      { name: 'AES-GCM', length: 256 },
+      false,
+      ['encrypt'],
+    );
+
+    // Gather local key material
+    const { getSecretString } = await import('../crypto/secure-store.js');
+    const identityPriv = (await getSecretString('rocchat_identity_priv')) || localStorage.getItem('rocchat_identity_priv') || '';
+    const identityPub = localStorage.getItem('rocchat_identity_pub') || '';
+    const encryptedKeys = (await getSecretString('rocchat_keys')) || '';
+
+    const keyBundle = JSON.stringify({
+      identityPriv,
+      identityPub,
+      encryptedKeys,
+    });
+
+    // Encrypt with ECDH-derived key
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, encKey, new TextEncoder().encode(keyBundle));
+    const combined = new Uint8Array(12 + ct.byteLength);
+    combined.set(iv, 0);
+    combined.set(new Uint8Array(ct), 12);
+    const encryptedBundle = btoa(String.fromCharCode(...combined));
+
+    // Upload to server
+    await api.uploadKeyBundle(requestId, encryptedBundle, ephPubB64);
+  } catch (err) {
+    console.error('Key transfer (source) failed:', err);
+    showToast('Key transfer failed', 'error');
+  }
+}
+
+// ── Key transfer: New device (requests keys, receives them) ─────────
+async function requestKeyTransferAsNewDevice() {
+  try {
+    // Generate ephemeral X25519 key pair
+    const ephemeral = await crypto.subtle.generateKey({ name: 'X25519' } as any, true, ['deriveBits']) as CryptoKeyPair;
+    const ephPubRaw = await crypto.subtle.exportKey('raw', ephemeral.publicKey);
+    const ephPubB64 = btoa(String.fromCharCode(...new Uint8Array(ephPubRaw)));
+
+    // Send request
+    const res = await api.requestKeyTransfer(ephPubB64);
+    if (!res.ok) { showToast('Key transfer request failed', 'error'); return; }
+    const { requestId } = res.data;
+
+    showToast('Waiting for source device to approve...');
+
+    // Poll for bundle (up to 60 seconds)
+    let attempts = 0;
+    const pollTimer = setInterval(async () => {
+      attempts++;
+      if (attempts > 30) {
+        clearInterval(pollTimer);
+        showToast('Key transfer timed out', 'error');
+        return;
+      }
+      try {
+        const bundle = await api.fetchKeyBundle(requestId);
+        if (bundle.ok && bundle.data.ready && bundle.data.encryptedBundle && bundle.data.ephemeralPub) {
+          clearInterval(pollTimer);
+          await receiveKeyBundle(ephemeral.privateKey, bundle.data.ephemeralPub, bundle.data.encryptedBundle);
+        }
+      } catch { /* retry */ }
+    }, 2000);
+  } catch (err) {
+    console.error('Key transfer (new device) failed:', err);
+    showToast('Key transfer failed', 'error');
+  }
+}
+
+async function receiveKeyBundle(myPrivateKey: CryptoKey, remoteEphPubB64: string, encryptedBundleB64: string) {
+  try {
+    // Import remote ephemeral public key
+    const remotePubBytes = Uint8Array.from(atob(remoteEphPubB64), (c) => c.charCodeAt(0));
+    const remotePubKey = await crypto.subtle.importKey('raw', remotePubBytes, { name: 'X25519' } as any, false, []);
+
+    // ECDH → shared secret → HKDF → AES key
+    const sharedBits = await crypto.subtle.deriveBits(
+      { name: 'X25519', public: remotePubKey } as any,
+      myPrivateKey,
+      256,
+    );
+    const aesKey = await crypto.subtle.importKey('raw', sharedBits, 'HKDF', false, ['deriveKey']);
+    const decKey = await crypto.subtle.deriveKey(
+      { name: 'HKDF', hash: 'SHA-256', salt: new Uint8Array(0), info: new TextEncoder().encode('rocchat-key-transfer') },
+      aesKey,
+      { name: 'AES-GCM', length: 256 },
+      false,
+      ['decrypt'],
+    );
+
+    // Decrypt
+    const combined = Uint8Array.from(atob(encryptedBundleB64), (c) => c.charCodeAt(0));
+    const iv = combined.slice(0, 12);
+    const ct = combined.slice(12);
+    const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, decKey, ct);
+    const keyBundle = JSON.parse(new TextDecoder().decode(pt));
+
+    // Store received keys
+    const { putSecretString } = await import('../crypto/secure-store.js');
+    if (keyBundle.identityPriv) await putSecretString('rocchat_identity_priv', keyBundle.identityPriv);
+    if (keyBundle.identityPub) localStorage.setItem('rocchat_identity_pub', keyBundle.identityPub);
+    if (keyBundle.encryptedKeys) await putSecretString('rocchat_keys', keyBundle.encryptedKeys);
+
+    showToast('Keys received! Encryption ready.');
+  } catch (err) {
+    console.error('Key bundle decryption failed:', err);
+    showToast('Failed to decrypt key bundle', 'error');
+  }
+}

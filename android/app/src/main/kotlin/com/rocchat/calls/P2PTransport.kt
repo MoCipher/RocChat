@@ -45,6 +45,9 @@ interface P2PTransportDelegate {
 }
 
 class P2PTransport(private val delegate: P2PTransportDelegate) {
+    /** When used in a group call mesh, identifies which remote peer this transport belongs to. */
+    var groupPeerUserId: String? = null
+
     companion object {
         val stunServers = listOf(
             "stun.stunprotocol.org" to 3478,

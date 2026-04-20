@@ -526,6 +526,94 @@ export default {
         return withCors(jsonResponse({ ok: true, verified: true, source_device_id: data.deviceId }));
       }
 
+      // ── Recovery vault ─────────────────────────────────────────────
+      // Upload encrypted key bundle (encrypted with BIP39 recovery key)
+      if (path === '/api/recovery/vault' && request.method === 'POST') {
+        const body = (await request.json()) as { blob?: string };
+        if (!body.blob) return withCors(errorResponse('Missing blob', 400));
+        await env.KV.put(`recovery_vault:${session.userId}`, body.blob);
+        return withCors(jsonResponse({ ok: true }));
+      }
+
+      // Download recovery vault blob (for mnemonic-based recovery)
+      if (path === '/api/recovery/vault' && request.method === 'GET') {
+        const blob = await env.KV.get(`recovery_vault:${session.userId}`);
+        if (!blob) return withCors(errorResponse('No recovery vault found', 404));
+        return withCors(jsonResponse({ blob }));
+      }
+
+      // ── Device key transfer ────────────────────────────────────────
+      // New device requests key transfer (posts ephemeral public key)
+      if (path === '/api/devices/key-transfer/request' && request.method === 'POST') {
+        const body = (await request.json()) as { ephemeralPub?: string; deviceId?: string };
+        if (!body.ephemeralPub) return withCors(errorResponse('Missing ephemeralPub', 400));
+        const requestId = crypto.randomUUID();
+        await env.KV.put(
+          `key_transfer_req:${session.userId}:${requestId}`,
+          JSON.stringify({
+            requestId,
+            deviceId: body.deviceId || session.deviceId,
+            ephemeralPub: body.ephemeralPub,
+            createdAt: Date.now(),
+          }),
+          { expirationTtl: 300 },
+        );
+        // Also store a pointer so source device can find pending requests
+        const pendingList = JSON.parse((await env.KV.get(`key_transfer_pending:${session.userId}`)) || '[]');
+        pendingList.push(requestId);
+        await env.KV.put(`key_transfer_pending:${session.userId}`, JSON.stringify(pendingList), {
+          expirationTtl: 300,
+        });
+        return withCors(jsonResponse({ ok: true, requestId }));
+      }
+
+      // Source device polls for pending key transfer requests
+      if (path === '/api/devices/key-transfer/pending' && request.method === 'GET') {
+        const pendingList = JSON.parse(
+          (await env.KV.get(`key_transfer_pending:${session.userId}`)) || '[]',
+        );
+        const requests = [];
+        for (const reqId of pendingList) {
+          const data = await env.KV.get(`key_transfer_req:${session.userId}:${reqId}`);
+          if (data) requests.push(JSON.parse(data));
+        }
+        return withCors(jsonResponse({ requests }));
+      }
+
+      // Source device uploads encrypted key bundle for a specific request
+      if (path === '/api/devices/key-transfer/bundle' && request.method === 'POST') {
+        const body = (await request.json()) as {
+          requestId?: string;
+          encryptedBundle?: string;
+          ephemeralPub?: string;
+        };
+        if (!body.requestId || !body.encryptedBundle || !body.ephemeralPub) {
+          return withCors(errorResponse('Missing fields', 400));
+        }
+        await env.KV.put(
+          `key_transfer_bundle:${session.userId}:${body.requestId}`,
+          JSON.stringify({
+            encryptedBundle: body.encryptedBundle,
+            ephemeralPub: body.ephemeralPub,
+          }),
+          { expirationTtl: 300 },
+        );
+        return withCors(jsonResponse({ ok: true }));
+      }
+
+      // New device fetches the encrypted key bundle
+      if (path === '/api/devices/key-transfer/bundle' && request.method === 'GET') {
+        const requestId = new URL(request.url).searchParams.get('requestId');
+        if (!requestId) return withCors(errorResponse('Missing requestId', 400));
+        const data = await env.KV.get(`key_transfer_bundle:${session.userId}:${requestId}`);
+        if (!data) return withCors(jsonResponse({ ready: false }));
+        const parsed = JSON.parse(data);
+        // Clean up after retrieval
+        await env.KV.delete(`key_transfer_bundle:${session.userId}:${requestId}`);
+        await env.KV.delete(`key_transfer_req:${session.userId}:${requestId}`);
+        return withCors(jsonResponse({ ready: true, ...parsed }));
+      }
+
       // Account deletion
       if (path === '/api/me' && request.method === 'DELETE') {
         const userId = session.userId;

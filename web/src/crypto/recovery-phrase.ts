@@ -46,3 +46,83 @@ export async function validateRecoveryPhrase(mnemonic: string): Promise<boolean>
   if (words.length !== 12) return false;
   return words.every(w => BIP39_WORDLIST.includes(w.toLowerCase()));
 }
+
+/**
+ * Convert a 12-word mnemonic back to 16-byte entropy.
+ * Returns null if invalid (wrong words or bad checksum).
+ */
+export async function entropyFromMnemonic(mnemonic: string): Promise<Uint8Array | null> {
+  const words = mnemonic.trim().toLowerCase().split(/\s+/);
+  if (words.length !== 12) return null;
+
+  let bits = '';
+  for (const word of words) {
+    const idx = BIP39_WORDLIST.indexOf(word);
+    if (idx < 0) return null;
+    bits += idx.toString(2).padStart(11, '0');
+  }
+
+  if (bits.length !== 132) return null;
+  const entropyBits = bits.slice(0, 128);
+  const checksumBits = bits.slice(128, 132);
+
+  // Reconstruct entropy bytes
+  const entropy = new Uint8Array(16);
+  for (let i = 0; i < 16; i++) {
+    entropy[i] = parseInt(entropyBits.slice(i * 8, (i + 1) * 8), 2);
+  }
+
+  // Verify checksum
+  const hash = await crypto.subtle.digest('SHA-256', entropy);
+  const expected = ((new Uint8Array(hash)[0]) >> 4).toString(2).padStart(4, '0');
+  if (checksumBits !== expected) return null;
+
+  return entropy;
+}
+
+/**
+ * Derive a 32-byte vault recovery key from BIP39 entropy via HKDF-SHA256.
+ */
+export async function deriveRecoveryKey(entropy: Uint8Array): Promise<CryptoKey> {
+  const baseKey = await crypto.subtle.importKey('raw', entropy as BufferSource, 'HKDF', false, ['deriveKey']);
+  return crypto.subtle.deriveKey(
+    {
+      name: 'HKDF',
+      hash: 'SHA-256',
+      salt: new TextEncoder().encode('rocchat-recovery'),
+      info: new TextEncoder().encode('rocchat-vault-recovery-key'),
+    },
+    baseKey,
+    { name: 'AES-GCM', length: 256 },
+    true,
+    ['encrypt', 'decrypt'],
+  );
+}
+
+/**
+ * Encrypt a key bundle with the recovery key for server-side storage.
+ */
+export async function encryptForRecovery(
+  keyBundle: Uint8Array,
+  recoveryKey: CryptoKey,
+): Promise<Uint8Array> {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, recoveryKey, keyBundle as BufferSource);
+  const result = new Uint8Array(12 + ct.byteLength);
+  result.set(iv, 0);
+  result.set(new Uint8Array(ct), 12);
+  return result;
+}
+
+/**
+ * Decrypt a key bundle using the recovery key.
+ */
+export async function decryptForRecovery(
+  blob: Uint8Array,
+  recoveryKey: CryptoKey,
+): Promise<Uint8Array> {
+  const iv = blob.slice(0, 12);
+  const ct = new Uint8Array(blob.buffer, blob.byteOffset + 12, blob.byteLength - 12);
+  const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: iv as BufferSource }, recoveryKey, ct as BufferSource);
+  return new Uint8Array(pt);
+}

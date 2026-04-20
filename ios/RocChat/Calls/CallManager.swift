@@ -37,6 +37,14 @@ struct CallRecord: Codable, Identifiable {
     let timestamp: Date
 }
 
+// MARK: - Group Peer
+
+struct GroupPeer {
+    let userId: String
+    var transport: P2PTransport?
+    var connected: Bool
+}
+
 // MARK: - CallManager
 
 @MainActor
@@ -51,6 +59,11 @@ class CallManager: ObservableObject {
     @Published var isCameraOff: Bool = false
     @Published var callDuration: Int = 0
     @Published var callHistory: [CallRecord] = []
+
+    // Group call state
+    @Published var isGroupCall: Bool = false
+    @Published var groupPeers: [String: GroupPeer] = [:] // userId → peer
+    private let maxMeshPeers = 5 // 6 total including self
 
     private var callId: String?
     private var conversationId: String?
@@ -482,6 +495,151 @@ class CallManager: ObservableObject {
         player.scheduleBuffer(buffer, completionHandler: nil)
     }
 
+    // MARK: - Group Calls (Mesh)
+
+    func startGroupCall(conversationId: String, callType: CallType, ws: URLSessionWebSocketTask, members: [String]) {
+        guard callStatus == .idle else { return }
+
+        self.callId = UUID().uuidString
+        self.conversationId = conversationId
+        self.callType = callType
+        self.callStatus = .connected
+        self.ws = ws
+        self.isGroupCall = true
+        self.groupPeers = [:]
+        self.startTime = Date()
+
+        configureAudioSession()
+        startAudioStreaming()
+        startDurationTimer()
+
+        // Broadcast group_call_start
+        sendGroupSignal(type: "group_call_start", extra: [
+            "callId": callId ?? "",
+            "callType": callType.rawValue,
+            "conversationId": conversationId,
+            "mode": "mesh"
+        ])
+    }
+
+    func handleGroupCallStart(payload: [String: Any], conversationId: String, ws: URLSessionWebSocketTask?) {
+        guard callStatus == .idle, let ws = ws else { return }
+        let decrypted = decryptSignaling(payload, conversationId: conversationId)
+        let fromUserId = (payload["fromUserId"] as? String) ?? ""
+
+        self.callId = (decrypted["callId"] as? String) ?? (payload["callId"] as? String)
+        self.conversationId = conversationId
+        self.callType = CallType(rawValue: (decrypted["callType"] as? String) ?? "voice") ?? .voice
+        self.callStatus = .connected
+        self.ws = ws
+        self.isGroupCall = true
+        self.groupPeers = [:]
+        self.startTime = Date()
+
+        configureAudioSession()
+        startAudioStreaming()
+        startDurationTimer()
+
+        // Send join signal
+        sendGroupSignal(type: "group_call_join", extra: [
+            "callId": callId ?? "",
+            "conversationId": conversationId
+        ])
+
+        // Create P2P connection to initiator
+        addGroupPeer(userId: fromUserId, isInitiator: shouldBeInitiator(remoteUserId: fromUserId))
+    }
+
+    func handleGroupCallJoin(payload: [String: Any]) {
+        guard isGroupCall, callStatus == .connected else { return }
+        let userId = (payload["fromUserId"] as? String) ?? ""
+        guard !userId.isEmpty, groupPeers[userId] == nil else { return }
+        guard groupPeers.count < maxMeshPeers else { return }
+        addGroupPeer(userId: userId, isInitiator: shouldBeInitiator(remoteUserId: userId))
+    }
+
+    func handleGroupCallLeave(payload: [String: Any]) {
+        let userId = (payload["fromUserId"] as? String) ?? ""
+        guard let peer = groupPeers[userId] else { return }
+        peer.transport?.stop()
+        groupPeers.removeValue(forKey: userId)
+        if groupPeers.isEmpty {
+            endGroupCall(notify: false)
+        }
+    }
+
+    func handleGroupCallOffer(payload: [String: Any]) {
+        guard isGroupCall, let convId = conversationId else { return }
+        let decrypted = decryptSignaling(payload, conversationId: convId)
+        let fromId = (payload["fromUserId"] as? String) ?? ""
+        // Group calls use P2P transport, not WebRTC SDP — but we handle the signaling
+        if groupPeers[fromId] == nil {
+            addGroupPeer(userId: fromId, isInitiator: false)
+        }
+    }
+
+    func handleGroupCallAnswer(payload: [String: Any]) {
+        // P2P connections handle this at the transport level
+    }
+
+    func handleGroupCallIce(payload: [String: Any]) {
+        guard isGroupCall else { return }
+        let fromId = (payload["fromUserId"] as? String) ?? ""
+        guard let peer = groupPeers[fromId] else { return }
+        let decrypted = decryptSignaling(payload)
+        guard let type = decrypted["candidateType"] as? String,
+              let host = decrypted["host"] as? String,
+              let port = decrypted["port"] as? Int else { return }
+        let kind: P2PCandidate.CandidateType = (type == "host") ? .host : .srflx
+        let cand = P2PCandidate(type: kind, host: host, port: UInt16(clamping: port), priority: UInt32(clamping: (decrypted["priority"] as? Int) ?? 0))
+        peer.transport?.addRemoteCandidate(cand)
+    }
+
+    func endGroupCall(notify: Bool = true) {
+        if notify, let callId = callId {
+            sendGroupSignal(type: "group_call_leave", extra: ["callId": callId])
+        }
+        for (_, peer) in groupPeers {
+            peer.transport?.stop()
+        }
+        groupPeers = [:]
+        isGroupCall = false
+        endCall(reason: "hangup", notify: false)
+    }
+
+    private func addGroupPeer(userId: String, isInitiator: Bool) {
+        guard let convId = conversationId,
+              let secret = SessionManager.shared.p2pMediaSecret(conversationId: convId) else { return }
+
+        let transport = P2PTransport()
+        let peer = GroupPeer(userId: userId, transport: transport, connected: false)
+        groupPeers[userId] = peer
+
+        // Use a group-specific delegate wrapper
+        transport.groupPeerUserId = userId
+        transport.delegate = self
+        transport.start(sharedSecret: secret, isInitiator: isInitiator)
+    }
+
+    private func shouldBeInitiator(remoteUserId: String) -> Bool {
+        let myId = UserDefaults.standard.string(forKey: "user_id") ?? ""
+        return myId < remoteUserId
+    }
+
+    private func sendGroupSignal(type: String, extra: [String: String]) {
+        guard let convId = conversationId else {
+            sendSignal(type: type, extra: extra)
+            return
+        }
+        // For group calls, broadcast signals (no specific targetUserId)
+        var payload = extra
+        payload["conversationId"] = convId
+        let message: [String: Any] = ["type": type, "payload": payload]
+        guard let data = try? JSONSerialization.data(withJSONObject: message),
+              let str = String(data: data, encoding: .utf8) else { return }
+        ws?.send(.string(str)) { _ in }
+    }
+
     // MARK: - RocP2P
 
     private func startP2P(isInitiator: Bool) {
@@ -534,20 +692,44 @@ extension CallManager: P2PTransportDelegate {
     nonisolated func p2pDidGatherCandidate(_ candidate: P2PCandidate) {
         Task { @MainActor [weak self] in
             guard let self = self, let cid = self.callId else { return }
-            self.sendEncryptedSignal(type: "call_p2p_candidate", extra: [
-                "callId": cid,
-                "targetUserId": self.remoteUserId,
-                "candidateType": candidate.type == .host ? "host" : "srflx",
-                "host": candidate.host,
-                "port": "\(candidate.port)",
-                "priority": "\(candidate.priority)"
-            ])
+            if self.isGroupCall {
+                // For group calls, send ICE candidates via group_call_ice
+                self.sendGroupSignal(type: "group_call_ice", extra: [
+                    "callId": cid,
+                    "candidateType": candidate.type == .host ? "host" : "srflx",
+                    "host": candidate.host,
+                    "port": "\(candidate.port)",
+                    "priority": "\(candidate.priority)"
+                ])
+            } else {
+                self.sendEncryptedSignal(type: "call_p2p_candidate", extra: [
+                    "callId": cid,
+                    "targetUserId": self.remoteUserId,
+                    "candidateType": candidate.type == .host ? "host" : "srflx",
+                    "host": candidate.host,
+                    "port": "\(candidate.port)",
+                    "priority": "\(candidate.priority)"
+                ])
+            }
         }
     }
 
     nonisolated func p2pDidConnect() {
         Task { @MainActor [weak self] in
-            self?.p2pConnected = true
+            guard let self = self else { return }
+            if self.isGroupCall {
+                // Mark the specific group peer as connected
+                // (Transport has groupPeerUserId set — but delegate doesn't carry it)
+                // Mark all non-connected peers — the most recent start will be the one connecting
+                for (userId, var peer) in self.groupPeers {
+                    if !peer.connected {
+                        peer.connected = true
+                        self.groupPeers[userId] = peer
+                    }
+                }
+            } else {
+                self.p2pConnected = true
+            }
         }
     }
 

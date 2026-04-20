@@ -402,6 +402,47 @@ export function confirmDeviceVerification(code: string) {
   });
 }
 
+// ── Key transfer ──
+
+export function requestKeyTransfer(ephemeralPub: string) {
+  return req<{ ok: boolean; requestId: string }>('/devices/key-transfer/request', {
+    method: 'POST',
+    body: JSON.stringify({ ephemeralPub }),
+  });
+}
+
+export function getPendingKeyTransfers() {
+  return req<{
+    requests: { requestId: string; deviceId: string; ephemeralPub: string; createdAt: number }[];
+  }>('/devices/key-transfer/pending');
+}
+
+export function uploadKeyBundle(requestId: string, encryptedBundle: string, ephemeralPub: string) {
+  return req<{ ok: boolean }>('/devices/key-transfer/bundle', {
+    method: 'POST',
+    body: JSON.stringify({ requestId, encryptedBundle, ephemeralPub }),
+  });
+}
+
+export function fetchKeyBundle(requestId: string) {
+  return req<{ ready: boolean; encryptedBundle?: string; ephemeralPub?: string }>(
+    `/devices/key-transfer/bundle?requestId=${encodeURIComponent(requestId)}`,
+  );
+}
+
+// ── Recovery vault ──
+
+export function uploadRecoveryVault(blob: string) {
+  return req<{ ok: boolean }>('/recovery/vault', {
+    method: 'POST',
+    body: JSON.stringify({ blob }),
+  });
+}
+
+export function getRecoveryVault() {
+  return req<{ blob: string }>('/recovery/vault');
+}
+
 // ── Keys ──
 
 export function getPreKeyCount() {

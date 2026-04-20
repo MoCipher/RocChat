@@ -49,6 +49,11 @@ object CallManager {
     var callDuration by mutableIntStateOf(0)
     val callHistory = mutableStateListOf<CallRecord>()
 
+    // Group call state
+    var isGroupCall by mutableStateOf(false)
+    var groupPeers = mutableMapOf<String, GroupPeer>()
+    private val maxMeshPeers = 5 // 6 total including self
+
     private var callId: String? = null
     private var conversationId: String? = null
     private var ws: NativeWebSocket? = null
@@ -453,18 +458,36 @@ object CallManager {
     private val p2pDelegate = object : P2PTransportDelegate {
         override fun p2pDidGatherCandidate(candidate: P2PCandidate) {
             val cid = callId ?: return
-            sendEncryptedSignal("call_p2p_candidate", mapOf(
-                "callId" to cid,
-                "targetUserId" to remoteUserId,
-                "candidateType" to candidate.type,
-                "host" to candidate.host,
-                "port" to candidate.port.toString(),
-                "priority" to candidate.priority.toString(),
-            ))
+            if (isGroupCall) {
+                sendGroupSignal("group_call_ice", mapOf(
+                    "callId" to cid,
+                    "candidateType" to candidate.type,
+                    "host" to candidate.host,
+                    "port" to candidate.port.toString(),
+                    "priority" to candidate.priority.toString(),
+                ))
+            } else {
+                sendEncryptedSignal("call_p2p_candidate", mapOf(
+                    "callId" to cid,
+                    "targetUserId" to remoteUserId,
+                    "candidateType" to candidate.type,
+                    "host" to candidate.host,
+                    "port" to candidate.port.toString(),
+                    "priority" to candidate.priority.toString(),
+                ))
+            }
         }
 
         override fun p2pDidConnect() {
-            p2pConnected = true
+            if (isGroupCall) {
+                groupPeers.forEach { (userId, peer) ->
+                    if (!peer.connected) {
+                        groupPeers[userId] = peer.copy(connected = true)
+                    }
+                }
+            } else {
+                p2pConnected = true
+            }
         }
 
         override fun p2pDidFail(reason: String) {
@@ -476,4 +499,118 @@ object CallManager {
             playIncomingPcm(pcm)
         }
     }
+
+    // MARK: - Group Calls (Mesh)
+
+    fun startGroupCall(conversationId: String, callType: String, ws: NativeWebSocket, members: List<String>) {
+        if (callStatus != "idle") return
+        this.callId = UUID.randomUUID().toString()
+        this.conversationId = conversationId
+        this.callType = callType
+        this.callStatus = "connected"
+        this.ws = ws
+        this.isGroupCall = true
+        this.groupPeers.clear()
+        this.startTime = System.currentTimeMillis()
+
+        startDurationTimer()
+        startAudioStreaming()
+
+        sendGroupSignal("group_call_start", mapOf(
+            "callId" to (callId ?: ""),
+            "callType" to callType,
+            "conversationId" to conversationId,
+            "mode" to "mesh"
+        ))
+    }
+
+    fun handleGroupCallStart(payload: JSONObject, conversationId: String, ws: NativeWebSocket?) {
+        if (callStatus != "idle" || ws == null) return
+        val decrypted = decryptSignaling(payload, conversationId)
+        val fromUserId = payload.optString("fromUserId")
+
+        this.callId = decrypted.optString("callId").ifEmpty { payload.optString("callId") }
+        this.conversationId = conversationId
+        this.callType = decrypted.optString("callType", "voice")
+        this.callStatus = "connected"
+        this.ws = ws
+        this.isGroupCall = true
+        this.groupPeers.clear()
+        this.startTime = System.currentTimeMillis()
+
+        startDurationTimer()
+        startAudioStreaming()
+
+        sendGroupSignal("group_call_join", mapOf(
+            "callId" to (callId ?: ""),
+            "conversationId" to conversationId
+        ))
+
+        addGroupPeer(fromUserId)
+    }
+
+    fun handleGroupCallJoin(payload: JSONObject) {
+        if (!isGroupCall || callStatus != "connected") return
+        val userId = payload.optString("fromUserId")
+        if (userId.isEmpty() || groupPeers.containsKey(userId)) return
+        if (groupPeers.size >= maxMeshPeers) return
+        addGroupPeer(userId)
+    }
+
+    fun handleGroupCallLeave(payload: JSONObject) {
+        val userId = payload.optString("fromUserId")
+        val peer = groupPeers.remove(userId) ?: return
+        peer.transport?.stop()
+        if (groupPeers.isEmpty()) endGroupCall(notify = false)
+    }
+
+    fun handleGroupCallIce(payload: JSONObject) {
+        if (!isGroupCall) return
+        val fromId = payload.optString("fromUserId")
+        val peer = groupPeers[fromId] ?: return
+        val decrypted = decryptSignaling(payload)
+        val type = decrypted.optString("candidateType").ifEmpty { return }
+        val host = decrypted.optString("host").ifEmpty { return }
+        val port = decrypted.optString("port").toIntOrNull() ?: return
+        val priority = decrypted.optString("priority").toIntOrNull() ?: 0
+        peer.transport?.addRemoteCandidate(P2PCandidate(type, host, port, priority))
+    }
+
+    fun endGroupCall(notify: Boolean = true) {
+        if (notify) {
+            val cid = callId
+            if (cid != null) sendGroupSignal("group_call_leave", mapOf("callId" to cid))
+        }
+        groupPeers.values.forEach { it.transport?.stop() }
+        groupPeers.clear()
+        isGroupCall = false
+        endCall("hangup", notify = false)
+    }
+
+    private fun addGroupPeer(userId: String) {
+        val convId = conversationId ?: return
+        val ctx = appContext ?: return
+        val secret = SessionManager.p2pMediaSecret(ctx, convId) ?: return
+        val transport = P2PTransport(p2pDelegate)
+        transport.groupPeerUserId = userId
+        val myId = ctx.getSharedPreferences("rocchat", Context.MODE_PRIVATE).getString("user_id", "") ?: ""
+        val isInitiator = myId < userId
+        groupPeers[userId] = GroupPeer(userId, transport, false)
+        transport.start(secret, isInitiator)
+    }
+
+    private fun sendGroupSignal(type: String, extra: Map<String, String>) {
+        val convId = conversationId
+        val payload = JSONObject()
+        extra.forEach { (k, v) -> payload.put(k, v) }
+        if (convId != null) payload.put("conversationId", convId)
+        val msg = JSONObject().put("type", type).put("payload", payload)
+        ws?.send(msg.toString())
+    }
 }
+
+data class GroupPeer(
+    val userId: String,
+    val transport: P2PTransport?,
+    val connected: Boolean
+)

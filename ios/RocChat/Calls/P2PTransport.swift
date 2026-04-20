@@ -51,6 +51,8 @@ extension P2PTransportDelegate {
 
 final class P2PTransport {
     weak var delegate: P2PTransportDelegate?
+    /// When used in a group call mesh, identifies which remote peer this transport belongs to.
+    var groupPeerUserId: String?
 
     // Independent STUN servers — no Google, no surveillance
     static let stunServers: [(host: String, port: UInt16)] = [

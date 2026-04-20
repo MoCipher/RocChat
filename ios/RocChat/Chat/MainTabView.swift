@@ -2879,6 +2879,8 @@ struct SettingsView: View {
                             if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                                let code = json["code"] as? String {
                                 verifyCode = code
+                                // Poll for pending key transfer requests from new device
+                                pollForKeyTransferRequests()
                             }
                         }
                     } label: {
@@ -2903,8 +2905,10 @@ struct SettingsView: View {
                                 let data = try await APIClient.shared.postRaw("/devices/verify/confirm", body: body)
                                 if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                                    json["verified"] as? Bool == true {
-                                    linkMessage = "✓ Device verified"
+                                    linkMessage = "✓ Verified — requesting keys..."
                                     verifyInput = ""
+                                    // Request key transfer as new device
+                                    await requestKeyTransferAsNewDevice()
                                 } else {
                                     linkMessage = "Invalid or expired code"
                                 }
@@ -3800,22 +3804,154 @@ struct SettingsView: View {
     }
 
     private func generateRecoveryPhrase() {
-        // BIP39-style word list subset for recovery phrase
-        let words = ["abandon","ability","able","about","above","absent","absorb","abstract","absurd","abuse",
-                     "access","accident","account","accuse","achieve","acid","across","act","action","actor",
-                     "address","adjust","admit","adult","advance","advice","afford","again","age","agent",
-                     "agree","ahead","aim","air","alert","alien","all","alley","allow","almost",
-                     "alone","alpha","already","also","alter","always","amount","ancient","anger","angle",
-                     "animal","answer","any","apart","april","area","arena","argue","arm","armor"]
-        var phrase: [String] = []
-        for _ in 0..<12 {
-            var bytes = [UInt8](repeating: 0, count: 1)
-            _ = SecRandomCopyBytes(kSecRandomDefault, 1, &bytes)
-            phrase.append(words[Int(bytes[0]) % words.count])
+        let result = BIP39.generate()
+        recoveryPhrase = result.mnemonic
+
+        // Derive recovery key and encrypt the identity private keys for server-side backup
+        let recoveryKey = BIP39.deriveRecoveryKey(entropy: result.entropy)
+        if let identityPriv = UserDefaults.standard.data(forKey: "rocchat_identity_dh_priv") {
+            let keyBundle: [String: String] = [
+                "identityDHPrivate": identityPriv.base64EncodedString(),
+                "identityPrivate": (UserDefaults.standard.data(forKey: "identity_key_private") ?? Data()).base64EncodedString()
+            ]
+            if let bundleData = try? JSONSerialization.data(withJSONObject: keyBundle),
+               let encrypted = try? BIP39.encryptForRecovery(keyBundle: bundleData, recoveryKey: recoveryKey) {
+                // Upload recovery vault blob to server
+                Task {
+                    try? await APIClient.shared.postRaw("/recovery/vault", body: [
+                        "blob": encrypted.base64EncodedString()
+                    ])
+                }
+            }
         }
-        recoveryPhrase = phrase.joined(separator: " ")
-        // Store encrypted in keychain for recovery
-        UserDefaults.standard.set(recoveryPhrase, forKey: "recovery_phrase")
+
+        // Store mnemonic in Keychain (not UserDefaults)
+        SecureStorage.shared.set(recoveryPhrase, forKey: "recovery_phrase")
+    }
+
+    // MARK: - Key Transfer (Source Device)
+
+    private func pollForKeyTransferRequests() {
+        Task {
+            for _ in 0..<30 { // Poll for 60 seconds
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                guard verifyCode != nil else { return }
+                let data = try await APIClient.shared.get("/devices/key-transfer/pending")
+                guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let requests = json["requests"] as? [[String: Any]],
+                      let first = requests.first,
+                      let requestId = first["requestId"] as? String,
+                      let remoteEphPub = first["ephemeralPub"] as? String else { continue }
+
+                // Generate our ephemeral X25519 key pair
+                let myEphemeral = Curve25519.KeyAgreement.PrivateKey()
+                let myEphPub = myEphemeral.publicKey.rawRepresentation.base64EncodedString()
+
+                // Import remote ephemeral public key and do ECDH
+                guard let remotePubData = Data(base64Encoded: remoteEphPub) else { continue }
+                let remotePubKey = try Curve25519.KeyAgreement.PublicKey(rawRepresentation: remotePubData)
+                let sharedSecret = try myEphemeral.sharedSecretFromKeyAgreement(with: remotePubKey)
+
+                // Derive AES key via HKDF
+                let symmetricKey = sharedSecret.hkdfDerivedSymmetricKey(
+                    using: SHA256.self,
+                    salt: Data(),
+                    sharedInfo: Data("rocchat-key-transfer".utf8),
+                    outputByteCount: 32
+                )
+
+                // Gather local keys
+                let keyBundle: [String: String] = [
+                    "identityDHPrivate": (UserDefaults.standard.data(forKey: "rocchat_identity_dh_priv") ?? Data()).base64EncodedString(),
+                    "identityDHPublic": (UserDefaults.standard.data(forKey: "rocchat_identity_dh_pub") ?? Data()).base64EncodedString(),
+                    "identityPrivate": (UserDefaults.standard.data(forKey: "identity_key_private") ?? Data()).base64EncodedString(),
+                    "identityPublic": (UserDefaults.standard.data(forKey: "identity_key_public") ?? Data()).base64EncodedString()
+                ]
+                let bundleData = try JSONSerialization.data(withJSONObject: keyBundle)
+
+                // Encrypt with ECDH-derived key
+                let sealedBox = try AES.GCM.seal(bundleData, using: symmetricKey)
+                let encrypted = sealedBox.combined!.base64EncodedString()
+
+                // Upload
+                try await APIClient.shared.postRaw("/devices/key-transfer/bundle", body: [
+                    "requestId": requestId,
+                    "encryptedBundle": encrypted,
+                    "ephemeralPub": myEphPub
+                ])
+                linkMessage = "✓ Keys transferred"
+                return
+            }
+        }
+    }
+
+    // MARK: - Key Transfer (New Device)
+
+    private func requestKeyTransferAsNewDevice() async {
+        do {
+            // Generate ephemeral X25519 key pair
+            let myEphemeral = Curve25519.KeyAgreement.PrivateKey()
+            let myEphPub = myEphemeral.publicKey.rawRepresentation.base64EncodedString()
+
+            // Send transfer request
+            let reqData = try await APIClient.shared.postRaw("/devices/key-transfer/request", body: ["ephemeralPub": myEphPub])
+            guard let reqJson = try? JSONSerialization.jsonObject(with: reqData) as? [String: Any],
+                  let requestId = reqJson["requestId"] as? String else {
+                linkMessage = "Key transfer request failed"
+                return
+            }
+
+            // Poll for bundle
+            for _ in 0..<30 {
+                try await Task.sleep(nanoseconds: 2_000_000_000)
+                let bundleData = try await APIClient.shared.get("/devices/key-transfer/bundle?requestId=\(requestId)")
+                guard let json = try? JSONSerialization.jsonObject(with: bundleData) as? [String: Any],
+                      json["ready"] as? Bool == true,
+                      let encryptedBundle = json["encryptedBundle"] as? String,
+                      let remoteEphPub = json["ephemeralPub"] as? String else { continue }
+
+                // Import remote ephemeral public key and do ECDH
+                guard let remotePubData = Data(base64Encoded: remoteEphPub),
+                      let combinedData = Data(base64Encoded: encryptedBundle) else { continue }
+                let remotePubKey = try Curve25519.KeyAgreement.PublicKey(rawRepresentation: remotePubData)
+                let sharedSecret = try myEphemeral.sharedSecretFromKeyAgreement(with: remotePubKey)
+
+                // Derive same AES key
+                let symmetricKey = sharedSecret.hkdfDerivedSymmetricKey(
+                    using: SHA256.self,
+                    salt: Data(),
+                    sharedInfo: Data("rocchat-key-transfer".utf8),
+                    outputByteCount: 32
+                )
+
+                // Decrypt
+                let sealedBox = try AES.GCM.SealedBox(combined: combinedData)
+                let decrypted = try AES.GCM.open(sealedBox, using: symmetricKey)
+                guard let keyBundle = try? JSONSerialization.jsonObject(with: decrypted) as? [String: String] else { continue }
+
+                // Store received keys
+                if let v = keyBundle["identityDHPrivate"], let d = Data(base64Encoded: v) {
+                    UserDefaults.standard.set(d, forKey: "rocchat_identity_dh_priv")
+                    SessionManager.shared.identityDHPrivate = d
+                }
+                if let v = keyBundle["identityDHPublic"], let d = Data(base64Encoded: v) {
+                    UserDefaults.standard.set(d, forKey: "rocchat_identity_dh_pub")
+                    SessionManager.shared.identityDHPublic = d
+                }
+                if let v = keyBundle["identityPrivate"], let d = Data(base64Encoded: v) {
+                    UserDefaults.standard.set(d, forKey: "identity_key_private")
+                }
+                if let v = keyBundle["identityPublic"], let d = Data(base64Encoded: v) {
+                    UserDefaults.standard.set(d, forKey: "identity_key_public")
+                }
+
+                linkMessage = "✓ Keys received — encryption ready"
+                return
+            }
+            linkMessage = "Key transfer timed out"
+        } catch {
+            linkMessage = "Key transfer failed"
+        }
     }
 
     private func processImport(source: String, text: String) async {

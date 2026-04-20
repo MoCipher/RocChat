@@ -994,4 +994,61 @@ RocChat/
 
 ---
 
+## 13. Growth Strategy & Competitive Advantage
+
+### Why Other Apps Use Phone Numbers
+
+Phone numbers are a **lazy shortcut** for messaging apps:
+
+1. **Free identity verification** — carriers already did KYC. Apps piggyback on that instead of building anti-abuse.
+2. **Network effects** — contact list upload tells the app who else uses it. Free growth hack.
+3. **Account recovery** — SMS codes are trivial to implement. No complex key management needed.
+4. **Regulatory compliance** — governments can subpoena phone records to link accounts to real identities. This is a feature *for authorities*, not for users.
+
+**What this costs users:** permanent real-identity linkage, phone number leaks to data brokers, SIM-swap account hijacking, no privacy without burner phones, cross-service tracking.
+
+**RocChat rejects all of this.** Username + passphrase only. Zero PII. Blind relay. User-owned keys.
+
+### Strategic Growth Pillars
+
+#### 1. Public Crypto Audit
+
+Get a third-party security audit published publicly. Signal did this — it's the single biggest trust signal for a privacy app. Target: Trail of Bits, Cure53, or NCC Group. Publish full report on `roc.family/audit`.
+
+#### 2. App Store Presence
+
+iOS and Android apps must be in stores. That's how people discover you.
+- **Apple App Store** — SwiftUI app, no private APIs, passes review.
+- **Google Play Store** — Kotlin + Compose, standard permissions, ntfy push (no FCM dependency).
+- **F-Droid** — publish reproducible builds for the de-Googled crowd.
+
+#### 3. One-Click Migration Bridge
+
+WhatsApp/Telegram/Signal import already exists. Make it **frictionless**:
+- Single "Import" button on first launch (onboarding wizard step)
+- Auto-detect export format from file extension
+- Progress bar with message count
+- Invite generation for contacts not yet on RocChat
+- Imported conversations clearly marked but fully searchable
+
+#### 4. Communities & Public Channels
+
+Public broadcast channels (like Telegram) bring content creators who bring users:
+- **Channels** — one-to-many broadcast. Admins post, subscribers read. No reply (or restricted replies).
+- **Communities** — umbrella grouping multiple channels + discussion groups under one namespace.
+- Discoverable via search (public channels indexed by topic/tag)
+- Subscribe without contact request
+- Channel admins can pin, schedule posts, view analytics (subscriber count, read count)
+- Channels are still E2E encrypted (Sender Keys) — server cannot read content.
+
+#### 5. Desktop App (Electron-Free)
+
+PWA covers Windows/Linux/Web today. For users who want a native feel:
+- **Tauri 2.0** — Rust backend, native webview, ~5 MB binary (vs Electron's 200 MB).
+- Same TypeScript frontend as the web PWA, wrapped in Tauri.
+- Native OS notifications, tray icon, auto-start, deep links.
+- Ships as `.dmg` (macOS), `.msi` (Windows), `.AppImage` (Linux).
+
+---
+
 *This specification captures every decision made during the design phase of RocChat. All implementations must follow this document.*

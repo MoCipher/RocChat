@@ -94,12 +94,19 @@ struct MainTabView: View {
                 }
                 .tag(1)
 
+            ChannelsView()
+                .tabItem {
+                    Image(systemName: "megaphone.fill")
+                    Text("Channels")
+                }
+                .tag(2)
+
             SettingsView()
                 .tabItem {
                     Image(systemName: "person.circle.fill")
                     Text("Profile")
                 }
-                .tag(2)
+                .tag(3)
         }
         .tint(.rocGold)
         .overlay {

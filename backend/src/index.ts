@@ -17,6 +17,7 @@ import { handleBusiness } from './business.js';
 import { handleFeatures } from './features.js';
 import { handleLinkPreview } from './link-preview.js';
 import { handleGroups } from './groups.js';
+import { handleChannels } from './channels.js';
 import { createPowChallenge } from './pow.js';
 import { ChatRoom } from './durable-objects/ChatRoom.js';
 import { verifySession, rateLimit, jsonResponse, errorResponse, isOriginAllowed, apiError, logEvent } from './middleware.js';
@@ -324,6 +325,12 @@ export default {
       // Group moderation (promote, kick, mute)
       if (path.startsWith('/api/groups/')) {
         return withCors(await handleGroups(request, env, session, url));
+      }
+
+      // Channels & Communities
+      if (path.startsWith('/api/channels') || path.startsWith('/api/communities')) {
+        const channelRes = await handleChannels(request, env, session, url);
+        if (channelRes) return withCors(channelRes);
       }
 
       // Link-preview unfurler (Open Graph) — KV-cached for 24h.

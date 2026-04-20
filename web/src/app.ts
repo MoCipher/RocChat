@@ -26,6 +26,7 @@ import { renderAuth } from './auth/auth.js';
 import { renderSidebar, type Tab } from './components/sidebar.js';
 import { renderChats } from './chat/chat.js';
 import { renderCalls } from './calls/calls.js';
+import { renderChannels } from './channels/channels.js';
 import { renderSettings, applyTheme } from './components/settings.js';
 import { getToken, getPreKeyCount, uploadPreKeys, getMe, registerPushToken, getTransparencyReports, getSupportersWall } from './api.js';
 import { migrateLegacySecrets } from './crypto/secure-store.js';
@@ -140,6 +141,9 @@ function renderApp() {
       break;
     case 'calls':
       renderCalls(main);
+      break;
+    case 'channels':
+      renderChannels(main);
       break;
     case 'settings':
       renderSettings(main);

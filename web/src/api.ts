@@ -74,7 +74,7 @@ async function tryRefresh(): Promise<boolean> {
   return refreshInFlight;
 }
 
-async function req<T = unknown>(
+export async function req<T = unknown>(
   path: string,
   opts: RequestInit = {},
   _retry = true,

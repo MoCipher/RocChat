@@ -137,6 +137,17 @@ fun MainScreen(onLogout: () -> Unit) {
                 NavigationBarItem(
                     selected = selectedTab == 2,
                     onClick = { selectedTab = 2 },
+                    icon = { Icon(Icons.Default.Campaign, contentDescription = "Channels") },
+                    label = { Text("Channels") },
+                    colors = NavigationBarItemDefaults.colors(
+                        selectedIconColor = RocColors.RocGold,
+                        selectedTextColor = RocColors.RocGold,
+                        indicatorColor = RocColors.RocGold.copy(alpha = 0.12f),
+                    ),
+                )
+                NavigationBarItem(
+                    selected = selectedTab == 3,
+                    onClick = { selectedTab = 3 },
                     icon = { Icon(Icons.Default.Person, contentDescription = "Profile") },
                     label = { Text("Profile") },
                     colors = NavigationBarItemDefaults.colors(
@@ -158,7 +169,8 @@ fun MainScreen(onLogout: () -> Unit) {
                     },
                 )
                 1 -> CallsHistoryTab()
-                2 -> SettingsTab(onLogout = onLogout)
+                2 -> ChannelsTab()
+                3 -> SettingsTab(onLogout = onLogout)
             }
             // Call overlay on top of everything
             CallOverlay()        }

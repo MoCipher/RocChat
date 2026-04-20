@@ -291,18 +291,19 @@ export async function handleFeatures(
   // GET /api/features/quiet-hours — Get quiet hours config
   if (path === '/api/features/quiet-hours' && request.method === 'GET') {
     const config = await env.DB.prepare(
-      'SELECT quiet_start, quiet_end, dnd_exceptions FROM users WHERE id = ?'
-    ).bind(session.userId).first() as { quiet_start: string | null; quiet_end: string | null; dnd_exceptions: string | null } | null;
+      'SELECT quiet_start, quiet_end, dnd_exceptions, alert_keywords FROM users WHERE id = ?'
+    ).bind(session.userId).first() as { quiet_start: string | null; quiet_end: string | null; dnd_exceptions: string | null; alert_keywords: string | null } | null;
     return jsonResponse({
       quiet_start: config?.quiet_start || null,
       quiet_end: config?.quiet_end || null,
       dnd_exceptions: config?.dnd_exceptions ? JSON.parse(config.dnd_exceptions) : [],
+      alert_keywords: config?.alert_keywords ? JSON.parse(config.alert_keywords) : [],
     });
   }
 
   // PUT /api/features/quiet-hours — Set quiet hours (HH:MM format)
   if (path === '/api/features/quiet-hours' && request.method === 'PUT') {
-    const body = await request.json() as { quiet_start?: string; quiet_end?: string; dnd_exceptions?: string[] };
+    const body = await request.json() as { quiet_start?: string; quiet_end?: string; dnd_exceptions?: string[]; alert_keywords?: string[] };
     const timeRegex = /^([01]\d|2[0-3]):[0-5]\d$/;
 
     if (body.quiet_start !== undefined && body.quiet_start !== null && !timeRegex.test(body.quiet_start)) {
@@ -320,6 +321,12 @@ export async function handleFeatures(
       if (!Array.isArray(body.dnd_exceptions)) return errorResponse('dnd_exceptions must be an array', 400);
       updates.push('dnd_exceptions = ?');
       values.push(JSON.stringify(body.dnd_exceptions));
+    }
+    if (body.alert_keywords !== undefined) {
+      if (!Array.isArray(body.alert_keywords)) return errorResponse('alert_keywords must be an array', 400);
+      if (body.alert_keywords.length > 20) return errorResponse('Maximum 20 keywords', 400);
+      updates.push('alert_keywords = ?');
+      values.push(JSON.stringify(body.alert_keywords.map(k => k.toLowerCase().trim()).filter(Boolean)));
     }
 
     if (updates.length > 0) {

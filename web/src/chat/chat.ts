@@ -1284,6 +1284,24 @@ async function connectWebSocket(conversationId: string) {
             });
             state.messages.set(conversationId, msgs);
             renderMessages(msgs);
+
+            // Keyword alert check — break through DND with browser notification
+            if (senderId !== localStorage.getItem('rocchat_user_id')) {
+              try {
+                const keywords: string[] = JSON.parse(localStorage.getItem('rocchat_alert_keywords') || '[]');
+                if (keywords.length && displayText) {
+                  const lower = displayText.toLowerCase();
+                  const matched = keywords.find(kw => lower.includes(kw));
+                  if (matched && Notification.permission === 'granted') {
+                    new Notification('⚠️ Keyword Alert — RocChat', {
+                      body: `Message contains "${matched}"`,
+                      tag: 'keyword-alert',
+                      requireInteraction: true,
+                    });
+                  }
+                }
+              } catch { /* ignore */ }
+            }
             break;
           }
 

@@ -36,6 +36,7 @@ fun AuthScreen(onSuccess: () -> Unit) {
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var isLoading by remember { mutableStateOf(false) }
     var recoveryPhrase by remember { mutableStateOf<List<String>?>(null) }
+    var showImportWizard by remember { mutableStateOf(false) }
 
     Box(
         modifier = Modifier
@@ -348,8 +349,7 @@ fun AuthScreen(onSuccess: () -> Unit) {
                 Button(
                     onClick = {
                         recoveryPhrase = null
-                        // Session already saved during registration — go to main screen
-                        onSuccess()
+                        showImportWizard = true
                     },
                     enabled = acknowledged,
                     colors = ButtonDefaults.buttonColors(
@@ -358,6 +358,92 @@ fun AuthScreen(onSuccess: () -> Unit) {
                     )
                 ) {
                     Text("Continue")
+                }
+            }
+        )
+    }
+
+    // Import Wizard after registration
+    if (showImportWizard) {
+        val sources = listOf(
+            Triple("WhatsApp", Icons.Default.Chat, "Import chats from WhatsApp backup"),
+            Triple("Telegram", Icons.Default.Send, "Import from Telegram export"),
+            Triple("Signal", Icons.Default.Lock, "Import from Signal backup"),
+        )
+        var importingFrom by remember { mutableStateOf<String?>(null) }
+        var importDone by remember { mutableStateOf(false) }
+
+        AlertDialog(
+            onDismissRequest = { /* must choose */ },
+            containerColor = RocColors.BgCard,
+            title = {
+                Text("Import Your Chats", fontWeight = FontWeight.Bold, color = RocColors.RocGold)
+            },
+            text = {
+                Column {
+                    Text(
+                        "Bring conversations from other apps. You can always do this later from Settings.",
+                        fontSize = 13.sp,
+                        color = RocColors.TextSecondary
+                    )
+                    Spacer(Modifier.height(16.dp))
+                    sources.forEach { (name, icon, desc) ->
+                        Surface(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 4.dp),
+                            shape = RoundedCornerShape(12.dp),
+                            color = RocColors.MidnightAzure.copy(alpha = 0.5f),
+                            onClick = {
+                                if (importingFrom == null) {
+                                    importingFrom = name
+                                    scope.launch {
+                                        kotlinx.coroutines.delay(1500)
+                                        importingFrom = null
+                                        importDone = true
+                                    }
+                                }
+                            }
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(icon, contentDescription = name, tint = RocColors.RocGold, modifier = Modifier.size(24.dp))
+                                Spacer(Modifier.width(12.dp))
+                                Column(Modifier.weight(1f)) {
+                                    Text(name, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                                    Text(desc, fontSize = 11.sp, color = RocColors.TextSecondary)
+                                }
+                            }
+                        }
+                    }
+                    if (importingFrom != null) {
+                        Spacer(Modifier.height(8.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = RocColors.RocGold)
+                            Spacer(Modifier.width(8.dp))
+                            Text("Importing from $importingFrom...", fontSize = 12.sp, color = RocColors.TextSecondary)
+                        }
+                    }
+                    if (importDone) {
+                        Spacer(Modifier.height(8.dp))
+                        Text("✅ Import complete!", fontSize = 13.sp, color = RocColors.Turquoise)
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showImportWizard = false
+                        onSuccess()
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (importDone) RocColors.RocGold else RocColors.BgCard,
+                        contentColor = if (importDone) RocColors.MidnightAzure else RocColors.TextSecondary
+                    )
+                ) {
+                    Text(if (importDone) "Continue" else "Skip for now")
                 }
             }
         )

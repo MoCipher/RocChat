@@ -287,6 +287,19 @@ export function renderSettings(container: HTMLElement) {
             <input type="text" id="dnd-exception-input" placeholder="@username" style="flex:1;background:var(--bg-primary);border:1px solid var(--border);border-radius:var(--radius);padding:6px 10px;color:var(--text-primary);font-size:var(--text-sm)" />
             <button class="btn btn-outline" id="add-dnd-exception" style="font-size:var(--text-xs);padding:4px 12px">Add</button>
           </div>
+          <div class="setting-row" style="margin-top:var(--sp-3)">
+            <div>
+              <div class="setting-label">Keyword Alerts</div>
+              <div class="setting-desc">Messages containing these words will break through DND</div>
+            </div>
+          </div>
+          <div id="keyword-alerts-list" style="margin-top:var(--sp-2);display:flex;flex-wrap:wrap;gap:var(--sp-1)">
+            <div style="font-size:var(--text-xs);color:var(--text-tertiary)">Loading...</div>
+          </div>
+          <div style="display:flex;gap:var(--sp-2);margin-top:var(--sp-2)">
+            <input type="text" id="keyword-alert-input" placeholder="e.g. emergency, urgent" style="flex:1;background:var(--bg-primary);border:1px solid var(--border);border-radius:var(--radius);padding:6px 10px;color:var(--text-primary);font-size:var(--text-sm)" />
+            <button class="btn btn-outline" id="add-keyword-alert" style="font-size:var(--text-xs);padding:4px 12px">Add</button>
+          </div>
         </div>
 
         <div class="settings-section">
@@ -1212,6 +1225,25 @@ export function renderSettings(container: HTMLElement) {
       importStatus.textContent = `✅ Imported ${total} messages from ${source}`;
       showToast(`Imported ${total} messages from ${source}`, 'success');
       setTimeout(hideProgress, 3000);
+
+      // Offer to invite contacts not yet on RocChat
+      const uniqueSenders = [...new Set(parsed.map(m => m.sender_name))];
+      if (uniqueSenders.length > 0) {
+        const doInvite = confirm(
+          `Found ${uniqueSenders.length} contact(s) in this chat. Generate invite links for contacts not yet on RocChat?`
+        );
+        if (doInvite) {
+          try {
+            const inviteRes = await api.get('/contacts/invite-link');
+            const link = (inviteRes.data as { invite_link?: string })?.invite_link;
+            if (link) {
+              try { await navigator.clipboard.writeText(link); } catch { /* ignore */ }
+              showToast('Invite link copied to clipboard!', 'success');
+              importStatus.textContent += ` | 📎 Invite link: ${link}`;
+            }
+          } catch { showToast('Could not generate invite link', 'error'); }
+        }
+      }
     } catch (err) {
       hideProgress();
       importStatus.textContent = 'Import failed — check file format';
@@ -1407,6 +1439,29 @@ export function renderSettings(container: HTMLElement) {
       showToast('Exception added');
     } catch { showToast('Failed to add exception', 'error'); }
   });
+
+  // Keyword alerts handlers
+  document.getElementById('add-keyword-alert')?.addEventListener('click', async () => {
+    const input = document.getElementById('keyword-alert-input') as HTMLInputElement;
+    const keyword = input.value.trim().toLowerCase();
+    if (!keyword) return;
+    try {
+      const current = await api.get('/features/quiet-hours');
+      const keywords: string[] = (current.data as { alert_keywords: string[] }).alert_keywords || [];
+      if (keywords.length >= 20) { showToast('Max 20 keywords', 'error'); return; }
+      if (!keywords.includes(keyword)) {
+        keywords.push(keyword);
+        await api.put('/features/quiet-hours', { alert_keywords: keywords });
+      }
+      input.value = '';
+      loadQuietHours();
+      showToast('Keyword added');
+    } catch { showToast('Failed to add keyword', 'error'); }
+  });
+
+  document.getElementById('keyword-alert-input')?.addEventListener('keydown', (e) => {
+    if ((e as KeyboardEvent).key === 'Enter') document.getElementById('add-keyword-alert')?.click();
+  });
 }
 
 async function loadDonorBadge() {
@@ -1440,30 +1495,57 @@ async function loadDonorBadge() {
 async function loadQuietHours() {
   try {
     const res = await api.get('/features/quiet-hours');
-    const data = res.data as { quiet_start: string | null; quiet_end: string | null; dnd_exceptions: string[] };
+    const data = res.data as { quiet_start: string | null; quiet_end: string | null; dnd_exceptions: string[]; alert_keywords: string[] };
     if (data.quiet_start) (document.getElementById('quiet-start') as HTMLInputElement).value = data.quiet_start;
     if (data.quiet_end) (document.getElementById('quiet-end') as HTMLInputElement).value = data.quiet_end;
+
+    // Store keywords locally for client-side DND breakthrough checks
+    localStorage.setItem('rocchat_alert_keywords', JSON.stringify(data.alert_keywords || []));
+
     const listEl = document.getElementById('dnd-exceptions-list');
-    if (!listEl) return;
-    if (!data.dnd_exceptions?.length) {
-      listEl.innerHTML = '<div style="font-size:var(--text-xs);color:var(--text-tertiary)">No exceptions set</div>';
-      return;
+    if (listEl) {
+      if (!data.dnd_exceptions?.length) {
+        listEl.innerHTML = '<div style="font-size:var(--text-xs);color:var(--text-tertiary)">No exceptions set</div>';
+      } else {
+        listEl.innerHTML = data.dnd_exceptions.map(uid =>
+          `<div style="display:flex;align-items:center;gap:var(--sp-2);padding:4px 0">
+            <span style="font-size:var(--text-sm);color:var(--text-primary)">${uid.slice(0, 8)}...</span>
+            <button class="btn-secondary remove-dnd-exception" data-uid="${uid}" style="font-size:var(--text-xs);padding:2px 8px;color:var(--danger)">Remove</button>
+          </div>`
+        ).join('');
+        listEl.querySelectorAll('.remove-dnd-exception').forEach(btn => {
+          btn.addEventListener('click', async () => {
+            const uid = (btn as HTMLElement).dataset.uid!;
+            const current = await api.get('/features/quiet-hours');
+            const exceptions: string[] = ((current.data as { dnd_exceptions: string[] }).dnd_exceptions || []).filter(e => e !== uid);
+            await api.put('/features/quiet-hours', { dnd_exceptions: exceptions });
+            loadQuietHours();
+          });
+        });
+      }
     }
-    listEl.innerHTML = data.dnd_exceptions.map(uid =>
-      `<div style="display:flex;align-items:center;gap:var(--sp-2);padding:4px 0">
-        <span style="font-size:var(--text-sm);color:var(--text-primary)">${uid.slice(0, 8)}...</span>
-        <button class="btn-secondary remove-dnd-exception" data-uid="${uid}" style="font-size:var(--text-xs);padding:2px 8px;color:var(--danger)">Remove</button>
-      </div>`
-    ).join('');
-    listEl.querySelectorAll('.remove-dnd-exception').forEach(btn => {
-      btn.addEventListener('click', async () => {
-        const uid = (btn as HTMLElement).dataset.uid!;
-        const current = await api.get('/features/quiet-hours');
-        const exceptions: string[] = ((current.data as { dnd_exceptions: string[] }).dnd_exceptions || []).filter(e => e !== uid);
-        await api.put('/features/quiet-hours', { dnd_exceptions: exceptions });
-        loadQuietHours();
-      });
-    });
+
+    // Render keyword alert pills
+    const kwEl = document.getElementById('keyword-alerts-list');
+    if (kwEl) {
+      const keywords = data.alert_keywords || [];
+      if (!keywords.length) {
+        kwEl.innerHTML = '<div style="font-size:var(--text-xs);color:var(--text-tertiary)">No keywords set</div>';
+      } else {
+        kwEl.innerHTML = keywords.map(kw =>
+          `<span style="display:inline-flex;align-items:center;gap:4px;background:var(--bg-primary);border:1px solid var(--border);border-radius:20px;padding:2px 10px;font-size:var(--text-xs);color:var(--text-primary)">${kw}<button class="remove-keyword" data-kw="${kw}" style="background:none;border:none;color:var(--danger);cursor:pointer;font-size:14px;padding:0;line-height:1">&times;</button></span>`
+        ).join('');
+        kwEl.querySelectorAll('.remove-keyword').forEach(btn => {
+          btn.addEventListener('click', async () => {
+            const kw = (btn as HTMLElement).dataset.kw!;
+            const current = await api.get('/features/quiet-hours');
+            const updated: string[] = ((current.data as { alert_keywords: string[] }).alert_keywords || []).filter(k => k !== kw);
+            await api.put('/features/quiet-hours', { alert_keywords: updated });
+            loadQuietHours();
+          });
+        });
+      }
+    }
   } catch {
     const listEl = document.getElementById('dnd-exceptions-list');
     if (listEl) listEl.innerHTML = '<div style="font-size:var(--text-xs);color:var(--text-tertiary)">Could not load</div>';

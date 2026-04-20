@@ -1,13 +1,20 @@
 package com.rocchat.calls
 
 import android.content.Context
+import android.graphics.ImageFormat
+import android.hardware.camera2.*
 import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioRecord
 import android.media.AudioTrack
+import android.media.ImageReader
 import android.media.MediaRecorder
+import android.os.Handler
+import android.os.HandlerThread
 import android.util.Base64
+import android.view.Surface
+import android.view.SurfaceHolder
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
@@ -75,6 +82,15 @@ object CallManager {
     private val sampleRate = 16000
     private val chunkFrames = 320 // 20 ms @ 16 kHz
 
+    // Camera2 video capture for video calls
+    private var cameraDevice: CameraDevice? = null
+    private var cameraCaptureSession: CameraCaptureSession? = null
+    private var cameraThread: HandlerThread? = null
+    private var cameraHandler: Handler? = null
+    private var previewSurface: Surface? = null
+    private var imageReader: ImageReader? = null
+    private var videoJob: Job? = null
+
     fun startCall(
         conversationId: String, remoteUserId: String, remoteName: String,
         callType: String, ws: NativeWebSocket
@@ -140,6 +156,10 @@ object CallManager {
             "targetUserId" to remoteUserId
         ))
         startAudioStreaming()
+        if (callType == "video") {
+            val ctx = appContext ?: return
+            startVideoCapture(ctx)
+        }
     }
 
     fun declineCall() = endCall("declined")
@@ -152,6 +172,10 @@ object CallManager {
         startDurationTimer()
         timeoutJob?.cancel()
         startAudioStreaming()
+        if (callType == "video") {
+            val ctx = appContext ?: return
+            startVideoCapture(ctx)
+        }
     }
 
     fun handleIceCandidate(payload: JSONObject) {
@@ -167,7 +191,101 @@ object CallManager {
     }
 
     fun toggleMute() { isMuted = !isMuted }
-    fun toggleCamera() { isCameraOff = !isCameraOff }
+    fun toggleCamera() {
+        isCameraOff = !isCameraOff
+        if (isCameraOff) {
+            stopVideoCapture()
+        } else if (callStatus == "connected" && callType == "video") {
+            val ctx = appContext ?: return
+            startVideoCapture(ctx)
+        }
+    }
+
+    /**
+     * Attach a SurfaceHolder from the composable SurfaceView for local camera preview.
+     * Must be called on a surface that's been created.
+     */
+    fun attachLocalVideoSurface(ctx: Context, holder: SurfaceHolder) {
+        previewSurface = holder.surface
+        appContext = ctx
+        if (callStatus == "connected" && callType == "video" && !isCameraOff) {
+            startVideoCapture(ctx)
+        }
+    }
+
+    @Suppress("MissingPermission")
+    private fun startVideoCapture(ctx: Context) {
+        if (cameraDevice != null) return // already capturing
+        val surface = previewSurface ?: return
+
+        cameraThread = HandlerThread("RocCameraThread").apply { start() }
+        cameraHandler = Handler(cameraThread!!.looper)
+
+        // Also create an ImageReader for frame capture (send via P2P/WS)
+        imageReader = ImageReader.newInstance(640, 480, ImageFormat.YUV_420_888, 2)
+        imageReader?.setOnImageAvailableListener({ reader ->
+            val image = reader.acquireLatestImage()
+            if (image != null) {
+                // Encode & send frame via P2P transport
+                try {
+                    val buffer = image.planes[0].buffer
+                    val bytes = ByteArray(buffer.remaining())
+                    buffer.get(bytes)
+                    val encoded = Base64.encodeToString(bytes, Base64.NO_WRAP)
+                    val frame = JSONObject().apply {
+                        put("type", "video_frame")
+                        put("data", encoded)
+                        put("w", image.width)
+                        put("h", image.height)
+                    }
+                    if (p2pConnected) {
+                        p2p?.send(frame.toString().toByteArray())
+                    } else {
+                        ws?.send(frame.toString())
+                    }
+                } catch (_: Exception) { }
+                image.close()
+            }
+        }, cameraHandler)
+
+        val camManager = ctx.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+        val frontCam = camManager.cameraIdList.firstOrNull { id ->
+            camManager.getCameraCharacteristics(id)
+                .get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_FRONT
+        } ?: camManager.cameraIdList.firstOrNull() ?: return
+
+        try {
+            camManager.openCamera(frontCam, object : CameraDevice.StateCallback() {
+                override fun onOpened(camera: CameraDevice) {
+                    cameraDevice = camera
+                    val targets = listOf(surface, imageReader!!.surface)
+                    camera.createCaptureSession(targets, object : CameraCaptureSession.StateCallback() {
+                        override fun onConfigured(session: CameraCaptureSession) {
+                            cameraCaptureSession = session
+                            val req = camera.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
+                                addTarget(surface)
+                                addTarget(imageReader!!.surface)
+                            }
+                            session.setRepeatingRequest(req.build(), null, cameraHandler)
+                        }
+                        override fun onConfigureFailed(session: CameraCaptureSession) {
+                            stopVideoCapture()
+                        }
+                    }, cameraHandler)
+                }
+                override fun onDisconnected(camera: CameraDevice) { stopVideoCapture() }
+                override fun onError(camera: CameraDevice, error: Int) { stopVideoCapture() }
+            }, cameraHandler)
+        } catch (_: SecurityException) { /* no camera permission */ }
+    }
+
+    private fun stopVideoCapture() {
+        cameraCaptureSession?.close(); cameraCaptureSession = null
+        cameraDevice?.close(); cameraDevice = null
+        imageReader?.close(); imageReader = null
+        cameraThread?.quitSafely(); cameraThread = null
+        cameraHandler = null
+    }
 
     fun endCall(reason: String = "hangup", notify: Boolean = true) {
         if (notify && callId != null) {
@@ -199,6 +317,7 @@ object CallManager {
         durationJob?.cancel()
         timeoutJob?.cancel()
         stopAudioStreaming()
+        stopVideoCapture()
         stopP2P()
         callId = null
         conversationId = null
@@ -209,6 +328,7 @@ object CallManager {
         callDuration = 0
         isMuted = false
         isCameraOff = false
+        previewSurface = null
         pendingSdp = null
     }
 

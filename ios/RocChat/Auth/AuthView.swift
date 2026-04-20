@@ -122,6 +122,12 @@ struct AuthView: View {
             }
             .interactiveDismissDisabled()
         }
+        .sheet(isPresented: $authVM.showImportWizard) {
+            OnboardingImportSheet {
+                authVM.dismissImportWizard()
+            }
+            .interactiveDismissDisabled()
+        }
     }
     
     private func submit() {

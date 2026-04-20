@@ -206,7 +206,14 @@ class AuthViewModel: ObservableObject {
     
     func dismissRecoveryPhrase() {
         recoveryPhrase = nil
-        // Session was already saved during registration — go straight to main app
+        // Show import wizard before entering main app
+        showImportWizard = true
+    }
+    
+    @Published var showImportWizard = false
+    
+    func dismissImportWizard() {
+        showImportWizard = false
         isAuthenticated = true
     }
     

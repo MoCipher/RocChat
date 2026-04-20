@@ -2190,7 +2190,7 @@ async function showOrgDashboard(orgId: string) {
           if (uploadRes.ok) logoUrl = uploadRes.data.url;
           else { showToast('Logo upload failed', 'error'); return; }
         }
-        const res = await api.req<void>(`/organizations/${orgId}`, { method: 'PUT', body: JSON.stringify({ accent_color: color, logo_url: logoUrl }) });
+        const res = await api.req<void>(`/business/org/${orgId}`, { method: 'PATCH', body: JSON.stringify({ accent_color: color, logo_url: logoUrl }) });
         if (res.ok) { showToast('Branding updated'); showOrgDashboard(orgId); brandOverlay.remove(); }
         else showToast('Failed to update branding', 'error');
       });

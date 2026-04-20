@@ -105,7 +105,7 @@ export async function handleBusiness(
     if (adminCheck) return adminCheck;
 
     const body = await request.json() as Record<string, unknown>;
-    const allowed = ['name', 'accent_color'];
+    const allowed = ['name', 'accent_color', 'logo_url'];
     const updates: string[] = [];
     const values: unknown[] = [];
 
@@ -116,6 +116,10 @@ export async function handleBusiness(
           if (!name || name.length < 1 || name.length > 100) {
             return errorResponse('Organization name must be 1-100 characters', 400);
           }
+        }
+        if (key === 'logo_url' && body.logo_url) {
+          const url = body.logo_url as string;
+          if (!url.startsWith('https://')) return errorResponse('logo_url must be an https URL', 400);
         }
         updates.push(`${key} = ?`);
         values.push(body[key]);

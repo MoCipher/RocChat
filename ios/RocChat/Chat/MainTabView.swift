@@ -4716,6 +4716,9 @@ struct OrgDetailView: View {
     @State private var ssoEnabled = false
     @State private var showBulkInvite = false
     @State private var bulkEmails = ""
+    @State private var brandLogoUrl = ""
+    @State private var brandAccentColor = "#D4AF37"
+    @State private var brandSaving = false
 
     var body: some View {
         List {
@@ -4783,6 +4786,32 @@ struct OrgDetailView: View {
                             _ = try? await APIClient.shared.postRaw("/business/org/\(orgId)/retention", body: ["days": days], method: "PUT")
                         }
                     }
+            }
+            Section("Custom Branding") {
+                TextField("Logo URL (https://...)", text: $brandLogoUrl)
+                    .autocapitalization(.none)
+                    .disableAutocorrection(true)
+                    .textContentType(.URL)
+                HStack {
+                    Text("Accent Color")
+                    Spacer()
+                    TextField("#D4AF37", text: $brandAccentColor)
+                        .multilineTextAlignment(.trailing)
+                        .frame(width: 90)
+                        .font(.system(.body, design: .monospaced))
+                }
+                Button(brandSaving ? "Saving…" : "Save Branding") {
+                    guard !brandSaving else { return }
+                    brandSaving = true
+                    Task {
+                        var body: [String: Any] = ["accent_color": brandAccentColor]
+                        if !brandLogoUrl.isEmpty { body["logo_url"] = brandLogoUrl }
+                        _ = try? await APIClient.shared.postRaw("/business/org/\(orgId)", body: body, method: "PATCH")
+                        brandSaving = false
+                    }
+                }
+                .foregroundColor(.rocGold)
+                .disabled(brandSaving)
             }
             Section("Security") {
                 Toggle("SSO Enabled", isOn: $ssoEnabled)

@@ -2618,6 +2618,9 @@ fun SettingsTab(onLogout: () -> Unit) {
     var addMemberEmail by remember { mutableStateOf("") }
     var retentionDays by remember { mutableStateOf(0) }
     var ssoEnabled by remember { mutableStateOf(false) }
+    var brandLogoUrl by remember { mutableStateOf("") }
+    var brandAccentColor by remember { mutableStateOf("#D4AF37") }
+    var brandSaving by remember { mutableStateOf(false) }
 
     // Encrypted backup
     var showBackupSheet by remember { mutableStateOf(false) }
@@ -4200,6 +4203,51 @@ fun SettingsTab(onLogout: () -> Unit) {
                             Icon(Icons.Default.DeleteForever, contentDescription = null, modifier = Modifier.size(16.dp))
                             Spacer(Modifier.width(6.dp))
                             Text("Remote Wipe All Devices", fontSize = 13.sp)
+                        }
+
+                        Spacer(Modifier.height(12.dp))
+                        HorizontalDivider()
+                        Spacer(Modifier.height(8.dp))
+
+                        // Custom Branding
+                        Text("Custom Branding", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                        Spacer(Modifier.height(4.dp))
+                        OutlinedTextField(
+                            value = brandLogoUrl,
+                            onValueChange = { brandLogoUrl = it },
+                            label = { Text("Logo URL (https://...)") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                            textStyle = LocalTextStyle.current.copy(fontSize = 12.sp),
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        OutlinedTextField(
+                            value = brandAccentColor,
+                            onValueChange = { brandAccentColor = it },
+                            label = { Text("Accent Color (hex)") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                            textStyle = LocalTextStyle.current.copy(fontSize = 12.sp),
+                        )
+                        Spacer(Modifier.height(6.dp))
+                        Button(
+                            onClick = {
+                                if (!brandSaving) {
+                                    brandSaving = true
+                                    scope.launch {
+                                        try {
+                                            val body = JSONObject().put("accent_color", brandAccentColor)
+                                            if (brandLogoUrl.isNotBlank()) body.put("logo_url", brandLogoUrl)
+                                            APIClient.post("/business/org/$orgId", body, method = "PATCH")
+                                        } catch (_: Exception) {} finally { brandSaving = false }
+                                    }
+                                }
+                            },
+                            enabled = !brandSaving,
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = ButtonDefaults.buttonColors(containerColor = RocColors.RocGold),
+                        ) {
+                            Text(if (brandSaving) "Saving…" else "Save Branding", fontSize = 13.sp)
                         }
                     }
                 },

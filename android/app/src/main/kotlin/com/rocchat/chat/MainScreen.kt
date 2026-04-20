@@ -775,6 +775,43 @@ fun ConversationScreen(conversationId: String, conversationName: String, recipie
     var groupMembers by remember { mutableStateOf<List<JSONObject>>(emptyList()) }
     val haptics = LocalHapticFeedback.current
 
+    // Backup import file picker
+    val backupImportLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri ->
+        if (uri != null && backupPassphrase.length >= 12) {
+            scope.launch {
+                backupStatus = "Importing..."
+                try {
+                    val bytes = context.contentResolver.openInputStream(uri)?.readBytes() ?: throw Exception("Cannot read file")
+                    val header = "ROCCHAT-BACKUP-2"
+                    val headerBytes = header.toByteArray()
+                    if (bytes.size < headerBytes.size + 16 + 12 + 16) throw Exception("Invalid backup file")
+                    val fileHeader = String(bytes.sliceArray(0 until headerBytes.size))
+                    if (fileHeader != header) throw Exception("Not a RocChat backup")
+                    val salt = bytes.sliceArray(headerBytes.size until headerBytes.size + 16)
+                    val iv = bytes.sliceArray(headerBytes.size + 16 until headerBytes.size + 28)
+                    val ciphertext = bytes.sliceArray(headerBytes.size + 28 until bytes.size)
+                    val md = java.security.MessageDigest.getInstance("SHA-256")
+                    md.update(backupPassphrase.toByteArray())
+                    md.update(salt)
+                    val keyBytes = md.digest()
+                    val key = javax.crypto.spec.SecretKeySpec(keyBytes, "AES")
+                    val cipher = javax.crypto.Cipher.getInstance("AES/GCM/NoPadding")
+                    cipher.init(javax.crypto.Cipher.DECRYPT_MODE, key, javax.crypto.spec.GCMParameterSpec(128, iv))
+                    val plain = cipher.doFinal(ciphertext)
+                    val json = JSONObject(String(plain))
+                    val prefs = context.getSharedPreferences("rocchat", Context.MODE_PRIVATE).edit()
+                    json.keys().forEach { k -> prefs.putString(k, json.getString(k)) }
+                    prefs.apply()
+                    backupStatus = "✅ Backup restored successfully"
+                } catch (e: Exception) {
+                    backupStatus = "Import failed: ${e.message}"
+                }
+            }
+        }
+    }
+
     // File/photo picker
     val photoPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
@@ -1036,7 +1073,43 @@ fun ConversationScreen(conversationId: String, conversationName: String, recipie
             activity.registerScreenCaptureCallback(activity.mainExecutor, callback)
             onDispose { activity.unregisterScreenCaptureCallback(callback) }
         } else {
-            onDispose {}
+            // Fallback for Android < 14: ContentObserver on Screenshots
+            val observer = object : android.database.ContentObserver(android.os.Handler(android.os.Looper.getMainLooper())) {
+                private var lastTimestamp = System.currentTimeMillis()
+                override fun onChange(selfChange: Boolean, uri: android.net.Uri?) {
+                    super.onChange(selfChange, uri)
+                    val now = System.currentTimeMillis()
+                    if (now - lastTimestamp < 2000) return // debounce
+                    lastTimestamp = now
+                    // Check if path contains "screenshot"
+                    val path = uri?.path?.lowercase() ?: return
+                    if (!path.contains("screenshot")) return
+                    scope.launch {
+                        try {
+                            if (recipientUserId.isNotEmpty()) {
+                                val envelope = SessionManager.encryptMessage(context, conversationId, recipientUserId, "📸 Screenshot taken")
+                                val body = org.json.JSONObject().apply {
+                                    put("conversation_id", conversationId)
+                                    put("ciphertext", envelope.ciphertext)
+                                    put("iv", envelope.iv)
+                                    put("ratchet_header", envelope.ratchetHeader)
+                                    put("message_type", "screenshot_alert")
+                                }
+                                APIClient.post("/messages/send", body)
+                            }
+                        } catch (_: Exception) {}
+                    }
+                }
+            }
+            try {
+                context.contentResolver.registerContentObserver(
+                    android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                    true, observer
+                )
+            } catch (_: Exception) {}
+            onDispose {
+                context.contentResolver.unregisterContentObserver(observer)
+            }
         }
     }
 
@@ -3705,7 +3778,7 @@ fun SettingsTab(onLogout: () -> Unit) {
                             }
                             OutlinedButton(onClick = {
                                 if (backupPassphrase.length < 12) { backupStatus = "Passphrase must be 12+ characters"; return@OutlinedButton }
-                                backupStatus = "Use Import Chat History to select backup file."
+                                backupImportLauncher.launch("application/octet-stream")
                             }, modifier = Modifier.weight(1f)) {
                                 Icon(Icons.Default.Download, contentDescription = null)
                                 Spacer(Modifier.width(4.dp))

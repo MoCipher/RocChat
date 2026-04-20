@@ -2410,7 +2410,7 @@ private fun MessageBubble(
 
 // ── Settings Tab ──
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun SettingsTab(onLogout: () -> Unit) {
     val context = LocalContext.current
@@ -3230,6 +3230,88 @@ fun SettingsTab(onLogout: () -> Unit) {
                 Text(String.format("%02d:%02d", quietEndHour, quietEndMin), fontWeight = FontWeight.SemiBold)
             }
             Text("Configure exact times in RocChat Web settings", modifier = Modifier.padding(horizontal = 16.dp), fontSize = 11.sp, color = RocColors.TextSecondary)
+        }
+
+        // Keyword Alerts
+        var alertKeywords by remember { mutableStateOf(listOf<String>()) }
+        var newKeyword by remember { mutableStateOf("") }
+
+        LaunchedEffect(Unit) {
+            try {
+                val qh = APIClient.get("/features/quiet-hours")
+                val arr = qh.optJSONArray("alert_keywords")
+                if (arr != null) {
+                    alertKeywords = (0 until arr.length()).map { arr.getString(it) }
+                }
+            } catch (_: Exception) {}
+        }
+
+        Spacer(Modifier.height(8.dp))
+        Text("Keyword Alerts", modifier = Modifier.padding(horizontal = 16.dp), fontWeight = FontWeight.SemiBold, fontSize = 13.sp, color = RocColors.RocGold)
+        Text("Get notified even during Quiet Hours when a message contains these keywords.",
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp), fontSize = 11.sp, color = RocColors.TextSecondary)
+
+        if (alertKeywords.isNotEmpty()) {
+            FlowRow(
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                alertKeywords.forEach { kw ->
+                    InputChip(
+                        selected = false,
+                        onClick = {
+                            alertKeywords = alertKeywords.filter { it != kw }
+                            scope.launch {
+                                try { APIClient.post("/features/quiet-hours", org.json.JSONObject().apply { put("alert_keywords", org.json.JSONArray(alertKeywords)) }, "PUT") } catch (_: Exception) {}
+                            }
+                        },
+                        label = { Text(kw, fontSize = 12.sp) },
+                        trailingIcon = { Icon(Icons.Default.Close, contentDescription = "Remove", modifier = Modifier.size(14.dp)) },
+                    )
+                }
+            }
+        }
+
+        Row(modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            OutlinedTextField(
+                value = newKeyword,
+                onValueChange = { newKeyword = it },
+                modifier = Modifier.weight(1f).height(48.dp),
+                placeholder = { Text("Add keyword...", fontSize = 12.sp) },
+                textStyle = LocalTextStyle.current.copy(fontSize = 12.sp),
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                keyboardActions = KeyboardActions(onDone = {
+                    val kw = newKeyword.trim().lowercase()
+                    if (kw.isNotEmpty() && kw !in alertKeywords && alertKeywords.size < 20) {
+                        alertKeywords = alertKeywords + kw
+                        newKeyword = ""
+                        scope.launch {
+                            try { APIClient.post("/features/quiet-hours", org.json.JSONObject().apply { put("alert_keywords", org.json.JSONArray(alertKeywords)) }, "PUT") } catch (_: Exception) {}
+                        }
+                    }
+                }),
+            )
+            Spacer(Modifier.width(8.dp))
+            IconButton(
+                onClick = {
+                    val kw = newKeyword.trim().lowercase()
+                    if (kw.isNotEmpty() && kw !in alertKeywords && alertKeywords.size < 20) {
+                        alertKeywords = alertKeywords + kw
+                        newKeyword = ""
+                        scope.launch {
+                            try { APIClient.post("/features/quiet-hours", org.json.JSONObject().apply { put("alert_keywords", org.json.JSONArray(alertKeywords)) }, "PUT") } catch (_: Exception) {}
+                        }
+                    }
+                },
+                enabled = newKeyword.trim().isNotEmpty() && alertKeywords.size < 20,
+            ) {
+                Icon(Icons.Default.Add, contentDescription = "Add", tint = RocColors.RocGold)
+            }
+        }
+        if (alertKeywords.size >= 20) {
+            Text("Maximum 20 keywords", modifier = Modifier.padding(horizontal = 16.dp), fontSize = 11.sp, color = RocColors.Danger)
         }
 
         HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))

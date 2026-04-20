@@ -1864,6 +1864,7 @@ async function showOrgDashboard(orgId: string) {
         <button class="btn-secondary" id="org-directory">🔍 User Directory</button>
         <button class="btn-secondary" id="org-api-keys">🔑 API Keys</button>
         <button class="btn-secondary" id="org-webhooks">🔗 Webhooks</button>
+        <button class="btn-secondary" id="org-branding">🎨 Custom Branding</button>
       </div>
     `;
 
@@ -2139,6 +2140,56 @@ async function showOrgDashboard(orgId: string) {
         });
       };
       renderHooks();
+    });
+
+    // Custom Branding
+    body.querySelector('#org-branding')?.addEventListener('click', async () => {
+      const brandOverlay = createOverlay();
+      const ob = brandOverlay.querySelector('.overlay-body')!;
+      const currentColor = org.accent_color || '#c9a84c';
+      const currentLogo = (org as any).logo_url || '';
+      ob.innerHTML = `
+        <h3 style="margin-bottom:var(--sp-3)">🎨 Custom Branding</h3>
+        <div style="display:grid;gap:var(--sp-3)">
+          <div>
+            <label class="setting-label" style="display:block;margin-bottom:4px">Accent Color</label>
+            <div style="display:flex;align-items:center;gap:var(--sp-2)">
+              <input type="color" id="brand-color" value="${escHtml(currentColor)}" style="width:48px;height:36px;border:none;cursor:pointer" />
+              <input class="form-input" id="brand-color-hex" value="${escHtml(currentColor)}" style="width:120px;font-family:monospace" />
+            </div>
+          </div>
+          <div>
+            <label class="setting-label" style="display:block;margin-bottom:4px">Organization Logo</label>
+            ${currentLogo ? `<img src="${escHtml(currentLogo)}" style="max-width:120px;max-height:60px;margin-bottom:8px;border-radius:8px;display:block" />` : ''}
+            <input type="file" id="brand-logo" accept="image/png,image/jpeg,image/svg+xml" />
+            <div style="font-size:11px;color:var(--text-tertiary);margin-top:4px">PNG, JPG or SVG. Max 512KB.</div>
+          </div>
+          <button class="btn-primary" id="brand-save" style="width:100%">Save Branding</button>
+        </div>
+      `;
+      const colorPicker = ob.querySelector('#brand-color') as HTMLInputElement;
+      const hexInput = ob.querySelector('#brand-color-hex') as HTMLInputElement;
+      colorPicker.addEventListener('input', () => { hexInput.value = colorPicker.value; });
+      hexInput.addEventListener('input', () => {
+        if (/^#[0-9a-fA-F]{6}$/.test(hexInput.value)) colorPicker.value = hexInput.value;
+      });
+      ob.querySelector('#brand-save')?.addEventListener('click', async () => {
+        const color = hexInput.value;
+        const fileInput = ob.querySelector('#brand-logo') as HTMLInputElement;
+        let logoUrl = currentLogo;
+        if (fileInput.files?.length) {
+          const file = fileInput.files[0];
+          if (file.size > 512 * 1024) { showToast('Logo must be under 512KB', 'error'); return; }
+          const formData = new FormData();
+          formData.append('file', file);
+          const uploadRes = await api.req<{ url: string }>(`/organizations/${orgId}/logo`, { method: 'POST', body: formData });
+          if (uploadRes.ok) logoUrl = uploadRes.data.url;
+          else { showToast('Logo upload failed', 'error'); return; }
+        }
+        const res = await api.req<void>(`/organizations/${orgId}`, { method: 'PUT', body: JSON.stringify({ accent_color: color, logo_url: logoUrl }) });
+        if (res.ok) { showToast('Branding updated'); showOrgDashboard(orgId); brandOverlay.remove(); }
+        else showToast('Failed to update branding', 'error');
+      });
     });
 
   } catch { showToast('Failed to load organization', 'error'); }

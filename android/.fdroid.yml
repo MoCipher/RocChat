@@ -1,0 +1,27 @@
+Categories:
+  - Internet
+  - Security
+License: GPL-3.0-only
+AuthorName: MoCipher
+WebSite: https://chat.mocipher.com
+SourceCode: https://github.com/mocipher/rocchat
+IssueTracker: https://github.com/mocipher/rocchat/issues
+
+AutoName: RocChat
+
+RepoType: git
+Repo: https://github.com/mocipher/rocchat.git
+
+Builds:
+  - versionName: 1.0.0
+    versionCode: 1
+    commit: HEAD
+    subdir: android/app
+    gradle:
+      - yes
+    ndk: r26b
+
+AutoUpdateMode: Version
+UpdateCheckMode: Tags
+CurrentVersion: 1.0.0
+CurrentVersionCode: 1

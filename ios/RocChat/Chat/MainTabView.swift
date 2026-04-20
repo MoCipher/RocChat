@@ -2699,6 +2699,8 @@ struct SettingsView: View {
     @State private var quietStart = Date()
     @State private var quietEnd = Date()
     @State private var quietHoursEnabled = false
+    @State private var alertKeywords: [String] = []
+    @State private var newKeyword = ""
 
     @State private var showPhotoPicker = false
     @State private var selectedPhoto: PhotosPickerItem?
@@ -3240,6 +3242,62 @@ struct SettingsView: View {
                         Text("DND exceptions can bypass this on the web settings.")
                             .font(.caption)
                             .foregroundColor(.textSecondary)
+                    }
+
+                    // Keyword Alerts
+                    VStack(alignment: .leading, spacing: 8) {
+                        Label("Keyword Alerts", systemImage: "bell.badge.fill")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundColor(.rocGold)
+                        Text("Get notified even during Quiet Hours when a message contains these keywords.")
+                            .font(.caption)
+                            .foregroundColor(.textSecondary)
+                        
+                        if !alertKeywords.isEmpty {
+                            FlowLayout(spacing: 6) {
+                                ForEach(alertKeywords, id: \.self) { kw in
+                                    HStack(spacing: 4) {
+                                        Text(kw)
+                                            .font(.caption)
+                                            .foregroundColor(.textPrimary)
+                                        Button {
+                                            alertKeywords.removeAll { $0 == kw }
+                                            saveKeywords()
+                                        } label: {
+                                            Image(systemName: "xmark.circle.fill")
+                                                .font(.caption2)
+                                                .foregroundColor(.danger)
+                                        }
+                                    }
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 4)
+                                    .background(Color.bgCard)
+                                    .cornerRadius(20)
+                                    .overlay(RoundedRectangle(cornerRadius: 20).stroke(Color.borderNorm, lineWidth: 1))
+                                }
+                            }
+                        }
+                        
+                        HStack {
+                            TextField("Add keyword...", text: $newKeyword)
+                                .textFieldStyle(RoundedBorderTextFieldStyle())
+                                .font(.caption)
+                                .autocapitalization(.none)
+                                .onSubmit { addKeyword() }
+                            Button {
+                                addKeyword()
+                            } label: {
+                                Image(systemName: "plus.circle.fill")
+                                    .foregroundColor(.rocGold)
+                            }
+                            .disabled(newKeyword.trimmingCharacters(in: .whitespaces).isEmpty || alertKeywords.count >= 20)
+                        }
+                        
+                        if alertKeywords.count >= 20 {
+                            Text("Maximum 20 keywords")
+                                .font(.caption2)
+                                .foregroundColor(.danger)
+                        }
                     }
                 }
                 .tint(.rocGold)
@@ -3956,6 +4014,9 @@ struct SettingsView: View {
                         quietEnd = endDate
                         quietHoursEnabled = true
                     }
+                    if let kws = qh["alert_keywords"] as? [String] {
+                        alertKeywords = kws
+                    }
                 }
             } catch {}
             // Load devices
@@ -4197,6 +4258,22 @@ struct SettingsView: View {
                 "quiet_end": formatter.string(from: quietEnd),
             ]
             _ = try? await APIClient.shared.postRaw("/features/quiet-hours", body: body, method: "PUT")
+        }
+    }
+
+    private func addKeyword() {
+        let kw = newKeyword.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !kw.isEmpty, !alertKeywords.contains(kw), alertKeywords.count < 20 else { return }
+        alertKeywords.append(kw)
+        newKeyword = ""
+        saveKeywords()
+    }
+
+    private func saveKeywords() {
+        Task {
+            _ = try? await APIClient.shared.postRaw("/features/quiet-hours", body: [
+                "alert_keywords": alertKeywords
+            ], method: "PUT")
         }
     }
 

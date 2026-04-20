@@ -1979,41 +1979,82 @@ function getOtherMember(conv: Conversation): Conversation['members'][0] | undefi
 
 function showDisappearingMenu(conversationId: string) {
   const currentTimer = disappearTimers.get(conversationId) || 0;
+  const conv = state.conversations.find(c => c.id === conversationId) as Record<string, unknown> | undefined;
+  const currentMediaExpiry = (conv?.media_expiry as number) || 0;
+  const currentVoiceExpiry = (conv?.voice_expiry as number) || 0;
+  const currentCallExpiry = (conv?.call_history_expiry as number) || 0;
+  const currentBurnOnRead = !!(conv?.burn_on_read);
+
   const overlay = document.createElement('div');
   overlay.style.cssText = `
     position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:50;
     display:flex;align-items:center;justify-content:center;padding:var(--sp-4);
   `;
 
-  const options = [
+  const msgOptions = [
     { label: 'Off', value: 0 },
     { label: '5 minutes', value: 300 },
     { label: '1 hour', value: 3600 },
+    { label: '6 hours', value: 21600 },
+    { label: '12 hours', value: 43200 },
     { label: '24 hours', value: 86400 },
     { label: '7 days', value: 604800 },
     { label: '30 days', value: 2592000 },
   ];
 
+  const mediaOptions = [
+    { label: 'Off', value: 0 },
+    { label: 'After viewed', value: -1 },
+    { label: '1 hour', value: 3600 },
+    { label: '24 hours', value: 86400 },
+  ];
+
+  const voiceOptions = [
+    { label: 'Off', value: 0 },
+    { label: 'After played', value: -1 },
+    { label: '1 hour', value: 3600 },
+  ];
+
+  const callOptions = [
+    { label: 'Off', value: 0 },
+    { label: '24 hours', value: 86400 },
+    { label: '7 days', value: 604800 },
+  ];
+
+  const renderOpts = (opts: {label:string;value:number}[], current: number, cls: string) =>
+    opts.map(o => `<button class="btn-secondary ${cls} ${current === o.value ? 'active' : ''}" data-value="${o.value}" style="font-size:var(--text-xs);padding:4px 8px;${current === o.value ? 'border-color:var(--roc-gold);color:var(--roc-gold)' : ''}">${o.label}</button>`).join('');
+
   overlay.innerHTML = `
-    <div class="auth-card" style="max-width:320px">
-      <h2 style="font-size:var(--text-lg);margin-bottom:var(--sp-2)">Disappearing Messages</h2>
-      <p style="font-size:var(--text-sm);color:var(--text-tertiary);margin-bottom:var(--sp-4)">
-        New messages will auto-delete after the selected time.
-      </p>
-      <div style="display:flex;flex-direction:column;gap:var(--sp-2)">
-        ${options
-          .map(
-            (o) => `
-          <button class="btn-secondary disappear-option ${currentTimer === o.value ? 'active' : ''}"
-                  data-value="${o.value}"
-                  style="${currentTimer === o.value ? 'border-color:var(--roc-gold);color:var(--roc-gold)' : ''}">
-            ${o.label}
-          </button>
-        `,
-          )
-          .join('')}
+    <div class="auth-card" style="max-width:380px;max-height:90vh;overflow-y:auto">
+      <h2 style="font-size:var(--text-lg);margin-bottom:var(--sp-3)">Disappearing Settings</h2>
+
+      <div style="margin-bottom:var(--sp-3)">
+        <h3 style="font-size:var(--text-sm);color:var(--text-secondary);margin-bottom:var(--sp-1)">💬 Messages</h3>
+        <div style="display:flex;flex-wrap:wrap;gap:var(--sp-1)">${renderOpts(msgOptions, currentTimer, 'disappear-msg')}</div>
       </div>
-      <button class="btn-secondary" id="close-disappear" style="margin-top:var(--sp-3)">Cancel</button>
+
+      <div style="margin-bottom:var(--sp-3)">
+        <h3 style="font-size:var(--text-sm);color:var(--text-secondary);margin-bottom:var(--sp-1)">🖼️ Media</h3>
+        <div style="display:flex;flex-wrap:wrap;gap:var(--sp-1)">${renderOpts(mediaOptions, currentMediaExpiry, 'disappear-media')}</div>
+      </div>
+
+      <div style="margin-bottom:var(--sp-3)">
+        <h3 style="font-size:var(--text-sm);color:var(--text-secondary);margin-bottom:var(--sp-1)">🎤 Voice Notes</h3>
+        <div style="display:flex;flex-wrap:wrap;gap:var(--sp-1)">${renderOpts(voiceOptions, currentVoiceExpiry, 'disappear-voice')}</div>
+      </div>
+
+      <div style="margin-bottom:var(--sp-3)">
+        <h3 style="font-size:var(--text-sm);color:var(--text-secondary);margin-bottom:var(--sp-1)">📞 Call History</h3>
+        <div style="display:flex;flex-wrap:wrap;gap:var(--sp-1)">${renderOpts(callOptions, currentCallExpiry, 'disappear-call')}</div>
+      </div>
+
+      <div style="margin-bottom:var(--sp-3);display:flex;align-items:center;gap:var(--sp-2)">
+        <label style="font-size:var(--text-sm);color:var(--text-secondary)">🔥 Burn on Read</label>
+        <input type="checkbox" id="burn-on-read-toggle" ${currentBurnOnRead ? 'checked' : ''} style="accent-color:var(--roc-gold)">
+        <span style="font-size:var(--text-xs);color:var(--text-tertiary)">Delete from BOTH devices after read</span>
+      </div>
+
+      <button class="btn-secondary" id="close-disappear" style="width:100%">Done</button>
     </div>
   `;
 
@@ -2021,27 +2062,53 @@ function showDisappearingMenu(conversationId: string) {
   trapFocusInOverlay(overlay);
 
   overlay.querySelector('#close-disappear')?.addEventListener('click', () => overlay.remove());
-  overlay.addEventListener('click', (e) => {
-    if (e.target === overlay) overlay.remove();
-  });
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
 
-  overlay.querySelectorAll('.disappear-option').forEach((btn) => {
+  // Message timer
+  overlay.querySelectorAll('.disappear-msg').forEach(btn => {
     btn.addEventListener('click', () => {
       const value = parseInt((btn as HTMLElement).dataset.value || '0', 10);
       disappearTimers.set(conversationId, value);
       saveDisappearTimers();
-
-      // Update the timer icon to indicate active
+      overlay.querySelectorAll('.disappear-msg').forEach(b => { (b as HTMLElement).style.borderColor = ''; (b as HTMLElement).style.color = ''; b.classList.remove('active'); });
+      (btn as HTMLElement).style.borderColor = 'var(--roc-gold)'; (btn as HTMLElement).style.color = 'var(--roc-gold)'; btn.classList.add('active');
       const timerBtn = document.getElementById('btn-disappear');
       if (timerBtn) {
         timerBtn.style.color = value > 0 ? 'var(--turquoise)' : '';
-        timerBtn.title = value > 0
-          ? `Disappearing: ${options.find((o) => o.value === value)?.label}`
-          : 'Disappearing messages';
       }
-
-      overlay.remove();
     });
+  });
+
+  // Media/voice/call timers + burn on read — save to backend
+  const saveExtended = async (field: string, value: number | boolean) => {
+    try { await api.put(`/messages/conversations/${conversationId}/disappearing`, { [field]: value }); } catch { /* ignore */ }
+  };
+  overlay.querySelectorAll('.disappear-media').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const v = parseInt((btn as HTMLElement).dataset.value || '0', 10);
+      overlay.querySelectorAll('.disappear-media').forEach(b => { (b as HTMLElement).style.borderColor = ''; (b as HTMLElement).style.color = ''; });
+      (btn as HTMLElement).style.borderColor = 'var(--roc-gold)'; (btn as HTMLElement).style.color = 'var(--roc-gold)';
+      saveExtended('media_expiry', v);
+    });
+  });
+  overlay.querySelectorAll('.disappear-voice').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const v = parseInt((btn as HTMLElement).dataset.value || '0', 10);
+      overlay.querySelectorAll('.disappear-voice').forEach(b => { (b as HTMLElement).style.borderColor = ''; (b as HTMLElement).style.color = ''; });
+      (btn as HTMLElement).style.borderColor = 'var(--roc-gold)'; (btn as HTMLElement).style.color = 'var(--roc-gold)';
+      saveExtended('voice_expiry', v);
+    });
+  });
+  overlay.querySelectorAll('.disappear-call').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const v = parseInt((btn as HTMLElement).dataset.value || '0', 10);
+      overlay.querySelectorAll('.disappear-call').forEach(b => { (b as HTMLElement).style.borderColor = ''; (b as HTMLElement).style.color = ''; });
+      (btn as HTMLElement).style.borderColor = 'var(--roc-gold)'; (btn as HTMLElement).style.color = 'var(--roc-gold)';
+      saveExtended('call_history_expiry', v);
+    });
+  });
+  overlay.querySelector('#burn-on-read-toggle')?.addEventListener('change', (e) => {
+    saveExtended('burn_on_read', (e.target as HTMLInputElement).checked);
   });
 }
 

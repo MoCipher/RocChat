@@ -98,6 +98,28 @@ export async function handleMessages(
     return jsonResponse({ chat_theme: body.theme });
   }
 
+  // PUT /api/messages/conversations/:id/disappearing — set per-conversation disappearing timers
+  if (request.method === 'PUT' && path.match(/^\/api\/messages\/conversations\/[^/]+\/disappearing$/)) {
+    const convId = path.split('/')[4];
+    const body = await request.json() as {
+      media_expiry?: number | null;
+      voice_expiry?: number | null;
+      call_history_expiry?: number | null;
+      burn_on_read?: boolean;
+    };
+    const updates: string[] = [];
+    const values: (number | null)[] = [];
+    if ('media_expiry' in body) { updates.push('media_expiry = ?'); values.push(body.media_expiry ?? null); }
+    if ('voice_expiry' in body) { updates.push('voice_expiry = ?'); values.push(body.voice_expiry ?? null); }
+    if ('call_history_expiry' in body) { updates.push('call_history_expiry = ?'); values.push(body.call_history_expiry ?? null); }
+    if ('burn_on_read' in body) { updates.push('burn_on_read = ?'); values.push(body.burn_on_read ? 1 : 0); }
+    if (updates.length === 0) return errorResponse('No fields to update', 400);
+    await env.DB.prepare(
+      `UPDATE conversation_members SET ${updates.join(', ')} WHERE conversation_id = ? AND user_id = ?`
+    ).bind(...values, convId, session.userId).run();
+    return jsonResponse({ ok: true });
+  }
+
   // POST /api/messages/conversations/:id/pin — toggle pin conversation
   if (request.method === 'POST' && path.match(/^\/api\/messages\/conversations\/[^/]+\/pin$/)) {
     const convId = path.split('/')[4];
@@ -537,6 +559,7 @@ async function listConversations(env: Env, session: Session, includeArchived: bo
   const result = await env.DB.prepare(
     `SELECT c.id, c.type, c.encrypted_meta, c.created_at,
             cm.muted_at, cm.archived_at, cm.chat_theme, cm.pinned_at,
+            cm.media_expiry, cm.voice_expiry, cm.call_history_expiry, cm.burn_on_read,
             (SELECT json_group_array(json_object(
               'user_id', cm2.user_id,
               'username', u2.username,
@@ -566,6 +589,10 @@ async function listConversations(env: Env, session: Session, includeArchived: bo
     archived: !!row.archived_at,
     pinned: !!row.pinned_at,
     chat_theme: row.chat_theme || null,
+    media_expiry: row.media_expiry || null,
+    voice_expiry: row.voice_expiry || null,
+    call_history_expiry: row.call_history_expiry || null,
+    burn_on_read: !!(row.burn_on_read),
     last_message_at: row.last_message_at
       ? new Date((row.last_message_at as number) * 1000).toISOString()
       : null,

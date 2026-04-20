@@ -859,6 +859,11 @@ struct ConversationView: View {
                                 onForward: {
                                     forwardMessage = msg
                                     showForwardSheet = true
+                                },
+                                onBlock: {
+                                    Task {
+                                        _ = try? await APIClient.shared.postRaw("/contacts/block", body: ["userId": msg.senderId, "blocked": true])
+                                    }
                                 }
                             )
                                 .id(msg.id)
@@ -2150,6 +2155,7 @@ struct MessageBubbleView: View {
     var onPin: (() -> Void)?
     var onReply: (() -> Void)?
     var onForward: (() -> Void)?
+    var onBlock: (() -> Void)?
     @State private var viewOnceRevealed = false
     @State private var viewOnceImage: UIImage?
     @State private var showViewOnceModal = false
@@ -2242,6 +2248,12 @@ struct MessageBubbleView: View {
                 if isMine {
                     Button(role: .destructive) { onDelete?() } label: {
                         Label("Delete", systemImage: "trash")
+                    }
+                }
+                if !isMine {
+                    Divider()
+                    Button(role: .destructive) { onBlock?() } label: {
+                        Label("Block User", systemImage: "hand.raised.fill")
                     }
                 }
             }
@@ -2431,6 +2443,7 @@ struct SettingsView: View {
     @State private var verifyCode: String?
     @State private var verifyExpiry: Int = 0
     @State private var verifyInput = ""
+    @State private var showMyQRCode = false
 
     var body: some View {
         NavigationStack {
@@ -2528,6 +2541,28 @@ struct SettingsView: View {
                     .listRowInsets(EdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12))
                     .listRowBackground(Color.clear)
                     .listRowSeparator(.hidden)
+                }
+
+                Section("My QR Code") {
+                    Button {
+                        showMyQRCode.toggle()
+                    } label: {
+                        Label(showMyQRCode ? "Hide QR Code" : "Show My QR Code", systemImage: "qrcode")
+                    }
+                    if showMyQRCode {
+                        if let qrImage = generateQRCode(from: "rocchat://user/\(username)") {
+                            Image(uiImage: qrImage)
+                                .interpolation(.none)
+                                .resizable()
+                                .scaledToFit()
+                                .frame(width: 200, height: 200)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 8)
+                        }
+                        Text("Others can scan this to add you")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
                 }
 
                 Section("Linked Devices") {
@@ -3077,6 +3112,17 @@ struct SettingsView: View {
                 await MainActor.run { avatarUrl = url }
             }
         } catch {}
+    }
+
+    private func generateQRCode(from string: String) -> UIImage? {
+        guard let data = string.data(using: .ascii),
+              let filter = CIFilter(name: "CIQRCodeGenerator") else { return nil }
+        filter.setValue(data, forKey: "inputMessage")
+        filter.setValue("M", forKey: "inputCorrectionLevel")
+        guard let output = filter.outputImage else { return nil }
+        let scale = CGAffineTransform(scaleX: 10, y: 10)
+        let scaled = output.transformed(by: scale)
+        return UIImage(ciImage: scaled)
     }
 
     private func handleQrCode(_ code: String) {

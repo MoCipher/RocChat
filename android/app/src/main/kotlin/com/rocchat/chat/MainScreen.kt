@@ -1159,6 +1159,9 @@ fun ConversationScreen(conversationId: String, conversationName: String, recipie
                         },
                         onReply = { replyingTo = msg },
                         onForward = { forwardingMessage = msg; showForwardDialog = true },
+                        onBlock = {
+                            scope.launch { try { APIClient.post("/contacts/block", JSONObject().put("userId", msg.senderId).put("blocked", true)) } catch (_: Exception) {} }
+                        },
                     )
                 }
             }
@@ -1841,6 +1844,7 @@ private fun MessageBubble(
     onPin: () -> Unit = {},
     onReply: () -> Unit = {},
     onForward: () -> Unit = {},
+    onBlock: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -2032,6 +2036,13 @@ private fun MessageBubble(
                             text = { Text("Delete", color = MaterialTheme.colorScheme.error) },
                             leadingIcon = { Icon(Icons.Default.Delete, null, tint = MaterialTheme.colorScheme.error) },
                             onClick = { showContextMenu = false; onDelete() }
+                        )
+                    }
+                    if (!isMine) {
+                        DropdownMenuItem(
+                            text = { Text("Block User", color = MaterialTheme.colorScheme.error) },
+                            leadingIcon = { Icon(Icons.Default.Block, null, tint = MaterialTheme.colorScheme.error) },
+                            onClick = { showContextMenu = false; onBlock() }
                         )
                     }
                 }
@@ -2400,6 +2411,35 @@ fun SettingsTab(onLogout: () -> Unit) {
                     )
                 }
             }
+        }
+        HorizontalDivider()
+
+        // My QR Code
+        var showMyQR by remember { mutableStateOf(false) }
+        Text("My QR Code", modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp), fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = RocColors.RocGold)
+        ListItem(
+            headlineContent = { Text(if (showMyQR) "Hide QR Code" else "Show My QR Code", fontWeight = FontWeight.Medium) },
+            leadingContent = { Icon(Icons.Default.QrCode2, contentDescription = null, tint = RocColors.RocGold, modifier = Modifier.size(28.dp)) },
+            modifier = Modifier.clickable { showMyQR = !showMyQR }
+        )
+        if (showMyQR) {
+            val qrBitmap = remember(username) {
+                try {
+                    val writer = com.google.zxing.qrcode.QRCodeWriter()
+                    val matrix = writer.encode("rocchat://user/$username", com.google.zxing.BarcodeFormat.QR_CODE, 512, 512)
+                    val bmp = android.graphics.Bitmap.createBitmap(512, 512, android.graphics.Bitmap.Config.RGB_565)
+                    for (x in 0 until 512) for (y in 0 until 512) bmp.setPixel(x, y, if (matrix.get(x, y)) android.graphics.Color.BLACK else android.graphics.Color.WHITE)
+                    bmp
+                } catch (_: Exception) { null }
+            }
+            qrBitmap?.let { bmp ->
+                Image(
+                    bitmap = bmp.asImageBitmap(),
+                    contentDescription = "My QR Code",
+                    modifier = Modifier.size(200.dp).padding(8.dp).align(Alignment.CenterHorizontally)
+                )
+            }
+            Text("Others can scan this to add you", fontSize = 12.sp, color = RocColors.TextSecondary, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
         }
         HorizontalDivider()
 

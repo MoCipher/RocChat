@@ -5,6 +5,7 @@ import AVFoundation
 import PhotosUI
 import UniformTypeIdentifiers
 import Speech
+import CommonCrypto
 
 // MARK: - Data Models
 
@@ -790,6 +791,7 @@ struct ConversationView: View {
     @State private var showPhotoPicker = false
     @State private var showFilePicker = false
     @State private var showAttachMenu = false
+    @State private var showStickerPicker = false
     @State private var selectedPhotoItem: PhotosPickerItem?
     @State private var showForwardSheet = false
     @State private var forwardMessage: ChatMessage?
@@ -886,6 +888,13 @@ struct ConversationView: View {
         .sheet(isPresented: $showThemePicker) { themePickerContent }
         .sheet(isPresented: $showVaultComposer) { vaultComposerContent }
         .sheet(isPresented: $showPinnedMessages) { pinnedMessagesContent }
+        .sheet(isPresented: $showStickerPicker) {
+            StickerPickerView { emoji in
+                inputText += emoji
+                showStickerPicker = false
+            }
+            .presentationDetents([.medium])
+        }
         .sheet(isPresented: $showMediaGallery) { mediaGalleryContent }
         .sheet(isPresented: $showGroupAdmin) { groupAdminContent }
         .onAppear {
@@ -1120,6 +1129,12 @@ struct ConversationView: View {
                     .onChange(of: inputText) { _, _ in sendTypingIndicator() }
                     .padding(.horizontal, 14)
                     .padding(.vertical, 10)
+                Button(action: { showStickerPicker = true }) {
+                    Image(systemName: "face.smiling")
+                        .font(.system(size: 20))
+                        .foregroundColor(.rocGold.opacity(0.7))
+                }
+                .padding(.trailing, 8)
             }
             .background(
                 RoundedRectangle(cornerRadius: 22, style: .continuous)
@@ -2663,6 +2678,9 @@ struct SettingsView: View {
     @State private var ghostMode = false
     @State private var username = "loading..."
     @State private var displayName = "Loading..."
+    @State private var statusText = ""
+    @State private var isEditingStatus = false
+    @State private var editStatusText = ""
     @State private var avatarUrl: String?
     @State private var showQrScanner = false
     @State private var qrScanResult: String?
@@ -2727,6 +2745,7 @@ struct SettingsView: View {
 
     // Encrypted backup
     @State private var showBackupSheet = false
+    @State private var showBackupFilePicker = false
     @State private var backupPassphrase = ""
     @State private var backupStatus = ""
 
@@ -2816,6 +2835,14 @@ struct SettingsView: View {
                                 Text("@\(username)")
                                     .font(.subheadline)
                                     .foregroundColor(.adaptiveTextSec)
+                                Button(action: {
+                                    editStatusText = statusText
+                                    isEditingStatus = true
+                                }) {
+                                    Text(statusText.isEmpty ? "Set a status..." : statusText)
+                                        .font(.caption)
+                                        .foregroundColor(statusText.isEmpty ? .adaptiveTextSec : .adaptiveText)
+                                }
                             }
 
                             // Roc Family solidarity banner
@@ -3409,6 +3436,23 @@ struct SettingsView: View {
             }
             Button("Cancel", role: .cancel) {}
         }
+        .alert("Set Status", isPresented: $isEditingStatus) {
+            TextField("What's on your mind?", text: $editStatusText)
+            Button("Save") {
+                let text = String(editStatusText.trimmingCharacters(in: .whitespaces).prefix(140))
+                statusText = text
+                Task {
+                    _ = try? await APIClient.shared.postRaw("/me/settings", body: ["status_text": text], method: "PATCH")
+                }
+            }
+            Button("Clear") {
+                statusText = ""
+                Task {
+                    _ = try? await APIClient.shared.postRaw("/me/settings", body: ["status_text": ""], method: "PATCH")
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        }
         .alert("Delete Account", isPresented: $showDeleteConfirm) {
             Button("Delete", role: .destructive) {
                 Task {
@@ -3727,7 +3771,7 @@ struct SettingsView: View {
                                 .foregroundColor(.white)
                         }
                         Button {
-                            Task { await importBackup() }
+                            showBackupFilePicker = true
                         } label: {
                             Label("Import", systemImage: "arrow.down.doc.fill")
                                 .frame(maxWidth: .infinity)
@@ -3736,6 +3780,14 @@ struct SettingsView: View {
                         }
                     }
                     .padding(.horizontal)
+                    .fileImporter(isPresented: $showBackupFilePicker, allowedContentTypes: [.data]) { result in
+                        switch result {
+                        case .success(let url):
+                            Task { await importBackup(from: url) }
+                        case .failure:
+                            backupStatus = "Failed to select file"
+                        }
+                    }
 
                     if !backupStatus.isEmpty {
                         Text(backupStatus)
@@ -3815,6 +3867,7 @@ struct SettingsView: View {
                 let me = try await APIClient.shared.getMe()
                 username = me["username"] as? String ?? "unknown"
                 displayName = me["display_name"] as? String ?? username
+                statusText = me["status_text"] as? String ?? ""
                 avatarUrl = me["avatar_url"] as? String
                 if let disc = me["discoverable"] as? Bool { discoverable = disc }
                 if let disc = me["discoverable"] as? Int { discoverable = disc != 0 }
@@ -4303,12 +4356,71 @@ struct SettingsView: View {
             }
         }
     }
-    private func importBackup() async {
+    private func importBackup(from url: URL) async {
         backupStatus = "Importing..."
         let passphrase = backupPassphrase
         guard passphrase.count >= 12 else { backupStatus = "Passphrase must be 12+ characters"; return }
-        // Will be triggered by fileImporter in real flow — here as placeholder
-        backupStatus = "Use 'Import Chat History' to select backup file, then decrypt here."
+        guard url.startAccessingSecurityScopedResource() else { backupStatus = "Cannot access file"; return }
+        defer { url.stopAccessingSecurityScopedResource() }
+        guard let fileData = try? Data(contentsOf: url) else { backupStatus = "Cannot read file"; return }
+
+        // File format: 16-byte salt + 12-byte IV + ciphertext + 16-byte tag
+        guard fileData.count > 44 else { backupStatus = "Invalid backup file"; return }
+        let salt = fileData[0..<16]
+        let iv = fileData[16..<28]
+        let ciphertextAndTag = fileData[28...]
+
+        // Derive key from passphrase
+        guard let passphraseData = passphrase.data(using: .utf8) else { backupStatus = "Invalid passphrase"; return }
+        var derivedKey = Data(count: 32)
+        let result = derivedKey.withUnsafeMutableBytes { dkBytes in
+            salt.withUnsafeBytes { saltBytes in
+                passphraseData.withUnsafeBytes { pwBytes in
+                    CCKeyDerivationPBKDF(
+                        CCPBKDFAlgorithm(kCCPBKDF2),
+                        pwBytes.baseAddress?.assumingMemoryBound(to: Int8.self),
+                        pwBytes.count,
+                        saltBytes.baseAddress?.assumingMemoryBound(to: UInt8.self),
+                        saltBytes.count,
+                        CCPseudoRandomAlgorithm(kCCPRFHmacAlgSHA256),
+                        100_000,
+                        dkBytes.baseAddress?.assumingMemoryBound(to: UInt8.self),
+                        32
+                    )
+                }
+            }
+        }
+        guard result == kCCSuccess else { backupStatus = "Key derivation failed"; return }
+
+        do {
+            let key = SymmetricKey(data: derivedKey)
+            let nonce = try AES.GCM.Nonce(data: iv)
+            let sealedBox = try AES.GCM.SealedBox(nonce: nonce, ciphertext: ciphertextAndTag.dropLast(16), tag: ciphertextAndTag.suffix(16))
+            let plainData = try AES.GCM.open(sealedBox, using: key)
+            guard let json = try? JSONSerialization.jsonObject(with: plainData) as? [String: Any] else {
+                backupStatus = "Wrong passphrase or corrupt backup"
+                return
+            }
+
+            // Restore keys
+            if let identityKey = json["identity_key"] as? String, let data = Data(base64Encoded: identityKey) {
+                UserDefaults.standard.set(data, forKey: "identity_private_key")
+            }
+            if let identityPub = json["identity_key_public"] as? String, let data = Data(base64Encoded: identityPub) {
+                UserDefaults.standard.set(data, forKey: "identity_key_public")
+            }
+            // Restore sessions
+            if let sessions = json["sessions"] as? [String: Any] {
+                for (key, val) in sessions {
+                    if let strVal = val as? String {
+                        UserDefaults.standard.set(strVal, forKey: key)
+                    }
+                }
+            }
+            backupStatus = "✅ Backup restored successfully! Restart the app."
+        } catch {
+            backupStatus = "Wrong passphrase or corrupt backup"
+        }
     }
 
     // MARK: - Saved Contacts Helpers
@@ -4904,6 +5016,53 @@ extension URL {
             "mp3": "audio/mpeg", "m4a": "audio/mp4", "zip": "application/zip",
         ]
         return map[ext] ?? "application/octet-stream"
+    }
+}
+
+// MARK: - Sticker Picker View
+struct StickerPickerView: View {
+    let onSelect: (String) -> Void
+    @State private var selectedTab = 0
+    @State private var searchText = ""
+
+    private static let categories: [(String, [String])] = [
+        ("Smileys", ["😀","😂","🤣","😊","😍","🥰","😘","😜","🤪","😎","🥳","😇","🤩","🥺","😭","😤","🤯","🫡","🫶","❤️","🔥","✨","💯","👏","🙌","👊","✊","🤝","💪","🕊️"]),
+        ("Roc Spirit", ["🪶","🦅","🏔️","⛰️","🌄","🌅","🌍","🕊️","✊","🔒","🛡️","💛","🖤","🤎","❤️‍🔥","🏴","🪧","📢","🎯","⚡","🌊","🌿","🌱","🫂","🤲","🙏","💎","👑","🦁","🇵🇸"]),
+        ("Gestures", ["👍","👎","👋","🤙","✌️","🤞","🫰","🤟","🤘","👆","👇","👉","👈","🫵","🖐️","✋","🤚","👐","🤲","🙏","💅","🫶","🤝","👊","✊","🤛","🤜","🫳","🫴","💪"]),
+        ("Objects", ["🔒","🔑","🗝️","🛡️","⚔️","🏴","📱","💻","🖥️","⌨️","🎵","🎶","📷","🎬","📖","✏️","📌","🔗","💰","🪙","🎁","🏆","🎖️","🧭","⏰","💡","🔋","📡","🌐","🗺️"]),
+        ("Nature", ["🌍","🌎","🌏","🌙","⭐","🌟","☀️","🌤️","⛅","🌧️","⛈️","🌊","🏔️","🌋","🏜️","🌲","🌳","🌿","🍀","🌸","🌺","🌻","🌹","🦅","🦁","🐻","🐺","🦋","🐝","🕊️"]),
+        ("Flags", ["🏴","🏳️","🏁","🚩","🏳️‍🌈","🏴‍☠️","🇵🇸","🇱🇧","🇾🇪","🇸🇾","🇮🇶","🇱🇾","🇸🇩","🇸🇴","🇪🇬","🇯🇴","🇩🇿","🇹🇳","🇲🇦","🇲🇷","🇹🇷","🇮🇷","🇲🇾","🇮🇩","🇧🇩","🇵🇰","🇿🇦","🇧🇷","🇨🇺","🇻🇪"]),
+    ]
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 0) {
+                Picker("", selection: $selectedTab) {
+                    ForEach(0..<Self.categories.count, id: \.self) { i in
+                        Text(Self.categories[i].0).tag(i)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .padding(.horizontal, 8)
+                .padding(.top, 8)
+
+                let emojis = Self.categories[selectedTab].1
+                ScrollView {
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 4), count: 7), spacing: 8) {
+                        ForEach(emojis, id: \.self) { emoji in
+                            Button(action: { onSelect(emoji) }) {
+                                Text(emoji)
+                                    .font(.system(size: 28))
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(12)
+                }
+            }
+            .navigationTitle("Emoji & Stickers")
+            .navigationBarTitleDisplayMode(.inline)
+        }
     }
 }
 

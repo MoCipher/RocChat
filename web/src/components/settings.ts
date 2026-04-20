@@ -40,6 +40,7 @@ export function renderSettings(container: HTMLElement) {
             <div style="text-align:center">
               <div style="font-weight:700;font-size:var(--text-xl)" id="setting-display-name">Loading...</div>
               <div style="color:var(--text-tertiary);font-size:var(--text-sm)" id="setting-username">@loading...</div>
+              <div style="color:var(--text-secondary);font-size:var(--text-sm);cursor:pointer;margin-top:2px" id="setting-status" title="Click to edit status">Set a status...</div>
             </div>
             <div style="display:inline-flex;align-items:center;gap:6px;padding:5px 12px;border-radius:999px;background:rgba(212,175,55,0.12);border:1px solid rgba(212,175,55,0.4);color:var(--roc-gold);font-size:var(--text-xs);font-weight:600">
               🕊️ Voice of Freedom 🇵🇸
@@ -811,6 +812,23 @@ export function renderSettings(container: HTMLElement) {
       saveSetting(async () => {
         await api.updateSettings({ display_name: newName.trim() });
         if (nameEl) nameEl.textContent = newName.trim();
+      });
+    }
+  });
+
+  // Edit status text
+  document.getElementById('setting-status')?.addEventListener('click', () => {
+    const statusEl = document.getElementById('setting-status');
+    const current = statusEl?.dataset.status || '';
+    const newStatus = prompt('Set your status (140 chars max):', current);
+    if (newStatus !== null) {
+      const text = newStatus.trim().slice(0, 140);
+      saveSetting(async () => {
+        await api.updateSettings({ status_text: text });
+        if (statusEl) {
+          statusEl.textContent = text || 'Set a status...';
+          statusEl.dataset.status = text;
+        }
       });
     }
   });
@@ -1845,6 +1863,14 @@ async function loadProfile() {
       if (nameEl) nameEl.textContent = (user.display_name as string) || (user.username as string);
       if (keyEl) keyEl.textContent = (user.identity_key as string) || 'Not available';
       if (toggle) toggle.checked = !!user.discoverable;
+
+      // Status text
+      const statusEl = document.getElementById('setting-status');
+      if (statusEl) {
+        const st = (user.status_text as string) || '';
+        statusEl.textContent = st || 'Set a status...';
+        statusEl.dataset.status = st;
+      }
 
       // Avatar
       if (avatarEl) {

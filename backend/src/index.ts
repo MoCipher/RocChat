@@ -399,7 +399,7 @@ export default {
         const user = await env.DB.prepare(
           `SELECT id, username, display_name, identity_key, avatar_url, account_tier, discoverable,
                   show_read_receipts, show_typing_indicator, show_online_to,
-                  who_can_add, default_disappear_timer, created_at
+                  who_can_add, default_disappear_timer, status_text, created_at
            FROM users WHERE id = ?`,
         )
           .bind(session.userId)
@@ -423,10 +423,14 @@ export default {
           return withCors(errorResponse('Invalid who_can_add option', 400));
         }
 
+        if (typeof body.status_text === 'string' && body.status_text.length > 140) {
+          return withCors(errorResponse('Status must be 140 characters or less', 400));
+        }
+
         const allowed = [
           'display_name', 'discoverable',
           'show_read_receipts', 'show_typing_indicator',
-          'show_online_to', 'who_can_add', 'default_disappear_timer',
+          'show_online_to', 'who_can_add', 'default_disappear_timer', 'status_text',
         ];
         const updates: string[] = [];
         const values: unknown[] = [];

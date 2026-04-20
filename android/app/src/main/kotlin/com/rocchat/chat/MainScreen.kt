@@ -23,6 +23,9 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
@@ -57,6 +60,7 @@ import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -758,6 +762,7 @@ fun ConversationScreen(conversationId: String, conversationName: String, recipie
     var lastTypingSent by remember { mutableStateOf(0L) }
     var showThemePicker by remember { mutableStateOf(false) }
     var chatTheme by remember { mutableStateOf(prefs.getString("theme_$conversationId", "default") ?: "default") }
+    var showStickerPicker by remember { mutableStateOf(false) }
     var showVaultComposer by remember { mutableStateOf(false) }
     var vaultType by remember { mutableStateOf("password") }
     var vaultLabel by remember { mutableStateOf("") }
@@ -1362,6 +1367,11 @@ fun ConversationScreen(conversationId: String, conversationName: String, recipie
                     placeholder = { Text("Type a message...") },
                     maxLines = 4,
                     shape = RoundedCornerShape(24.dp),
+                    trailingIcon = {
+                        IconButton(onClick = { showStickerPicker = !showStickerPicker }, modifier = Modifier.size(32.dp)) {
+                            Icon(Icons.Default.EmojiEmotions, contentDescription = "Emoji", tint = RocColors.RocGold.copy(alpha = 0.7f), modifier = Modifier.size(20.dp))
+                        }
+                    },
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
                     keyboardActions = KeyboardActions(
                         onSend = {
@@ -1739,6 +1749,51 @@ fun ConversationScreen(conversationId: String, conversationName: String, recipie
                 },
                 dismissButton = { TextButton(onClick = { showVaultComposer = false }) { Text("Cancel") } },
             )
+        }
+
+        // Emoji/Sticker Picker panel
+        if (showStickerPicker) {
+            val emojiCategories = listOf(
+                "Smileys" to listOf("😀","😂","🤣","😊","😍","🥰","😘","😜","🤪","😎","🥳","😇","🤩","🥺","😭","😤","🤯","🫡","🫶","❤️","🔥","✨","💯","👏","🙌","👊","✊","🤝","💪","🕊️"),
+                "Roc Spirit" to listOf("🪶","🦅","🏔️","⛰️","🌄","🌅","🌍","🕊️","✊","🔒","🛡️","💛","🖤","🤎","❤️‍🔥","🏴","🪧","📢","🎯","⚡","🌊","🌿","🌱","🫂","🤲","🙏","💎","👑","🦁","🇵🇸"),
+                "Gestures" to listOf("👍","👎","👋","🤙","✌️","🤞","🫰","🤟","🤘","👆","👇","👉","👈","🫵","🖐️","✋","🤚","👐","🤲","🙏","💅","🫶","🤝","👊","✊","🤛","🤜","🫳","🫴","💪"),
+                "Objects" to listOf("🔒","🔑","🗝️","🛡️","⚔️","🏴","📱","💻","🖥️","⌨️","🎵","🎶","📷","🎬","📖","✏️","📌","🔗","💰","🪙","🎁","🏆","🎖️","🧭","⏰","💡","🔋","📡","🌐","🗺️"),
+                "Flags" to listOf("🏴","🏳️","🏁","🚩","🏳️‍🌈","🏴‍☠️","🇵🇸","🇱🇧","🇾🇪","🇸🇾","🇮🇶","🇱🇾","🇸🇩","🇸🇴","🇪🇬","🇯🇴","🇩🇿","🇹🇳","🇲🇦","🇲🇷","🇹🇷","🇮🇷","🇲🇾","🇮🇩","🇧🇩","🇵🇰","🇿🇦","🇧🇷","🇨🇺","🇻🇪"),
+            )
+            var selectedCat by remember { mutableIntStateOf(0) }
+            Surface(
+                modifier = Modifier.fillMaxWidth().heightIn(max = 260.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                tonalElevation = 2.dp,
+            ) {
+                Column {
+                    ScrollableTabRow(selectedTabIndex = selectedCat, edgePadding = 4.dp) {
+                        emojiCategories.forEachIndexed { i, (name, _) ->
+                            Tab(selected = selectedCat == i, onClick = { selectedCat = i }, text = { Text(name, fontSize = 11.sp) })
+                        }
+                    }
+                    LazyVerticalGrid(
+                        columns = GridCells.Fixed(7),
+                        modifier = Modifier.fillMaxWidth().padding(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        items(emojiCategories[selectedCat].second) { emoji ->
+                            Text(
+                                emoji,
+                                fontSize = 26.sp,
+                                modifier = Modifier
+                                    .clickable {
+                                        inputText += emoji
+                                        showStickerPicker = false
+                                    }
+                                    .padding(4.dp),
+                                textAlign = TextAlign.Center,
+                            )
+                        }
+                    }
+                }
+            }
         }
 
         // Theme picker
@@ -2285,6 +2340,9 @@ fun SettingsTab(onLogout: () -> Unit) {
     var ghostMode by remember { mutableStateOf(false) }
     var username by remember { mutableStateOf("loading...") }
     var displayName by remember { mutableStateOf("Loading...") }
+    var statusText by remember { mutableStateOf("") }
+    var showStatusDialog by remember { mutableStateOf(false) }
+    var editStatusText by remember { mutableStateOf("") }
     var avatarUrl by remember { mutableStateOf<String?>(null) }
     var showQrScanner by remember { mutableStateOf(false) }
     var linkMessage by remember { mutableStateOf<String?>(null) }
@@ -2465,6 +2523,7 @@ fun SettingsTab(onLogout: () -> Unit) {
             val me = APIClient.getMe()
             username = me.optString("username", "unknown")
             displayName = me.optString("display_name", username)
+            statusText = me.optString("status_text", "")
             avatarUrl = me.optString("avatar_url", null)
             discoverable = me.optBoolean("discoverable", true)
             if (me.has("show_read_receipts")) readReceipts = me.optInt("show_read_receipts", 1) != 0
@@ -2607,6 +2666,12 @@ fun SettingsTab(onLogout: () -> Unit) {
                     "@$username",
                     color = RocColors.TextSecondary,
                     fontSize = 14.sp,
+                )
+                Text(
+                    if (statusText.isEmpty()) "Set a status..." else statusText,
+                    color = if (statusText.isEmpty()) RocColors.TextSecondary else RocColors.TextPrimary,
+                    fontSize = 12.sp,
+                    modifier = Modifier.clickable { editStatusText = statusText; showStatusDialog = true },
                 )
 
                 // Voice of Freedom solidarity banner
@@ -3277,6 +3342,26 @@ fun SettingsTab(onLogout: () -> Unit) {
                     }) { Text("Save") }
                 },
                 dismissButton = { TextButton(onClick = { showEditName = false }) { Text("Cancel") } },
+            )
+        }
+
+        // Status text edit
+        if (showStatusDialog) {
+            AlertDialog(
+                onDismissRequest = { showStatusDialog = false },
+                title = { Text("Set Status") },
+                text = {
+                    OutlinedTextField(value = editStatusText, onValueChange = { if (it.length <= 140) editStatusText = it }, label = { Text("What's on your mind?") }, singleLine = true)
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        val text = editStatusText.trim().take(140)
+                        statusText = text
+                        scope.launch { try { APIClient.updateSettings(mapOf("status_text" to text)) } catch (_: Exception) {} }
+                        showStatusDialog = false
+                    }) { Text("Save") }
+                },
+                dismissButton = { TextButton(onClick = { showStatusDialog = false }) { Text("Cancel") } },
             )
         }
 

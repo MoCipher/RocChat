@@ -10,6 +10,10 @@ class APIClient {
     
     init(baseURL: String = "https://chat.mocipher.com/api") {
         self.baseURL = baseURL
+        self.sessionToken = SecureStorage.shared.get(forKey: "session_token")
+            ?? UserDefaults.standard.string(forKey: "session_token")
+        self.refreshToken = SecureStorage.shared.get(forKey: "refresh_token")
+            ?? UserDefaults.standard.string(forKey: "refresh_token")
     }
     
     struct LoginResult {
@@ -29,6 +33,10 @@ class APIClient {
             throw APIError.invalidResponse
         }
         refreshToken = json["refresh_token"] as? String
+        if let refreshToken {
+            SecureStorage.shared.set(refreshToken, forKey: "refresh_token")
+            UserDefaults.standard.removeObject(forKey: "refresh_token")
+        }
         
         return LoginResult(
             sessionToken: token,

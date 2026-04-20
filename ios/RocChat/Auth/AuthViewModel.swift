@@ -36,7 +36,8 @@ class AuthViewModel: ObservableObject {
     
     init() {
         // Check for existing session
-        if let token = UserDefaults.standard.string(forKey: "session_token") {
+        if let token = SecureStorage.shared.get(forKey: "session_token")
+            ?? UserDefaults.standard.string(forKey: "session_token") {
             api.sessionToken = token
             SessionManager.shared.loadCachedKeyMaterial()
             if biometricEnabled && biometricAvailable {
@@ -61,6 +62,7 @@ class AuthViewModel: ObservableObject {
                     self.errorMessage = "Authentication failed. Enter your passphrase."
                     self.biometricLocked = false
                     // Fall back to passphrase login — clear session
+                    SecureStorage.shared.remove(forKey: "session_token")
                     UserDefaults.standard.removeObject(forKey: "session_token")
                     self.api.sessionToken = nil
                 }
@@ -96,7 +98,8 @@ class AuthViewModel: ObservableObject {
                 
                 let result = try await api.login(username: cleanUsername, authHash: authHash.base64EncodedString())
                 
-                UserDefaults.standard.set(result.sessionToken, forKey: "session_token")
+                SecureStorage.shared.set(result.sessionToken, forKey: "session_token")
+                UserDefaults.standard.removeObject(forKey: "session_token")
                 UserDefaults.standard.set(result.userId, forKey: "user_id")
                 api.sessionToken = result.sessionToken
                 
@@ -191,7 +194,8 @@ class AuthViewModel: ObservableObject {
                 )
                 
                 // Save session from registration response
-                UserDefaults.standard.set(result.sessionToken, forKey: "session_token")
+                SecureStorage.shared.set(result.sessionToken, forKey: "session_token")
+                UserDefaults.standard.removeObject(forKey: "session_token")
                 UserDefaults.standard.set(result.userId, forKey: "user_id")
                 api.sessionToken = result.sessionToken
                 
@@ -225,6 +229,8 @@ class AuthViewModel: ObservableObject {
         let keys = ["session_token", "user_id", "encrypted_keys", "identity_key",
                      "identity_pub", "spk_pub", "biometric_enabled"]
         keys.forEach { UserDefaults.standard.removeObject(forKey: $0) }
+        SecureStorage.shared.remove(forKey: "session_token")
+        SecureStorage.shared.remove(forKey: "refresh_token")
         api.sessionToken = nil
         isAuthenticated = false
         biometricLocked = false

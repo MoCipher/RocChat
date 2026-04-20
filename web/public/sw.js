@@ -70,6 +70,18 @@ self.addEventListener('notificationclick', (event) => {
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
 
+  // Never intercept non-GET requests. This avoids touching share-target POSTs,
+  // uploads, auth submissions, or any request that may carry sensitive bodies.
+  if (event.request.method !== 'GET') {
+    return;
+  }
+
+  // Respect explicit no-store semantics from the caller.
+  const cacheControl = event.request.headers.get('Cache-Control') || '';
+  if (cacheControl.includes('no-store')) {
+    return;
+  }
+
   // Never cache API or WebSocket requests
   if (url.pathname.startsWith('/api/') ||
       event.request.headers.get('Upgrade') === 'websocket') {

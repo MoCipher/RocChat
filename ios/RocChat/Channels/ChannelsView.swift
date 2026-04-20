@@ -131,7 +131,8 @@ struct ChannelsView: View {
     }
 
     private func apiGet(path: String) async -> Data? {
-        guard let token = UserDefaults.standard.string(forKey: "sessionToken"),
+          guard let token = SecureStorage.shared.get(forKey: "session_token")
+                ?? UserDefaults.standard.string(forKey: "sessionToken"),
               let url = URL(string: "\(APIConfig.baseURL)\(path)") else { return nil }
         var req = URLRequest(url: url)
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
@@ -294,7 +295,8 @@ struct ChannelDetailView: View {
     }
 
     private func apiRequest(path: String, method: String, body: Data? = nil) async -> Data? {
-        guard let token = UserDefaults.standard.string(forKey: "sessionToken"),
+          guard let token = SecureStorage.shared.get(forKey: "session_token")
+                ?? UserDefaults.standard.string(forKey: "sessionToken"),
               let url = URL(string: "\(APIConfig.baseURL)\(path)") else { return nil }
         var req = URLRequest(url: url)
         req.httpMethod = method
@@ -412,7 +414,8 @@ struct ChannelAnalyticsView: View {
 
     @MainActor
     private func load() async {
-        guard let token = UserDefaults.standard.string(forKey: "sessionToken"),
+          guard let token = SecureStorage.shared.get(forKey: "session_token")
+                ?? UserDefaults.standard.string(forKey: "sessionToken"),
               let url = URL(string: "\(APIConfig.baseURL)/api/channels/\(channelId)/analytics") else { return }
         var req = URLRequest(url: url)
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
@@ -461,7 +464,8 @@ struct ChannelScheduledListView: View {
 
     @MainActor
     private func load() async {
-        guard let token = UserDefaults.standard.string(forKey: "sessionToken"),
+          guard let token = SecureStorage.shared.get(forKey: "session_token")
+                ?? UserDefaults.standard.string(forKey: "sessionToken"),
               let url = URL(string: "\(APIConfig.baseURL)/api/channels/\(channelId)/scheduled") else { return }
         var req = URLRequest(url: url)
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
@@ -471,7 +475,8 @@ struct ChannelScheduledListView: View {
     }
 
     private func cancel(_ postId: String) async {
-        guard let token = UserDefaults.standard.string(forKey: "sessionToken"),
+          guard let token = SecureStorage.shared.get(forKey: "session_token")
+                ?? UserDefaults.standard.string(forKey: "sessionToken"),
               let url = URL(string: "\(APIConfig.baseURL)/api/channels/\(channelId)/scheduled/\(postId)") else { return }
         var req = URLRequest(url: url)
         req.httpMethod = "DELETE"
@@ -582,7 +587,8 @@ struct CommunityRow: View {
     private func loadCommunityDetail() async {
         isLoadingChannels = true
         defer { isLoadingChannels = false }
-        guard let token = UserDefaults.standard.string(forKey: "sessionToken"),
+          guard let token = SecureStorage.shared.get(forKey: "session_token")
+                ?? UserDefaults.standard.string(forKey: "sessionToken"),
               let url = URL(string: "\(APIConfig.baseURL)/api/communities/\(community.id)") else { return }
         var req = URLRequest(url: url)
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
@@ -606,7 +612,8 @@ struct CommunityRow: View {
     }
 
     private func join() async {
-        guard let token = UserDefaults.standard.string(forKey: "sessionToken"),
+          guard let token = SecureStorage.shared.get(forKey: "session_token")
+                ?? UserDefaults.standard.string(forKey: "sessionToken"),
               let url = URL(string: "\(APIConfig.baseURL)/api/communities/\(community.id)/join") else { return }
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
@@ -653,7 +660,8 @@ struct CreateChannelSheet: View {
 
     private func create() async {
         isCreating = true
-        guard let token = UserDefaults.standard.string(forKey: "sessionToken"),
+          guard let token = SecureStorage.shared.get(forKey: "session_token")
+                ?? UserDefaults.standard.string(forKey: "sessionToken"),
               let url = URL(string: "\(APIConfig.baseURL)/api/channels") else { return }
         var req = URLRequest(url: url)
         req.httpMethod = "POST"

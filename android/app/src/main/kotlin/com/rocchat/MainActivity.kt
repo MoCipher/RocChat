@@ -21,6 +21,7 @@ import com.rocchat.ui.RocColors
 import com.rocchat.auth.AuthScreen
 import com.rocchat.auth.BiometricHelper
 import com.rocchat.chat.MainScreen
+import com.rocchat.crypto.SecureStorage
 import com.rocchat.network.APIClient
 import com.rocchat.push.PushManager
 import kotlinx.coroutines.launch
@@ -41,7 +42,7 @@ class MainActivity : FragmentActivity() {
         setContent {
             RocChatTheme {
                 val prefs = getSharedPreferences("rocchat", MODE_PRIVATE)
-                val hasSession = prefs.getString("session_token", null) != null
+                val hasSession = SecureStorage.get(this@MainActivity, "session_token", "rocchat") != null
                 var isAuthenticated by remember { mutableStateOf(hasSession) }
                 var biometricLocked by remember {
                     mutableStateOf(
@@ -53,7 +54,7 @@ class MainActivity : FragmentActivity() {
 
                 // Restore token on launch and register push
                 LaunchedEffect(isAuthenticated) {
-                    val token = prefs.getString("session_token", null)
+                    val token = SecureStorage.get(this@MainActivity, "session_token", "rocchat")
                     if (token != null) {
                         APIClient.sessionToken = token
                     }

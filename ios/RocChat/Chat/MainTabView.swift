@@ -2315,7 +2315,8 @@ struct ConversationView: View {
     }
 
     private func connectWebSocket() {
-        guard let token = UserDefaults.standard.string(forKey: "session_token"),
+          guard let token = SecureStorage.shared.get(forKey: "session_token")
+                ?? UserDefaults.standard.string(forKey: "session_token"),
               !userId.isEmpty else { return }
 
         // Connect directly to the Worker backend — Pages proxy cannot handle WebSocket upgrades

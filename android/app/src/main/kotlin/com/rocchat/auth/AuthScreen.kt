@@ -16,6 +16,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.rocchat.crypto.RocCrypto
+import com.rocchat.crypto.SecureStorage
 import com.rocchat.crypto.SessionManager
 import com.rocchat.network.APIClient
 import com.rocchat.ui.RocColors
@@ -223,9 +224,10 @@ fun AuthScreen(onSuccess: () -> Unit) {
                                     if (regToken.isNotEmpty()) {
                                         APIClient.sessionToken = regToken
                                         val prefs = context.getSharedPreferences("rocchat", Context.MODE_PRIVATE)
+                                        SecureStorage.set(context, "session_token", regToken)
                                         prefs.edit()
-                                            .putString("session_token", regToken)
                                             .putString("user_id", regUserId)
+                                            .remove("session_token")
                                             .apply()
                                     }
                                     // Cache key material for E2E session manager
@@ -241,9 +243,10 @@ fun AuthScreen(onSuccess: () -> Unit) {
                                     val result = APIClient.login(cleanUsername, authHashB64)
                                     APIClient.sessionToken = result.sessionToken
                                     val prefs = context.getSharedPreferences("rocchat", Context.MODE_PRIVATE)
+                                    SecureStorage.set(context, "session_token", result.sessionToken)
                                     prefs.edit()
-                                        .putString("session_token", result.sessionToken)
                                         .putString("user_id", result.userId)
+                                        .remove("session_token")
                                         .apply()
                                     SessionManager.loadCachedKeyMaterial(context)
                                     onSuccess()

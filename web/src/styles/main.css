@@ -844,6 +844,10 @@ a:hover { text-decoration: underline; }
   border: 1px solid var(--border-weak);
 }
 
+.message-bubble.priority-high { border-left: 3px solid #E5A00D; }
+.message-bubble.priority-urgent { border-left: 3px solid #DC3545; }
+.priority-badge { font-size: 10px; display: block; margin-bottom: 2px; }
+
 .message-text {
   font-size: var(--text-sm);
   line-height: 1.45;

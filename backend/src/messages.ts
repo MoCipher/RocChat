@@ -322,6 +322,7 @@ async function sendMessage(request: Request, env: Env, session: Session): Promis
   const expiresIn = (raw.expires_in ?? raw.expiresIn) as number | undefined;
   const messageType = (raw.message_type ?? raw.messageType ?? 'text') as string;
   const replyTo = (raw.reply_to ?? raw.replyTo) as string | undefined;
+  const priority = (['normal', 'high', 'urgent'].includes(raw.priority as string) ? raw.priority : 'normal') as string;
 
   if (!conversationId || !encrypted.ciphertext) {
     return errorResponse('Missing conversation_id or message content', 400);
@@ -377,8 +378,8 @@ async function sendMessage(request: Request, env: Env, session: Session): Promis
   }
 
   await env.DB.prepare(
-    `INSERT INTO messages (id, conversation_id, sender_id, encrypted, server_timestamp, expires_at, reply_to)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO messages (id, conversation_id, sender_id, encrypted, server_timestamp, expires_at, reply_to, priority)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
   )
     .bind(
       messageId,
@@ -388,6 +389,7 @@ async function sendMessage(request: Request, env: Env, session: Session): Promis
       now,
       expiresAt,
       replyTo || null,
+      priority,
     )
     .run();
 
@@ -406,6 +408,7 @@ async function sendMessage(request: Request, env: Env, session: Session): Promis
         ratchet_header: encrypted.ratchet_header || (encrypted.header ? JSON.stringify(encrypted.header) : ''),
         tag: encrypted.tag || '',
         message_type: messageType,
+        priority,
         created_at: new Date(now * 1000).toISOString(),
       },
       excludeUserId: session.userId,
@@ -424,7 +427,7 @@ async function sendMessage(request: Request, env: Env, session: Session): Promis
 
     // Fire-and-forget push to all other members
     for (const m of otherMembers.results) {
-      sendPushNotification(env, m.user_id, senderName, session.userId).catch(() => {});
+      sendPushNotification(env, m.user_id, senderName, session.userId, priority).catch(() => {});
     }
   }
 

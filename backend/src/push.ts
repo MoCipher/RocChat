@@ -77,7 +77,10 @@ export async function sendPushNotification(
   recipientUserId: string,
   senderName: string,
   senderUserId?: string,
+  msgPriority?: string,
 ): Promise<void> {
+  // Urgent messages bypass quiet hours
+  if (msgPriority !== 'urgent') {
   // Check quiet hours
   const userConfig = await env.DB.prepare(
     'SELECT quiet_start, quiet_end, dnd_exceptions FROM users WHERE id = ?'
@@ -108,6 +111,7 @@ export async function sendPushNotification(
       if (inQuietHours) return; // Skip notification during quiet hours
     }
   }
+  } // end urgent bypass
 
   const devices = await env.DB.prepare(
     'SELECT push_token, push_platform FROM devices WHERE user_id = ? AND push_token IS NOT NULL',

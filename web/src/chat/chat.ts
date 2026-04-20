@@ -610,6 +610,9 @@ async function openConversation(conversationId: string) {
       <button class="icon-btn" id="video-note-btn" title="Record video message" aria-label="Record video message">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m22 8-6 4 6 4V8Z"/><rect width="14" height="12" x="2" y="6" rx="2" ry="2"/></svg>
       </button>
+      <button class="icon-btn" id="priority-btn" title="Set message priority" aria-label="Set priority">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+      </button>
       <button class="send-btn" id="send-btn" disabled title="Send" aria-label="Send message">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg>
       </button>
@@ -733,6 +736,29 @@ async function openConversation(conversationId: string) {
   // Bind vault button
   chatView.querySelector('#vault-btn')?.addEventListener('click', () => {
     if (state.activeConversationId) showVaultComposer();
+  });
+
+  // Bind priority button — cycle: normal → high → urgent → normal
+  chatView.querySelector('#priority-btn')?.addEventListener('click', () => {
+    const input = document.getElementById('message-input') as HTMLTextAreaElement;
+    if (!input) return;
+    const cur = input.dataset.priority || 'normal';
+    const next = cur === 'normal' ? 'high' : cur === 'high' ? 'urgent' : 'normal';
+    input.dataset.priority = next;
+    const btn = document.getElementById('priority-btn');
+    if (btn) {
+      btn.style.color = next === 'urgent' ? '#DC3545' : next === 'high' ? '#E5A00D' : '';
+      btn.title = next === 'normal' ? 'Set message priority' : `Priority: ${next}`;
+    }
+    // Show/remove indicator
+    document.getElementById('priority-indicator')?.remove();
+    if (next !== 'normal') {
+      const ind = document.createElement('span');
+      ind.id = 'priority-indicator';
+      ind.style.cssText = 'font-size:11px;align-self:center;margin:0 4px;color:' + (next === 'urgent' ? '#DC3545' : '#E5A00D');
+      ind.textContent = next === 'urgent' ? '🔴 Urgent' : '🟠 High';
+      input.parentElement?.insertBefore(ind, input);
+    }
   });
 
   // Voice note recording
@@ -957,8 +983,11 @@ function renderMessages(messages: Message[]) {
       replyQuoteHtml = `<div class="reply-quote" data-reply-id="${escapeHtml(msg.reply_to)}">${quotedSnippet}</div>`;
     }
 
+    const priorityBadge = msg.priority === 'urgent' ? '<span class="priority-badge urgent" title="Urgent">🔴</span>'
+      : msg.priority === 'high' ? '<span class="priority-badge high" title="High Priority">🟠</span>' : '';
     div.innerHTML = `
-      <div class="message-bubble${gifContent ? ' gif-bubble' : ''}">
+      <div class="message-bubble${gifContent ? ' gif-bubble' : ''}${msg.priority && msg.priority !== 'normal' ? ' priority-' + msg.priority : ''}">
+        ${priorityBadge}
         ${replyQuoteHtml}
         ${gifContent
           ? `<img src="${escapeHtml(gifContent.preview || gifContent.url)}" alt="GIF" class="gif-message" loading="lazy" decoding="async" style="max-width:240px;max-height:200px;border-radius:12px;cursor:pointer" />`
@@ -1045,6 +1074,12 @@ async function sendMessageHandler() {
   delete input.dataset.replyTo;
   document.getElementById('reply-banner')?.remove();
 
+  // Capture and clear priority
+  const msgPriority = (input.dataset.priority || 'normal') as 'normal' | 'high' | 'urgent';
+  delete input.dataset.priority;
+  const priorityIndicator = document.getElementById('priority-indicator');
+  if (priorityIndicator) priorityIndicator.remove();
+
   input.value = '';
   input.style.height = 'auto';
   sendBtn.disabled = true;
@@ -1078,6 +1113,7 @@ async function sendMessageHandler() {
         message_type: 'text',
         expires_in: expiresIn,
         reply_to: replyTo,
+        priority: msgPriority !== 'normal' ? msgPriority : undefined,
       };
     } else if (conv?.type === 'group' && conv.members.length > 2) {
       // Group encryption with Sender Keys
@@ -1090,6 +1126,7 @@ async function sendMessageHandler() {
         message_type: 'text',
         expires_in: expiresIn,
         reply_to: replyTo,
+        priority: msgPriority !== 'normal' ? msgPriority : undefined,
       };
     } else {
       // Fallback for group or unknown
@@ -1100,6 +1137,7 @@ async function sendMessageHandler() {
         ratchet_header: '',
         expires_in: expiresIn,
         reply_to: replyTo,
+        priority: msgPriority !== 'normal' ? msgPriority : undefined,
       };
     }
 

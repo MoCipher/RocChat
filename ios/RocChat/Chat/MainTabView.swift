@@ -4696,6 +4696,8 @@ struct OrgDetailView: View {
     @State private var newMemberEmail = ""
     @State private var retentionDays = 90
     @State private var ssoEnabled = false
+    @State private var showBulkInvite = false
+    @State private var bulkEmails = ""
 
     var body: some View {
         List {
@@ -4711,14 +4713,26 @@ struct OrgDetailView: View {
                         }
                         Spacer()
                         if role != "owner" {
-                            Button("Remove") {
-                                Task {
-                                    _ = try? await APIClient.shared.deleteRaw("/business/org/\(orgId)/members/\(uid)")
-                                    await loadMembers()
+                            Menu {
+                                ForEach(["admin", "moderator", "member"], id: \.self) { r in
+                                    Button(r.capitalized) {
+                                        Task {
+                                            _ = try? await APIClient.shared.postRaw("/business/org/\(orgId)/members", body: ["user_id": uid, "role": r])
+                                            await loadMembers()
+                                        }
+                                    }
                                 }
+                                Divider()
+                                Button("Remove", role: .destructive) {
+                                    Task {
+                                        _ = try? await APIClient.shared.deleteRaw("/business/org/\(orgId)/members/\(uid)")
+                                        await loadMembers()
+                                    }
+                                }
+                            } label: {
+                                Image(systemName: "ellipsis.circle")
+                                    .foregroundColor(.rocGold)
                             }
-                            .foregroundColor(.danger)
-                            .font(.caption)
                         }
                     }
                 }
@@ -4734,6 +4748,9 @@ struct OrgDetailView: View {
                         }
                     }
                     .disabled(newMemberEmail.isEmpty)
+                }
+                Button("Bulk Invite (CSV)") {
+                    showBulkInvite = true
                 }
             }
             Section("Compliance") {
@@ -4769,6 +4786,37 @@ struct OrgDetailView: View {
         }
         .navigationTitle(orgName)
         .task { await loadMembers() }
+        .sheet(isPresented: $showBulkInvite) {
+            NavigationStack {
+                VStack(spacing: 16) {
+                    Text("Paste usernames, one per line (up to 200)")
+                        .font(.caption).foregroundColor(.secondary)
+                    TextEditor(text: $bulkEmails)
+                        .frame(minHeight: 200)
+                        .border(Color.gray.opacity(0.3))
+                        .padding(.horizontal)
+                    Button("Invite All") {
+                        let usernames = bulkEmails.components(separatedBy: .newlines)
+                            .map { $0.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: "@", with: "") }
+                            .filter { !$0.isEmpty }
+                        guard !usernames.isEmpty else { return }
+                        let users = usernames.map { ["username": $0] }
+                        Task {
+                            _ = try? await APIClient.shared.postRaw("/business/org/\(orgId)/members/bulk", body: ["users": users])
+                            bulkEmails = ""
+                            showBulkInvite = false
+                            await loadMembers()
+                        }
+                    }
+                    .buttonStyle(.borderedProminent).tint(.rocGold)
+                    .disabled(bulkEmails.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+                .padding()
+                .navigationTitle("Bulk Invite")
+                .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { showBulkInvite = false } } }
+            }
+            .presentationDetents([.medium])
+        }
     }
 
     private func loadMembers() async {

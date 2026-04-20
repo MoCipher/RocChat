@@ -2595,6 +2595,12 @@ fun SettingsTab(onLogout: () -> Unit) {
     var showBusinessSheet by remember { mutableStateOf(false) }
     var organizations by remember { mutableStateOf<List<JSONObject>>(emptyList()) }
     var newOrgName by remember { mutableStateOf("") }
+    var selectedOrg by remember { mutableStateOf<JSONObject?>(null) }
+    var showOrgDetail by remember { mutableStateOf(false) }
+    var orgMembers by remember { mutableStateOf<List<JSONObject>>(emptyList()) }
+    var addMemberEmail by remember { mutableStateOf("") }
+    var retentionDays by remember { mutableStateOf(0) }
+    var ssoEnabled by remember { mutableStateOf(false) }
 
     // Encrypted backup
     var showBackupSheet by remember { mutableStateOf(false) }
@@ -3986,7 +3992,20 @@ fun SettingsTab(onLogout: () -> Unit) {
                         organizations.forEach { org ->
                             val name = org.optString("name", "Unnamed")
                             val memberCount = org.optInt("member_count", 0)
-                            Row(modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Row(modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp).clickable {
+                                selectedOrg = org
+                                showOrgDetail = true
+                                showBusinessSheet = false
+                                scope.launch {
+                                    try {
+                                        val detail = APIClient.get("/business/org/${org.optString("id")}")
+                                        val members = detail.optJSONArray("members")
+                                        orgMembers = if (members != null) (0 until members.length()).map { members.getJSONObject(it) } else emptyList()
+                                        retentionDays = detail.optInt("retention_days", 0)
+                                        ssoEnabled = detail.optBoolean("sso_enabled", false)
+                                    } catch (_: Exception) {}
+                                }
+                            }, verticalAlignment = Alignment.CenterVertically) {
                                 Column(modifier = Modifier.weight(1f)) {
                                     Text(name, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
                                     Text("$memberCount members", fontSize = 12.sp, color = RocColors.TextSecondary)
@@ -4001,6 +4020,176 @@ fun SettingsTab(onLogout: () -> Unit) {
                 },
                 confirmButton = {},
                 dismissButton = { TextButton(onClick = { showBusinessSheet = false }) { Text("Done") } },
+            )
+        }
+
+        // Org Detail dialog (member management, compliance, retention, SSO, remote wipe)
+        if (showOrgDetail && selectedOrg != null) {
+            val orgId = selectedOrg!!.optString("id")
+            val orgName = selectedOrg!!.optString("name", "Organization")
+            AlertDialog(
+                onDismissRequest = { showOrgDetail = false },
+                title = { Text(orgName) },
+                text = {
+                    Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                        // Members section
+                        Text("Members", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                        Spacer(Modifier.height(4.dp))
+                        if (orgMembers.isEmpty()) {
+                            Text("No members", color = RocColors.TextSecondary, fontSize = 12.sp)
+                        }
+                        orgMembers.forEach { member ->
+                            val mName = member.optString("display_name", member.optString("email", "Unknown"))
+                            val mRole = member.optString("role", "member")
+                            val mId = member.optString("user_id", "")
+                            Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(mName, fontSize = 13.sp)
+                                    Text(mRole, fontSize = 11.sp, color = RocColors.TextSecondary)
+                                }
+                                // Role change dropdown
+                                var showRoleMenu by remember { mutableStateOf(false) }
+                                Box {
+                                    IconButton(onClick = { showRoleMenu = true }, modifier = Modifier.size(28.dp)) {
+                                        Icon(Icons.Default.MoreVert, contentDescription = "Change role", modifier = Modifier.size(16.dp))
+                                    }
+                                    DropdownMenu(expanded = showRoleMenu, onDismissRequest = { showRoleMenu = false }) {
+                                        listOf("admin", "moderator", "member").forEach { role ->
+                                            DropdownMenuItem(
+                                                text = { Text(role.replaceFirstChar { it.uppercase() }) },
+                                                onClick = {
+                                                    showRoleMenu = false
+                                                    scope.launch {
+                                                        try {
+                                                            APIClient.post("/business/org/$orgId/members",
+                                                                JSONObject().put("user_id", mId).put("role", role))
+                                                            // Refresh members
+                                                            val detail = APIClient.get("/business/org/$orgId")
+                                                            val members = detail.optJSONArray("members")
+                                                            orgMembers = if (members != null) (0 until members.length()).map { members.getJSONObject(it) } else emptyList()
+                                                        } catch (_: Exception) {}
+                                                    }
+                                                }
+                                            )
+                                        }
+                                    }
+                                }
+                                IconButton(onClick = {
+                                    scope.launch {
+                                        try {
+                                            APIClient.delete("/business/org/$orgId/members/$mId")
+                                            orgMembers = orgMembers.filter { it.optString("user_id") != mId }
+                                        } catch (_: Exception) {}
+                                    }
+                                }, modifier = Modifier.size(28.dp)) {
+                                    Icon(Icons.Default.Delete, contentDescription = "Remove", tint = RocColors.Danger, modifier = Modifier.size(16.dp))
+                                }
+                            }
+                        }
+
+                        Spacer(Modifier.height(8.dp))
+                        HorizontalDivider()
+                        Spacer(Modifier.height(8.dp))
+
+                        // Add member
+                        Text("Add Member", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            OutlinedTextField(value = addMemberEmail, onValueChange = { addMemberEmail = it },
+                                label = { Text("Email") }, singleLine = true, modifier = Modifier.weight(1f),
+                                textStyle = LocalTextStyle.current.copy(fontSize = 13.sp))
+                            Spacer(Modifier.width(8.dp))
+                            Button(onClick = {
+                                if (addMemberEmail.isNotBlank()) {
+                                    scope.launch {
+                                        try {
+                                            APIClient.post("/business/org/$orgId/members",
+                                                JSONObject().put("email", addMemberEmail.trim()))
+                                            addMemberEmail = ""
+                                            val detail = APIClient.get("/business/org/$orgId")
+                                            val members = detail.optJSONArray("members")
+                                            orgMembers = if (members != null) (0 until members.length()).map { members.getJSONObject(it) } else emptyList()
+                                        } catch (_: Exception) {}
+                                    }
+                                }
+                            }, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)) { Text("Add", fontSize = 12.sp) }
+                        }
+
+                        Spacer(Modifier.height(12.dp))
+                        HorizontalDivider()
+                        Spacer(Modifier.height(8.dp))
+
+                        // Retention policy
+                        Text("Retention Policy", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(if (retentionDays == 0) "Disabled" else "$retentionDays days", fontSize = 13.sp, modifier = Modifier.weight(1f))
+                            listOf(0, 30, 90, 365).forEach { days ->
+                                FilterChip(
+                                    selected = retentionDays == days,
+                                    onClick = {
+                                        retentionDays = days
+                                        scope.launch {
+                                            try { APIClient.post("/business/org/$orgId/retention", JSONObject().put("days", days), method = "PUT") } catch (_: Exception) {}
+                                        }
+                                    },
+                                    label = { Text(if (days == 0) "Off" else "${days}d", fontSize = 11.sp) },
+                                    modifier = Modifier.padding(horizontal = 2.dp),
+                                )
+                            }
+                        }
+
+                        Spacer(Modifier.height(8.dp))
+                        HorizontalDivider()
+                        Spacer(Modifier.height(8.dp))
+
+                        // SSO toggle
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("Single Sign-On (SSO)", fontSize = 13.sp, modifier = Modifier.weight(1f))
+                            Switch(checked = ssoEnabled, onCheckedChange = { enabled ->
+                                ssoEnabled = enabled
+                                scope.launch {
+                                    try {
+                                        if (enabled) APIClient.post("/business/org/$orgId/sso", JSONObject().put("provider", "oidc"), method = "PUT")
+                                        else APIClient.delete("/business/org/$orgId/sso")
+                                    } catch (_: Exception) {}
+                                }
+                            })
+                        }
+
+                        Spacer(Modifier.height(8.dp))
+                        HorizontalDivider()
+                        Spacer(Modifier.height(8.dp))
+
+                        // Compliance export
+                        Button(onClick = {
+                            scope.launch {
+                                try { APIClient.get("/business/org/$orgId/export") } catch (_: Exception) {}
+                            }
+                        }, modifier = Modifier.fillMaxWidth()) {
+                            Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("Compliance Export", fontSize = 13.sp)
+                        }
+
+                        Spacer(Modifier.height(6.dp))
+
+                        // Remote wipe
+                        Button(onClick = {
+                            scope.launch {
+                                try { APIClient.post("/business/org/$orgId/wipe", JSONObject()) } catch (_: Exception) {}
+                            }
+                        }, modifier = Modifier.fillMaxWidth(),
+                            colors = ButtonDefaults.buttonColors(containerColor = RocColors.Danger)
+                        ) {
+                            Icon(Icons.Default.DeleteForever, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("Remote Wipe All Devices", fontSize = 13.sp)
+                        }
+                    }
+                },
+                confirmButton = {},
+                dismissButton = {
+                    TextButton(onClick = { showOrgDetail = false; showBusinessSheet = true }) { Text("Back") }
+                },
             )
         }
 

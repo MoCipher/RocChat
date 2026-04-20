@@ -185,6 +185,7 @@ export function sendMessage(body: {
   message_type?: string;
   expires_in?: number;
   reply_to?: string;
+  priority?: 'normal' | 'high' | 'urgent';
 }) {
   return req('/messages/send', { method: 'POST', body: JSON.stringify(body) });
 }
@@ -552,6 +553,7 @@ export interface Message {
   deleted_at?: number;
   expires_at?: number;
   reply_to?: string | null;
+  priority?: 'normal' | 'high' | 'urgent';
 }
 
 export interface UserResult {

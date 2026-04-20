@@ -689,10 +689,20 @@ async function openConversation(conversationId: string) {
 
   // Bind call buttons
   chatView.querySelector('#btn-voice-call')?.addEventListener('click', () => {
-    if (conv) startCall(conv, 'voice');
+    if (!conv) return;
+    if (conv.type === 'group') {
+      startGroupCallFromChat(conv);
+    } else {
+      startCall(conv, 'voice');
+    }
   });
   chatView.querySelector('#btn-video-call')?.addEventListener('click', () => {
-    if (conv) startCall(conv, 'video');
+    if (!conv) return;
+    if (conv.type === 'group') {
+      startGroupCallFromChat(conv);
+    } else {
+      startCall(conv, 'video');
+    }
   });
 
   // Bind pinned messages
@@ -2227,6 +2237,13 @@ async function startCall(conv: Conversation, callType: 'voice' | 'video') {
   const recipient = conv.members.find((m) => m.user_id !== userId);
   if (!recipient || !state.ws) return;
   startOutgoingCall(conv.id, recipient.user_id, recipient.display_name || recipient.username, callType, state.ws);
+}
+
+async function startGroupCallFromChat(conv: Conversation) {
+  const { startGroupCall } = await import('../calls/calls.js');
+  if (!state.ws) return;
+  const memberIds = conv.members.map((m) => m.user_id);
+  startGroupCall(conv.id, 'voice', state.ws, memberIds);
 }
 
 // ── Voice & Video note recording ──

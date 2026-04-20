@@ -570,7 +570,7 @@ class CallManager: ObservableObject {
 
     func handleGroupCallOffer(payload: [String: Any]) {
         guard isGroupCall, let convId = conversationId else { return }
-        let decrypted = decryptSignaling(payload, conversationId: convId)
+        _ = decryptSignaling(payload, conversationId: convId)
         let fromId = (payload["fromUserId"] as? String) ?? ""
         // Group calls use P2P transport, not WebRTC SDP — but we handle the signaling
         if groupPeers[fromId] == nil {
@@ -755,7 +755,7 @@ extension CallManager: P2PTransportDelegate {
                     channel.update(from: src, count: Int(frameCount))
                 }
             }
-            Task { try? await player.scheduleBuffer(buffer) }
+            Task { try? player.scheduleBuffer(buffer) }
         }
     }
 }

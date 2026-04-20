@@ -1066,15 +1066,35 @@ fun ConversationScreen(conversationId: String, conversationName: String, recipie
                     }
                 },
                 actions = {
-                    IconButton(onClick = {
-                        ws?.let { CallManager.startCall(conversationId, userId, conversationName, "voice", it) }
-                    }) {
-                        Icon(Icons.Default.Phone, contentDescription = "Call", tint = RocColors.RocGold)
-                    }
-                    IconButton(onClick = {
-                        ws?.let { CallManager.startCall(conversationId, userId, conversationName, "video", it) }
-                    }) {
-                        Icon(Icons.Default.Videocam, contentDescription = "Video", tint = RocColors.RocGold)
+                    if (recipientUserId.isEmpty()) {
+                        // Group conversation — group call button
+                        IconButton(onClick = {
+                            ws?.let { w ->
+                                scope.launch {
+                                    try {
+                                        val convData = APIClient.get("/messages/conversations/$conversationId")
+                                        val membersArr = convData.optJSONArray("members")
+                                        val memberIds = if (membersArr != null) (0 until membersArr.length()).map { membersArr.getJSONObject(it).getString("user_id") } else emptyList()
+                                        CallManager.startGroupCall(conversationId, "voice", w, memberIds)
+                                    } catch (_: Exception) {
+                                        CallManager.startGroupCall(conversationId, "voice", w, emptyList())
+                                    }
+                                }
+                            }
+                        }) {
+                            Icon(Icons.Default.Phone, contentDescription = "Group Call", tint = RocColors.RocGold)
+                        }
+                    } else {
+                        IconButton(onClick = {
+                            ws?.let { CallManager.startCall(conversationId, userId, conversationName, "voice", it) }
+                        }) {
+                            Icon(Icons.Default.Phone, contentDescription = "Call", tint = RocColors.RocGold)
+                        }
+                        IconButton(onClick = {
+                            ws?.let { CallManager.startCall(conversationId, userId, conversationName, "video", it) }
+                        }) {
+                            Icon(Icons.Default.Videocam, contentDescription = "Video", tint = RocColors.RocGold)
+                        }
                     }
                     IconButton(onClick = { showDisappearMenu = true }) {
                         Icon(
@@ -4032,10 +4052,12 @@ internal fun sendPreparedVoiceNote(
         try {
             val f = java.io.File(filePath)
             val plainBytes = f.readBytes()
+            // Transcribe voice note (best-effort)
+            val transcript = transcribeAudio(context, filePath)
             f.delete()
             if (plainBytes.size < 100) return@launch
             uploadAndSendMediaNote(context, conversationId, recipientUserId, userId, plainBytes,
-                kind = "voice_note", filename = "voice_note.m4a", mime = "audio/mp4", duration = duration, onDone = onDone)
+                kind = "voice_note", filename = "voice_note.m4a", mime = "audio/mp4", duration = duration, transcript = transcript, onDone = onDone)
         } catch (_: Exception) {}
     }
 }
@@ -4071,6 +4093,7 @@ private suspend fun uploadAndSendMediaNote(
     filename: String,
     mime: String,
     duration: Int,
+    transcript: String? = null,
     onDone: (APIClient.ChatMessage) -> Unit,
 ) {
     val fileKey = ByteArray(32).also { java.security.SecureRandom().nextBytes(it) }
@@ -4096,6 +4119,7 @@ private suspend fun uploadAndSendMediaNote(
         put("mime", mime)
         put("size", plainBytes.size)
         put("duration", duration)
+        if (!transcript.isNullOrEmpty()) put("transcript", transcript)
     }.toString()
 
     if (recipientUserId.isNotEmpty()) {
@@ -4134,6 +4158,39 @@ private fun stopVoiceRecording(
 
 private const val QUEUE_PREFS = "rocchat_message_queue"
 private const val QUEUE_KEY = "queue"
+
+private suspend fun transcribeAudio(context: android.content.Context, filePath: String): String? {
+    return try {
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+            kotlinx.coroutines.suspendCancellableCoroutine { cont ->
+                val recognizer = android.speech.SpeechRecognizer.createSpeechRecognizer(context)
+                val intent = android.content.Intent(android.speech.RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                    putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE_MODEL, android.speech.RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                    putExtra("android.speech.extra.AUDIO_SOURCE", android.net.Uri.fromFile(java.io.File(filePath)).toString())
+                }
+                recognizer.setRecognitionListener(object : android.speech.RecognitionListener {
+                    override fun onResults(results: android.os.Bundle?) {
+                        val matches = results?.getStringArrayList(android.speech.SpeechRecognizer.RESULTS_RECOGNITION)
+                        recognizer.destroy()
+                        if (cont.isActive) cont.resume(matches?.firstOrNull()) {}
+                    }
+                    override fun onError(error: Int) {
+                        recognizer.destroy()
+                        if (cont.isActive) cont.resume(null) {}
+                    }
+                    override fun onReadyForSpeech(params: android.os.Bundle?) {}
+                    override fun onBeginningOfSpeech() {}
+                    override fun onRmsChanged(rmsdB: Float) {}
+                    override fun onBufferReceived(buffer: ByteArray?) {}
+                    override fun onEndOfSpeech() {}
+                    override fun onPartialResults(partialResults: android.os.Bundle?) {}
+                    override fun onEvent(eventType: Int, params: android.os.Bundle?) {}
+                })
+                recognizer.startListening(intent)
+            }
+        }
+    } catch (_: Exception) { null }
+}
 
 private fun queueMessage(context: android.content.Context, localId: String, conversationId: String, text: String, recipientUserId: String) {
     val prefs = context.getSharedPreferences(QUEUE_PREFS, android.content.Context.MODE_PRIVATE)

@@ -4,6 +4,7 @@ import CryptoKit
 import AVFoundation
 import PhotosUI
 import UniformTypeIdentifiers
+import Speech
 
 // MARK: - Data Models
 
@@ -1168,33 +1169,49 @@ struct ConversationView: View {
     @ToolbarContentBuilder
     private var conversationToolbarItems: some ToolbarContent {
         ToolbarItemGroup(placement: .topBarTrailing) {
-                Button(action: {
-                    let others = conversation.members.filter { $0.userId != userId }
-                    if let peer = others.first, let task = wsTask {
-                        CallManager.shared.startCall(
-                            conversationId: conversation.id,
-                            remoteUserId: peer.userId,
-                            remoteName: peer.displayName.isEmpty ? peer.username : peer.displayName,
-                            callType: .voice,
-                            ws: task
-                        )
+                if conversation.isGroup {
+                    Button(action: {
+                        if let task = wsTask {
+                            let memberIds = conversation.members.map { $0.userId }
+                            CallManager.shared.startGroupCall(
+                                conversationId: conversation.id,
+                                callType: .voice,
+                                ws: task,
+                                members: memberIds
+                            )
+                        }
+                    }) {
+                        Image(systemName: "phone.fill").foregroundColor(.rocGold)
                     }
-                }) {
-                    Image(systemName: "phone.fill").foregroundColor(.rocGold)
-                }
-                Button(action: {
-                    let others = conversation.members.filter { $0.userId != userId }
-                    if let peer = others.first, let task = wsTask {
-                        CallManager.shared.startCall(
-                            conversationId: conversation.id,
-                            remoteUserId: peer.userId,
-                            remoteName: peer.displayName.isEmpty ? peer.username : peer.displayName,
-                            callType: .video,
-                            ws: task
-                        )
+                } else {
+                    Button(action: {
+                        let others = conversation.members.filter { $0.userId != userId }
+                        if let peer = others.first, let task = wsTask {
+                            CallManager.shared.startCall(
+                                conversationId: conversation.id,
+                                remoteUserId: peer.userId,
+                                remoteName: peer.displayName.isEmpty ? peer.username : peer.displayName,
+                                callType: .voice,
+                                ws: task
+                            )
+                        }
+                    }) {
+                        Image(systemName: "phone.fill").foregroundColor(.rocGold)
                     }
-                }) {
-                    Image(systemName: "video.fill").foregroundColor(.rocGold)
+                    Button(action: {
+                        let others = conversation.members.filter { $0.userId != userId }
+                        if let peer = others.first, let task = wsTask {
+                            CallManager.shared.startCall(
+                                conversationId: conversation.id,
+                                remoteUserId: peer.userId,
+                                remoteName: peer.displayName.isEmpty ? peer.username : peer.displayName,
+                                callType: .video,
+                                ws: task
+                            )
+                        }
+                    }) {
+                        Image(systemName: "video.fill").foregroundColor(.rocGold)
+                    }
                 }
                 Button(action: { showDisappearMenu = true }) {
                     Image(systemName: disappearTimer > 0 ? "timer" : "timer")
@@ -1671,6 +1688,9 @@ struct ConversationView: View {
 
     private func sendAudioNote(url: URL, duration: Int) async {
         guard let fileData = try? Data(contentsOf: url) else { return }
+
+        // Transcribe in background (best-effort, doesn't block send)
+        let transcript = await transcribeAudio(url: url)
         try? FileManager.default.removeItem(at: url)
 
         let others = conversation.members.filter { $0.userId != userId }
@@ -1699,7 +1719,7 @@ struct ConversationView: View {
         guard let json = try? JSONSerialization.jsonObject(with: uploadData) as? [String: Any],
               let mediaId = json["mediaId"] as? String else { return }
 
-        let voiceMsg: [String: Any] = [
+        var voiceMsg: [String: Any] = [
             "type": "voice_note",
             "blobId": mediaId,
             "fileKey": fileKeyData.base64EncodedString(),
@@ -1710,6 +1730,9 @@ struct ConversationView: View {
             "size": fileData.count,
             "duration": duration,
         ]
+        if let transcript = transcript, !transcript.isEmpty {
+            voiceMsg["transcript"] = transcript
+        }
         guard let msgData = try? JSONSerialization.data(withJSONObject: voiceMsg),
               let msgStr = String(data: msgData, encoding: .utf8) else { return }
 
@@ -1738,6 +1761,27 @@ struct ConversationView: View {
                 createdAt: ISO8601DateFormatter().string(from: Date()),
                 expiresAt: disappearTimer > 0 ? Int(Date().timeIntervalSince1970) + disappearTimer : nil
             ))
+        }
+    }
+
+    private func transcribeAudio(url: URL) async -> String? {
+        guard SFSpeechRecognizer.authorizationStatus() == .authorized ||
+              SFSpeechRecognizer.authorizationStatus() == .notDetermined else { return nil }
+        return await withCheckedContinuation { cont in
+            SFSpeechRecognizer.requestAuthorization { status in
+                guard status == .authorized else { cont.resume(returning: nil); return }
+                let recognizer = SFSpeechRecognizer()
+                guard recognizer?.isAvailable == true else { cont.resume(returning: nil); return }
+                let request = SFSpeechURLRecognitionRequest(url: url)
+                request.shouldReportPartialResults = false
+                recognizer?.recognitionTask(with: request) { result, error in
+                    if let result = result, result.isFinal {
+                        cont.resume(returning: result.bestTranscription.formattedString)
+                    } else if error != nil {
+                        cont.resume(returning: nil)
+                    }
+                }
+            }
         }
     }
 
@@ -3857,7 +3901,7 @@ struct SettingsView: View {
             for _ in 0..<30 { // Poll for 60 seconds
                 try? await Task.sleep(nanoseconds: 2_000_000_000)
                 guard verifyCode != nil else { return }
-                let data = try await APIClient.shared.get("/devices/key-transfer/pending")
+                let data = try await APIClient.shared.getRaw("/devices/key-transfer/pending")
                 guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                       let requests = json["requests"] as? [[String: Any]],
                       let first = requests.first,
@@ -3925,7 +3969,7 @@ struct SettingsView: View {
             // Poll for bundle
             for _ in 0..<30 {
                 try await Task.sleep(nanoseconds: 2_000_000_000)
-                let bundleData = try await APIClient.shared.get("/devices/key-transfer/bundle?requestId=\(requestId)")
+                let bundleData = try await APIClient.shared.getRaw("/devices/key-transfer/bundle?requestId=\(requestId)")
                 guard let json = try? JSONSerialization.jsonObject(with: bundleData) as? [String: Any],
                       json["ready"] as? Bool == true,
                       let encryptedBundle = json["encryptedBundle"] as? String,
@@ -4282,9 +4326,7 @@ struct SettingsView: View {
     }
     private func saveContactNickname(id: String, nickname: String) async {
         let body: [String: Any] = ["contact_id": id, "nickname": nickname]
-        if let data = try? JSONSerialization.data(withJSONObject: body) {
-            _ = try? await APIClient.shared.postRaw("/features/contacts", body: data)
-        }
+        _ = try? await APIClient.shared.postRaw("/features/contacts", body: body)
         await loadSavedContacts()
     }
 }

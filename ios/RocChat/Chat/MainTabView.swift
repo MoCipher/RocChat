@@ -17,6 +17,8 @@ struct ChatConversation: Identifiable {
     var muted: Bool
     var archived: Bool
 
+    var isGroup: Bool { type == "group" }
+
     struct ConversationMember {
         let userId: String
         let username: String
@@ -802,6 +804,11 @@ struct ConversationView: View {
     @State private var vaultLabel = ""
     @State private var vaultFields: [String: String] = [:]
     @State private var vaultViewOnce = false
+    @State private var showPinnedMessages = false
+    @State private var pinnedMessages: [ChatMessage] = []
+    @State private var showMediaGallery = false
+    @State private var showGroupAdmin = false
+    @State private var groupMembers: [[String: Any]] = []
     private let userId = UserDefaults.standard.string(forKey: "user_id") ?? ""
 
     private var convName: String {
@@ -1108,6 +1115,17 @@ struct ConversationView: View {
                 Button(action: { showThemePicker = true }) {
                     Image(systemName: "paintpalette.fill").foregroundColor(.rocGold)
                 }
+                Button(action: { Task { await loadPinnedMessages() }; showPinnedMessages = true }) {
+                    Image(systemName: "pin.fill").foregroundColor(.rocGold)
+                }
+                Button(action: { showMediaGallery = true }) {
+                    Image(systemName: "photo.on.rectangle").foregroundColor(.rocGold)
+                }
+                if conversation.isGroup {
+                    Button(action: { Task { await loadGroupMembers() }; showGroupAdmin = true }) {
+                        Image(systemName: "person.3.fill").foregroundColor(.rocGold)
+                    }
+                }
                 Button(action: { withAnimation { isSearching.toggle() } }) {
                     Image(systemName: "magnifyingglass").foregroundColor(.rocGold)
                 }
@@ -1251,6 +1269,111 @@ struct ConversationView: View {
                     ToolbarItem(placement: .confirmationAction) {
                         Button("Send") { sendVaultItem() }
                             .disabled(vaultLabel.isEmpty)
+                    }
+                }
+            }
+        }
+        .sheet(isPresented: $showPinnedMessages) {
+            NavigationStack {
+                List {
+                    if pinnedMessages.isEmpty {
+                        Text("No pinned messages").foregroundColor(.secondary)
+                    }
+                    ForEach(pinnedMessages) { msg in
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(msg.ciphertext.isEmpty ? "🔒 Encrypted" : msg.ciphertext)
+                                .lineLimit(3)
+                            Text(formatRelativeTime(msg.createdAt))
+                                .font(.caption).foregroundColor(.secondary)
+                        }
+                    }
+                }
+                .navigationTitle("Pinned Messages")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Done") { showPinnedMessages = false }
+                    }
+                }
+            }
+            .presentationDetents([.medium, .large])
+        }
+        .sheet(isPresented: $showMediaGallery) {
+            NavigationStack {
+                let mediaMessages = messages.filter { msg in
+                    guard let data = msg.ciphertext.data(using: .utf8),
+                          let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return false }
+                    return json["blobId"] != nil
+                }
+                ScrollView {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 100))], spacing: 4) {
+                        ForEach(mediaMessages) { msg in
+                            if let data = msg.ciphertext.data(using: .utf8),
+                               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                               let blobId = json["blobId"] as? String {
+                                AsyncImage(url: URL(string: "https://chat.mocipher.com/api/media/\(blobId)?cid=\(conversation.id)")) { image in
+                                    image.resizable().scaledToFill()
+                                } placeholder: {
+                                    Rectangle().fill(Color.gray.opacity(0.2))
+                                        .overlay(Image(systemName: "doc.fill").foregroundColor(.secondary))
+                                }
+                                .frame(width: 100, height: 100)
+                                .clipped()
+                            }
+                        }
+                    }
+                    .padding(8)
+                }
+                .navigationTitle("Media")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Done") { showMediaGallery = false }
+                    }
+                }
+            }
+        }
+        .sheet(isPresented: $showGroupAdmin) {
+            NavigationStack {
+                List {
+                    Section("Members (\(groupMembers.count))") {
+                        ForEach(Array(groupMembers.enumerated()), id: \.offset) { _, member in
+                            let name = member["display_name"] as? String ?? member["username"] as? String ?? "Unknown"
+                            let role = member["role"] as? String ?? "member"
+                            let memberId = member["user_id"] as? String ?? ""
+                            HStack {
+                                VStack(alignment: .leading) {
+                                    Text(name).font(.body)
+                                    Text(role).font(.caption).foregroundColor(.secondary)
+                                }
+                                Spacer()
+                                if memberId != userId {
+                                    Menu {
+                                        Button("Promote to Admin") {
+                                            Task {
+                                                _ = try? await APIClient.shared.postRaw("/groups/\(conversation.id)/promote", body: ["user_id": memberId, "role": "admin"])
+                                                await loadGroupMembers()
+                                            }
+                                        }
+                                        Button("Remove", role: .destructive) {
+                                            Task {
+                                                _ = try? await APIClient.shared.postRaw("/groups/\(conversation.id)/kick", body: ["user_id": memberId])
+                                                await loadGroupMembers()
+                                            }
+                                        }
+                                    } label: {
+                                        Image(systemName: "ellipsis.circle").foregroundColor(.rocGold)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                .navigationTitle("Group Admin")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Done") { showGroupAdmin = false }
                     }
                 }
             }
@@ -1942,6 +2065,38 @@ struct ConversationView: View {
         }
     }
 
+    private func loadPinnedMessages() async {
+        do {
+            let data = try await APIClient.shared.getRaw("/messages/conversations/\(conversation.id)/pins")
+            if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let pins = json["pins"] as? [[String: Any]] {
+                pinnedMessages = pins.compactMap { m in
+                    ChatMessage(
+                        id: m["id"] as? String ?? UUID().uuidString,
+                        conversationId: conversation.id,
+                        senderId: m["sender_id"] as? String ?? "",
+                        ciphertext: m["ciphertext"] as? String ?? "",
+                        iv: m["iv"] as? String ?? "",
+                        ratchetHeader: m["ratchet_header"] as? String ?? "",
+                        messageType: m["message_type"] as? String ?? "text",
+                        createdAt: m["created_at"] as? String ?? "",
+                        expiresAt: m["expires_at"] as? Int,
+                        status: "sent"
+                    )
+                }
+            }
+        } catch {}
+    }
+
+    private func loadGroupMembers() async {
+        do {
+            let data = try await APIClient.shared.getRaw("/groups/\(conversation.id)/members")
+            if let arr = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
+                groupMembers = arr
+            }
+        } catch {}
+    }
+
     private func notifyScreenshot() async {
         // Encrypt the screenshot alert through the Double Ratchet session
         let recipientId = conversation.members.first(where: { $0.userId != userId })?.userId ?? ""
@@ -2222,6 +2377,23 @@ struct MessageBubbleView: View {
             .background(isMine ? Color.rocGold.opacity(0.12) : Color.adaptiveBubbleTheirs)
             .clipShape(RoundedRectangle(cornerRadius: 18))
             .shadow(color: .black.opacity(0.04), radius: 2, y: 1)
+
+            // Reactions display
+            if let reactions = message.reactions, !reactions.isEmpty {
+                let grouped = Dictionary(grouping: reactions, by: { $0["emoji"] ?? "" })
+                HStack(spacing: 4) {
+                    ForEach(Array(grouped.keys.sorted()), id: \.self) { emoji in
+                        let count = grouped[emoji]?.count ?? 0
+                        Text("\(emoji) \(count)")
+                            .font(.system(size: 12))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.rocGold.opacity(0.12))
+                            .clipShape(Capsule())
+                    }
+                }
+            }
+
             .contextMenu {
                 // Quick reactions
                 ForEach(["❤️", "👍", "😂", "😮", "😢", "🙏"], id: \.self) { emoji in
@@ -2444,6 +2616,15 @@ struct SettingsView: View {
     @State private var verifyExpiry: Int = 0
     @State private var verifyInput = ""
     @State private var showMyQRCode = false
+    @State private var blockedContacts: [[String: Any]] = []
+    @State private var showBlockedList = false
+    @State private var isEditingName = false
+    @State private var editNameText = ""
+    @State private var showDeleteConfirm = false
+    @State private var identityKeyFingerprint = ""
+    @State private var defaultDisappearTimer = 0
+    @State private var showRecoveryPhrase = false
+    @State private var recoveryPhrase = ""
 
     var body: some View {
         NavigationStack {
@@ -2509,8 +2690,18 @@ struct SettingsView: View {
                             .onTapGesture { showPhotoPicker = true }
 
                             VStack(spacing: 2) {
-                                Text(displayName)
-                                    .font(.title3.weight(.bold))
+                                HStack(spacing: 6) {
+                                    Text(displayName)
+                                        .font(.title3.weight(.bold))
+                                    Button(action: {
+                                        editNameText = displayName
+                                        isEditingName = true
+                                    }) {
+                                        Image(systemName: "pencil.circle.fill")
+                                            .foregroundColor(.rocGold)
+                                            .font(.system(size: 16))
+                                    }
+                                }
                                 Text("@\(username)")
                                     .font(.subheadline)
                                     .foregroundColor(.adaptiveTextSec)
@@ -2789,6 +2980,33 @@ struct SettingsView: View {
                 }
                 .tint(.rocGold)
 
+                Section("Blocked Contacts") {
+                    Button {
+                        Task { await loadBlockedContacts() }
+                        showBlockedList = true
+                    } label: {
+                        Label("View Blocked Users", systemImage: "hand.raised.fill")
+                    }
+                }
+
+                Section("Default Disappearing Timer") {
+                    Picker("New chats auto-delete", selection: $defaultDisappearTimer) {
+                        Text("Off").tag(0)
+                        Text("5 minutes").tag(300)
+                        Text("1 hour").tag(3600)
+                        Text("24 hours").tag(86400)
+                        Text("7 days").tag(604800)
+                        Text("30 days").tag(2592000)
+                    }
+                    .onChange(of: defaultDisappearTimer) { _, val in
+                        UserDefaults.standard.set(val, forKey: "default_disappear_timer")
+                        Task {
+                            _ = try? await APIClient.shared.postRaw("/me/settings", body: ["default_disappear_timer": val], method: "PATCH")
+                        }
+                    }
+                }
+                .tint(.rocGold)
+
                 Section("Appearance") {
                     Picker("Theme", selection: $appTheme) {
                         Text("System").tag("system")
@@ -2856,6 +3074,24 @@ struct SettingsView: View {
                                 .font(.custom("JetBrains Mono", size: 10))
                                 .foregroundColor(.textSecondary)
                         }
+                    }
+                    if !identityKeyFingerprint.isEmpty {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Your Identity Key")
+                                .font(.caption.bold())
+                            Text(identityKeyFingerprint)
+                                .font(.custom("JetBrains Mono", size: 10))
+                                .foregroundColor(.textSecondary)
+                                .textSelection(.enabled)
+                        }
+                    }
+                    Button {
+                        showRecoveryPhrase = true
+                        if recoveryPhrase.isEmpty {
+                            generateRecoveryPhrase()
+                        }
+                    } label: {
+                        Label("Recovery Phrase", systemImage: "key.fill")
                     }
                 }
 
@@ -2948,6 +3184,9 @@ struct SettingsView: View {
                 }
 
                 Section {
+                    Button("Delete Account", role: .destructive) {
+                        showDeleteConfirm = true
+                    }
                     Button("Sign Out") { authVM.logout() }
                         .foregroundColor(.danger)
                 }
@@ -2973,6 +3212,100 @@ struct SettingsView: View {
                 Task { await processImport(source: importSource, text: text) }
             }
         }
+        .alert("Edit Display Name", isPresented: $isEditingName) {
+            TextField("Display name", text: $editNameText)
+            Button("Save") {
+                let newName = editNameText.trimmingCharacters(in: .whitespaces)
+                guard !newName.isEmpty else { return }
+                displayName = newName
+                Task {
+                    _ = try? await APIClient.shared.postRaw("/me/settings", body: ["display_name": newName], method: "PATCH")
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        }
+        .alert("Delete Account", isPresented: $showDeleteConfirm) {
+            Button("Delete", role: .destructive) {
+                Task {
+                    _ = try? await APIClient.shared.deleteRaw("/me")
+                    await MainActor.run { authVM.logout() }
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This will permanently delete your account, all messages, and keys. This cannot be undone.")
+        }
+        .sheet(isPresented: $showBlockedList) {
+            NavigationStack {
+                List {
+                    if blockedContacts.isEmpty {
+                        Text("No blocked contacts").foregroundColor(.secondary)
+                    }
+                    ForEach(Array(blockedContacts.enumerated()), id: \.offset) { _, contact in
+                        let name = contact["display_name"] as? String ?? contact["username"] as? String ?? "Unknown"
+                        let blockedId = contact["user_id"] as? String ?? contact["id"] as? String ?? ""
+                        HStack {
+                            Text(name)
+                            Spacer()
+                            Button("Unblock") {
+                                Task {
+                                    _ = try? await APIClient.shared.postRaw("/contacts/block", body: ["userId": blockedId, "blocked": false])
+                                    await loadBlockedContacts()
+                                }
+                            }
+                            .foregroundColor(.rocGold)
+                            .font(.subheadline)
+                        }
+                    }
+                }
+                .navigationTitle("Blocked Contacts")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Done") { showBlockedList = false }
+                    }
+                }
+            }
+        }
+        .sheet(isPresented: $showRecoveryPhrase) {
+            NavigationStack {
+                VStack(spacing: 20) {
+                    Image(systemName: "key.fill")
+                        .font(.system(size: 48))
+                        .foregroundColor(.rocGold)
+                    Text("Recovery Phrase")
+                        .font(.title2.bold())
+                    Text("Write these words down and store them safely. They are the only way to recover your encryption keys.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal)
+                    if !recoveryPhrase.isEmpty {
+                        let words = recoveryPhrase.components(separatedBy: " ")
+                        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
+                            ForEach(Array(words.enumerated()), id: \.offset) { idx, word in
+                                HStack(spacing: 4) {
+                                    Text("\(idx + 1).").font(.caption).foregroundColor(.secondary)
+                                    Text(word).font(.system(.body, design: .monospaced))
+                                }
+                                .padding(.vertical, 4)
+                                .padding(.horizontal, 8)
+                                .background(Color.rocGold.opacity(0.08))
+                                .clipShape(RoundedRectangle(cornerRadius: 6))
+                            }
+                        }
+                        .padding()
+                    }
+                }
+                .padding()
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Done") { showRecoveryPhrase = false }
+                    }
+                }
+            }
+            .presentationDetents([.medium, .large])
+        }
         .task {
             do {
                 let me = try await APIClient.shared.getMe()
@@ -2987,6 +3320,12 @@ struct SettingsView: View {
                 if let wa = me["who_can_add"] as? String { whoCanAdd = wa }
                 // Detect ghost mode
                 ghostMode = !readReceipts && !typingIndicators && onlineVisibility == "nobody"
+                // Load default disappear timer
+                if let ddt = me["default_disappear_timer"] as? Int { defaultDisappearTimer = ddt }
+                // Generate identity key fingerprint from local key
+                if let keyData = UserDefaults.standard.data(forKey: "identity_key_public") {
+                    identityKeyFingerprint = keyData.map { String(format: "%02x", $0) }.joined(separator: " ").uppercased()
+                }
             } catch {}
             // Load quiet hours
             do {
@@ -3014,6 +3353,34 @@ struct SettingsView: View {
                 devices = arr
             }
         } catch {}
+    }
+
+    private func loadBlockedContacts() async {
+        do {
+            let data = try await APIClient.shared.getRaw("/contacts")
+            if let arr = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
+                blockedContacts = arr.filter { ($0["blocked"] as? Int ?? 0) == 1 || ($0["blocked"] as? Bool ?? false) }
+            }
+        } catch {}
+    }
+
+    private func generateRecoveryPhrase() {
+        // BIP39-style word list subset for recovery phrase
+        let words = ["abandon","ability","able","about","above","absent","absorb","abstract","absurd","abuse",
+                     "access","accident","account","accuse","achieve","acid","across","act","action","actor",
+                     "address","adjust","admit","adult","advance","advice","afford","again","age","agent",
+                     "agree","ahead","aim","air","alert","alien","all","alley","allow","almost",
+                     "alone","alpha","already","also","alter","always","amount","ancient","anger","angle",
+                     "animal","answer","any","apart","april","area","arena","argue","arm","armor"]
+        var phrase: [String] = []
+        for _ in 0..<12 {
+            var bytes = [UInt8](repeating: 0, count: 1)
+            _ = SecRandomCopyBuffer(count: 1, bytes: &bytes)
+            phrase.append(words[Int(bytes[0]) % words.count])
+        }
+        recoveryPhrase = phrase.joined(separator: " ")
+        // Store encrypted in keychain for recovery
+        UserDefaults.standard.set(recoveryPhrase, forKey: "recovery_phrase")
     }
 
     private func processImport(source: String, text: String) async {

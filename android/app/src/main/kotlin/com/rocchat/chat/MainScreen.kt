@@ -763,6 +763,11 @@ fun ConversationScreen(conversationId: String, conversationName: String, recipie
     var vaultLabel by remember { mutableStateOf("") }
     var vaultFields by remember { mutableStateOf(mutableMapOf<String, String>()) }
     var vaultViewOnce by remember { mutableStateOf(false) }
+    var showPinnedMessages by remember { mutableStateOf(false) }
+    var pinnedMessages by remember { mutableStateOf<List<APIClient.ChatMessage>>(emptyList()) }
+    var showMediaGallery by remember { mutableStateOf(false) }
+    var showGroupAdmin by remember { mutableStateOf(false) }
+    var groupMembers by remember { mutableStateOf<List<JSONObject>>(emptyList()) }
     val haptics = LocalHapticFeedback.current
 
     // File/photo picker
@@ -1083,6 +1088,24 @@ fun ConversationScreen(conversationId: String, conversationName: String, recipie
                     }
                     IconButton(onClick = { showThemePicker = true }) {
                         Icon(Icons.Default.Palette, contentDescription = "Chat Theme", tint = RocColors.RocGold)
+                    }
+                    IconButton(onClick = {
+                        scope.launch {
+                            try {
+                                val data = APIClient.get("/messages/conversations/$conversationId/pins")
+                                val pins = data.optJSONArray("pins")
+                                pinnedMessages = if (pins != null) (0 until pins.length()).map { i ->
+                                    val m = pins.getJSONObject(i)
+                                    APIClient.ChatMessage(m.getString("id"), conversationId, m.optString("sender_id", ""), m.optString("ciphertext", ""), m.optString("iv", ""), m.optString("ratchet_header", ""), m.optString("message_type", "text"), m.optString("created_at", ""), null, "sent")
+                                } else emptyList()
+                            } catch (_: Exception) {}
+                        }
+                        showPinnedMessages = true
+                    }) {
+                        Icon(Icons.Default.PushPin, contentDescription = "Pinned", tint = RocColors.RocGold)
+                    }
+                    IconButton(onClick = { showMediaGallery = true }) {
+                        Icon(Icons.Default.Photo, contentDescription = "Media Gallery", tint = RocColors.RocGold)
                     }
                     IconButton(onClick = { isSearching = !isSearching }) {
                         Icon(Icons.Default.Search, contentDescription = "Search messages", tint = RocColors.RocGold)
@@ -1731,6 +1754,109 @@ fun ConversationScreen(conversationId: String, conversationName: String, recipie
             )
         }
 
+        // Pinned Messages dialog
+        if (showPinnedMessages) {
+            AlertDialog(
+                onDismissRequest = { showPinnedMessages = false },
+                title = { Text("Pinned Messages") },
+                text = {
+                    if (pinnedMessages.isEmpty()) {
+                        Text("No pinned messages", color = RocColors.TextSecondary)
+                    } else {
+                        LazyColumn(modifier = Modifier.heightIn(max = 350.dp)) {
+                            items(pinnedMessages, key = { it.id }) { msg ->
+                                Column(modifier = Modifier.padding(vertical = 4.dp)) {
+                                    Text(msg.ciphertext.ifBlank { "🔒 Encrypted" }, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                                    Text(formatRelativeTime(msg.createdAt), fontSize = 11.sp, color = RocColors.TextSecondary)
+                                }
+                                HorizontalDivider()
+                            }
+                        }
+                    }
+                },
+                confirmButton = {},
+                dismissButton = { TextButton(onClick = { showPinnedMessages = false }) { Text("Done") } },
+            )
+        }
+
+        // Media Gallery dialog
+        if (showMediaGallery) {
+            val mediaMessages = messages.filter { msg ->
+                try { JSONObject(msg.ciphertext).has("blobId") } catch (_: Exception) { false }
+            }
+            AlertDialog(
+                onDismissRequest = { showMediaGallery = false },
+                title = { Text("Media") },
+                text = {
+                    if (mediaMessages.isEmpty()) {
+                        Text("No media shared", color = RocColors.TextSecondary)
+                    } else {
+                        LazyColumn(modifier = Modifier.heightIn(max = 400.dp)) {
+                            items(mediaMessages, key = { it.id }) { msg ->
+                                val blobId = try { JSONObject(msg.ciphertext).optString("blobId", "") } catch (_: Exception) { "" }
+                                val filename = try { JSONObject(msg.ciphertext).optString("filename", "File") } catch (_: Exception) { "File" }
+                                ListItem(
+                                    headlineContent = { Text(filename) },
+                                    supportingContent = { Text(formatRelativeTime(msg.createdAt), fontSize = 11.sp) },
+                                    leadingContent = { Icon(Icons.Default.InsertDriveFile, contentDescription = null, tint = RocColors.RocGold) },
+                                )
+                            }
+                        }
+                    }
+                },
+                confirmButton = {},
+                dismissButton = { TextButton(onClick = { showMediaGallery = false }) { Text("Done") } },
+            )
+        }
+
+        // Group Admin dialog
+        if (showGroupAdmin) {
+            AlertDialog(
+                onDismissRequest = { showGroupAdmin = false },
+                title = { Text("Group Members (${groupMembers.size})") },
+                text = {
+                    LazyColumn(modifier = Modifier.heightIn(max = 400.dp)) {
+                        items(groupMembers.size) { idx ->
+                            val member = groupMembers[idx]
+                            val name = member.optString("display_name", member.optString("username", "Unknown"))
+                            val role = member.optString("role", "member")
+                            val memberId = member.optString("user_id", "")
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(name)
+                                    Text(role, fontSize = 12.sp, color = RocColors.TextSecondary)
+                                }
+                                if (memberId != userId) {
+                                    IconButton(onClick = {
+                                        scope.launch {
+                                            try { APIClient.post("/groups/$conversationId/promote", JSONObject().put("user_id", memberId).put("role", "admin")) } catch (_: Exception) {}
+                                            try { val arr = APIClient.getArray("/groups/$conversationId/members"); groupMembers = (0 until arr.length()).map { arr.getJSONObject(it) } } catch (_: Exception) {}
+                                        }
+                                    }, modifier = Modifier.size(32.dp)) {
+                                        Icon(Icons.Default.ArrowUpward, contentDescription = "Promote", tint = RocColors.RocGold, modifier = Modifier.size(18.dp))
+                                    }
+                                    IconButton(onClick = {
+                                        scope.launch {
+                                            try { APIClient.post("/groups/$conversationId/kick", JSONObject().put("user_id", memberId)) } catch (_: Exception) {}
+                                            try { val arr = APIClient.getArray("/groups/$conversationId/members"); groupMembers = (0 until arr.length()).map { arr.getJSONObject(it) } } catch (_: Exception) {}
+                                        }
+                                    }, modifier = Modifier.size(32.dp)) {
+                                        Icon(Icons.Default.PersonRemove, contentDescription = "Remove", tint = RocColors.Danger, modifier = Modifier.size(18.dp))
+                                    }
+                                }
+                            }
+                            HorizontalDivider()
+                        }
+                    }
+                },
+                confirmButton = {},
+                dismissButton = { TextButton(onClick = { showGroupAdmin = false }) { Text("Done") } },
+            )
+        }
+
         if (safetyNumberText.isNotEmpty()) {
             AlertDialog(
                 onDismissRequest = { showSafetyDialog = false; safetyNumberText = "" },
@@ -2000,6 +2126,26 @@ private fun MessageBubble(
                     }
                 }
 
+                // Reactions display
+                if (!msg.reactions.isNullOrBlank()) {
+                    Row(
+                        modifier = Modifier.padding(top = 2.dp),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        val reactionList = msg.reactions.split(",").filter { it.isNotBlank() }
+                        val grouped = reactionList.groupBy { it.trim() }
+                        grouped.forEach { (emoji, list) ->
+                            Text(
+                                "$emoji ${list.size}",
+                                fontSize = 12.sp,
+                                modifier = Modifier
+                                    .background(RocColors.RocGold.copy(alpha = 0.12f), shape = RoundedCornerShape(12.dp))
+                                    .padding(horizontal = 6.dp, vertical = 2.dp),
+                            )
+                        }
+                    }
+                }
+
                 // Context menu
                 DropdownMenu(expanded = showContextMenu, onDismissRequest = { showContextMenu = false }) {
                     listOf("❤️", "👍", "😂", "😮", "😢", "🙏").forEach { emoji ->
@@ -2148,6 +2294,16 @@ fun SettingsTab(onLogout: () -> Unit) {
     var devicesList by remember { mutableStateOf<List<JSONObject>>(emptyList()) }
     var verifyCode by remember { mutableStateOf<String?>(null) }
     var verifyInput by remember { mutableStateOf("") }
+    var showBlockedList by remember { mutableStateOf(false) }
+    var blockedContacts by remember { mutableStateOf<List<JSONObject>>(emptyList()) }
+    var showEditName by remember { mutableStateOf(false) }
+    var editNameText by remember { mutableStateOf("") }
+    var showDeleteConfirm by remember { mutableStateOf(false) }
+    var identityKeyFingerprint by remember { mutableStateOf("") }
+    var defaultDisappearTimer by remember { mutableIntStateOf(0) }
+    var showRecoveryPhrase by remember { mutableStateOf(false) }
+    var recoveryPhrase by remember { mutableStateOf("") }
+    var appTheme by remember { mutableStateOf(context.getSharedPreferences("rocchat", Context.MODE_PRIVATE).getString("app_theme", "system") ?: "system") }
 
     val importFileLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.GetContent()
@@ -2263,6 +2419,10 @@ fun SettingsTab(onLogout: () -> Unit) {
             if (me.has("show_online_to")) onlineVisibility = me.optString("show_online_to", "everyone")
             if (me.has("who_can_add")) whoCanAdd = me.optString("who_can_add", "everyone")
             ghostMode = !readReceipts && !typingIndicators && onlineVisibility == "nobody"
+            if (me.has("default_disappear_timer")) defaultDisappearTimer = me.optInt("default_disappear_timer", 0)
+            // Load identity key fingerprint
+            val keyHex = context.getSharedPreferences("rocchat", Context.MODE_PRIVATE).getString("identity_key_public", null)
+            if (keyHex != null) identityKeyFingerprint = keyHex.chunked(2).joinToString(" ").uppercase()
         } catch (_: Exception) {}
         // Load devices
         try {
@@ -2384,7 +2544,12 @@ fun SettingsTab(onLogout: () -> Unit) {
                     }
                 }
 
-                Text(displayName, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(displayName, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                    IconButton(onClick = { editNameText = displayName; showEditName = true }, modifier = Modifier.size(24.dp)) {
+                        Icon(Icons.Default.Edit, contentDescription = "Edit name", tint = RocColors.RocGold, modifier = Modifier.size(16.dp))
+                    }
+                }
                 Text(
                     "@$username",
                     color = RocColors.TextSecondary,
@@ -2612,6 +2777,48 @@ fun SettingsTab(onLogout: () -> Unit) {
 
         HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
 
+        // Blocked Contacts
+        Text("Blocked Contacts", modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp), fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = RocColors.RocGold)
+        ListItem(
+            headlineContent = { Text("View Blocked Users", fontWeight = FontWeight.Medium) },
+            leadingContent = { Icon(Icons.Default.Block, contentDescription = null, tint = RocColors.RocGold) },
+            modifier = Modifier.clickable {
+                scope.launch {
+                    try {
+                        val arr = APIClient.getArray("/contacts")
+                        blockedContacts = (0 until arr.length()).map { arr.getJSONObject(it) }.filter { it.optInt("blocked", 0) == 1 }
+                    } catch (_: Exception) {}
+                }
+                showBlockedList = true
+            },
+        )
+        HorizontalDivider()
+
+        // Default Disappearing Timer
+        Text("Default Disappearing Timer", modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp), fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = RocColors.RocGold)
+        var timerExpanded by remember { mutableStateOf(false) }
+        val timerOptions = listOf(0 to "Off", 300 to "5 min", 3600 to "1 hour", 86400 to "24 hours", 604800 to "7 days", 2592000 to "30 days")
+        Box(modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
+            Row(modifier = Modifier.fillMaxWidth().clickable { timerExpanded = true }, verticalAlignment = Alignment.CenterVertically) {
+                Text("New chats auto-delete", modifier = Modifier.weight(1f), fontSize = 14.sp)
+                Text(timerOptions.firstOrNull { it.first == defaultDisappearTimer }?.second ?: "Off", color = RocColors.TextSecondary, fontSize = 14.sp)
+                Icon(Icons.Default.ArrowDropDown, contentDescription = null, tint = RocColors.TextSecondary)
+            }
+            DropdownMenu(expanded = timerExpanded, onDismissRequest = { timerExpanded = false }) {
+                timerOptions.forEach { (value, label) ->
+                    DropdownMenuItem(
+                        text = { Text(label) },
+                        onClick = {
+                            defaultDisappearTimer = value
+                            timerExpanded = false
+                            scope.launch { try { APIClient.updateSettings(mapOf("default_disappear_timer" to value)) } catch (_: Exception) {} }
+                        },
+                    )
+                }
+            }
+        }
+        HorizontalDivider()
+
         // Privacy header
         Text("Privacy", modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp), fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = RocColors.RocGold)
 
@@ -2763,6 +2970,23 @@ fun SettingsTab(onLogout: () -> Unit) {
 
         HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
 
+        // Appearance
+        Text("Appearance", modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp), fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = RocColors.RocGold)
+        Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf("system" to "System", "dark" to "Dark", "light" to "Light").forEach { (key, label) ->
+                FilterChip(
+                    selected = appTheme == key,
+                    onClick = {
+                        appTheme = key
+                        context.getSharedPreferences("rocchat", Context.MODE_PRIVATE).edit().putString("app_theme", key).apply()
+                    },
+                    label = { Text(label) },
+                )
+            }
+        }
+
+        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+
         // Encryption
         Text("Encryption", modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp), fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = RocColors.RocGold)
         Row(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -2773,6 +2997,30 @@ fun SettingsTab(onLogout: () -> Unit) {
                 Text("X25519 + AES-256-GCM + Double Ratchet", fontSize = 11.sp, color = RocColors.TextSecondary)
             }
         }
+        if (identityKeyFingerprint.isNotEmpty()) {
+            Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
+                Text("Your Identity Key", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                Text(identityKeyFingerprint, fontSize = 10.sp, fontFamily = FontFamily.Monospace, color = RocColors.TextSecondary)
+            }
+        }
+        ListItem(
+            headlineContent = { Text("Recovery Phrase", fontWeight = FontWeight.Medium) },
+            leadingContent = { Icon(Icons.Default.Key, contentDescription = null, tint = RocColors.RocGold) },
+            modifier = Modifier.clickable {
+                if (recoveryPhrase.isEmpty()) {
+                    val words = listOf("abandon","ability","able","about","above","absent","absorb","abstract","absurd","abuse",
+                        "access","accident","account","accuse","achieve","acid","across","act","action","actor",
+                        "address","adjust","admit","adult","advance","advice","afford","again","age","agent",
+                        "agree","ahead","aim","air","alert","alien","all","alley","allow","almost",
+                        "alone","alpha","already","also","alter","always","amount","ancient","anger","angle",
+                        "animal","answer","any","apart","april","area","arena","argue","arm","armor")
+                    val rng = java.security.SecureRandom()
+                    recoveryPhrase = (1..12).map { words[rng.nextInt(words.size)] }.joinToString(" ")
+                    context.getSharedPreferences("rocchat", Context.MODE_PRIVATE).edit().putString("recovery_phrase", recoveryPhrase).apply()
+                }
+                showRecoveryPhrase = true
+            },
+        )
 
         HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
 
@@ -2831,12 +3079,141 @@ fun SettingsTab(onLogout: () -> Unit) {
         Spacer(Modifier.height(24.dp))
 
         Button(
+            onClick = { showDeleteConfirm = true },
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+            colors = ButtonDefaults.outlinedButtonColors(contentColor = RocColors.Danger),
+            border = ButtonDefaults.outlinedButtonBorder(enabled = true),
+        ) {
+            Text("Delete Account")
+        }
+        Spacer(Modifier.height(8.dp))
+        Button(
             onClick = onLogout,
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
             colors = ButtonDefaults.outlinedButtonColors(contentColor = RocColors.Danger),
             border = ButtonDefaults.outlinedButtonBorder(enabled = true),
         ) {
             Text("Sign Out")
+        }
+
+        // Edit Name dialog
+        if (showEditName) {
+            AlertDialog(
+                onDismissRequest = { showEditName = false },
+                title = { Text("Edit Display Name") },
+                text = {
+                    OutlinedTextField(value = editNameText, onValueChange = { editNameText = it }, label = { Text("Display name") }, singleLine = true)
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        val newName = editNameText.trim()
+                        if (newName.isNotEmpty()) {
+                            displayName = newName
+                            scope.launch { try { APIClient.updateSettings(mapOf("display_name" to newName)) } catch (_: Exception) {} }
+                        }
+                        showEditName = false
+                    }) { Text("Save") }
+                },
+                dismissButton = { TextButton(onClick = { showEditName = false }) { Text("Cancel") } },
+            )
+        }
+
+        // Delete Account confirmation
+        if (showDeleteConfirm) {
+            AlertDialog(
+                onDismissRequest = { showDeleteConfirm = false },
+                title = { Text("Delete Account") },
+                text = { Text("This will permanently delete your account, all messages, and keys. This cannot be undone.") },
+                confirmButton = {
+                    TextButton(onClick = {
+                        showDeleteConfirm = false
+                        scope.launch {
+                            try { APIClient.delete("/me") } catch (_: Exception) {}
+                            onLogout()
+                        }
+                    }) { Text("Delete", color = RocColors.Danger) }
+                },
+                dismissButton = { TextButton(onClick = { showDeleteConfirm = false }) { Text("Cancel") } },
+            )
+        }
+
+        // Blocked Contacts dialog
+        if (showBlockedList) {
+            AlertDialog(
+                onDismissRequest = { showBlockedList = false },
+                title = { Text("Blocked Contacts") },
+                text = {
+                    if (blockedContacts.isEmpty()) {
+                        Text("No blocked contacts", color = RocColors.TextSecondary)
+                    } else {
+                        LazyColumn(modifier = Modifier.heightIn(max = 350.dp)) {
+                            items(blockedContacts.size) { idx ->
+                                val c = blockedContacts[idx]
+                                val name = c.optString("display_name", c.optString("username", "Unknown"))
+                                val blockedId = c.optString("user_id", c.optString("id", ""))
+                                Row(
+                                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Text(name, modifier = Modifier.weight(1f))
+                                    TextButton(onClick = {
+                                        scope.launch {
+                                            try { APIClient.post("/contacts/block", JSONObject().put("userId", blockedId).put("blocked", false)) } catch (_: Exception) {}
+                                            try {
+                                                val arr = APIClient.getArray("/contacts")
+                                                blockedContacts = (0 until arr.length()).map { arr.getJSONObject(it) }.filter { it.optInt("blocked", 0) == 1 }
+                                            } catch (_: Exception) {}
+                                        }
+                                    }) { Text("Unblock", color = RocColors.RocGold) }
+                                }
+                                HorizontalDivider()
+                            }
+                        }
+                    }
+                },
+                confirmButton = {},
+                dismissButton = { TextButton(onClick = { showBlockedList = false }) { Text("Done") } },
+            )
+        }
+
+        // Recovery Phrase dialog
+        if (showRecoveryPhrase) {
+            AlertDialog(
+                onDismissRequest = { showRecoveryPhrase = false },
+                title = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.Key, contentDescription = null, tint = RocColors.RocGold)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Recovery Phrase")
+                    }
+                },
+                text = {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text("Write these words down and store them safely. They are the only way to recover your encryption keys.", fontSize = 12.sp, color = RocColors.TextSecondary)
+                        Spacer(Modifier.height(16.dp))
+                        val words = recoveryPhrase.split(" ")
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            for (row in words.chunked(3)) {
+                                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+                                    row.forEachIndexed { idx, word ->
+                                        val wordIdx = words.indexOf(word) + 1
+                                        Text(
+                                            "$wordIdx. $word",
+                                            fontSize = 13.sp,
+                                            fontFamily = FontFamily.Monospace,
+                                            modifier = Modifier
+                                                .background(RocColors.RocGold.copy(alpha = 0.08f), shape = RoundedCornerShape(6.dp))
+                                                .padding(horizontal = 8.dp, vertical = 4.dp),
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                confirmButton = {},
+                dismissButton = { TextButton(onClick = { showRecoveryPhrase = false }) { Text("Done") } },
+            )
         }
     }
 }

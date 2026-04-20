@@ -379,16 +379,30 @@ export function renderSettings(container: HTMLElement) {
           <h3>Import Chat History</h3>
           <div class="setting-row">
             <div>
-              <div class="setting-label">📥 Import from WhatsApp, Telegram, or Signal</div>
-              <div class="setting-desc">Upload an exported .txt or .json chat file. Messages are re-encrypted with your RocChat keys before storage.</div>
+              <div class="setting-label">📥 One-Click Migration Bridge</div>
+              <div class="setting-desc">Drag & drop or select an export file from WhatsApp (.txt), Telegram (.json), or Signal (.json). Format is auto-detected. Messages are re-encrypted with your RocChat keys.</div>
             </div>
           </div>
-          <div style="display:flex;gap:var(--sp-2);margin-top:var(--sp-2);flex-wrap:wrap">
+          <div id="import-dropzone" style="border:2px dashed var(--border-norm);border-radius:var(--radius-lg);padding:var(--sp-6);text-align:center;cursor:pointer;margin-top:var(--sp-2);transition:border-color 0.2s,background 0.2s">
+            <div style="font-size:var(--text-xl);margin-bottom:var(--sp-2)">📂</div>
+            <div style="font-size:var(--text-sm);color:var(--text-secondary)">Drop your chat export here or click to browse</div>
+            <div style="font-size:var(--text-xs);color:var(--text-tertiary);margin-top:var(--sp-1)">Supports .txt, .json, .zip</div>
+          </div>
+          <div style="display:flex;gap:var(--sp-2);margin-top:var(--sp-3);flex-wrap:wrap">
             <button class="btn-secondary import-btn" data-source="whatsapp" style="font-size:var(--text-sm)">📱 WhatsApp (.txt)</button>
             <button class="btn-secondary import-btn" data-source="telegram" style="font-size:var(--text-sm)">✈️ Telegram (.json)</button>
             <button class="btn-secondary import-btn" data-source="signal" style="font-size:var(--text-sm)">🔒 Signal (.json)</button>
           </div>
           <input type="file" id="import-file-input" accept=".txt,.json,.zip" style="display:none">
+          <div id="import-progress-container" style="display:none;margin-top:var(--sp-3)">
+            <div style="display:flex;justify-content:space-between;font-size:var(--text-xs);color:var(--text-secondary);margin-bottom:var(--sp-1)">
+              <span id="import-progress-label">Importing...</span>
+              <span id="import-progress-percent">0%</span>
+            </div>
+            <div style="height:6px;border-radius:3px;background:var(--bg-input);overflow:hidden">
+              <div id="import-progress-bar" style="height:100%;width:0%;background:var(--roc-gold);border-radius:3px;transition:width 0.3s ease"></div>
+            </div>
+          </div>
           <div id="import-status" style="margin-top:var(--sp-2);font-size:var(--text-xs);color:var(--text-tertiary)"></div>
         </div>
 
@@ -1001,29 +1015,62 @@ export function renderSettings(container: HTMLElement) {
     }
   });
 
-  // Chat import buttons
+  // Chat import — one-click migration bridge with auto-detect & progress bar
   let importSource = '';
   const importFileInput = document.getElementById('import-file-input') as HTMLInputElement;
   const importStatus = document.getElementById('import-status')!;
+  const importDropzone = document.getElementById('import-dropzone')!;
+  const progressContainer = document.getElementById('import-progress-container')!;
+  const progressBar = document.getElementById('import-progress-bar')!;
+  const progressLabel = document.getElementById('import-progress-label')!;
+  const progressPercent = document.getElementById('import-progress-percent')!;
 
-  document.querySelectorAll('.import-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      importSource = (btn as HTMLElement).dataset.source || '';
-      importFileInput.click();
-    });
-  });
+  function setProgress(pct: number, label: string) {
+    progressContainer.style.display = 'block';
+    progressBar.style.width = `${pct}%`;
+    progressPercent.textContent = `${Math.round(pct)}%`;
+    progressLabel.textContent = label;
+  }
 
-  importFileInput?.addEventListener('change', async () => {
-    const file = importFileInput.files?.[0];
-    if (!file || !importSource) return;
-    importStatus.textContent = `Parsing ${importSource} export...`;
+  function hideProgress() { progressContainer.style.display = 'none'; }
+
+  function autoDetectSource(text: string, filename: string): string {
+    // Check filename hints first
+    if (filename.match(/whatsapp/i) || filename.endsWith('.txt')) {
+      // Verify it looks like WhatsApp format
+      if (text.match(/^\d{1,2}\/\d{1,2}\/\d{2,4},?\s+\d{1,2}:\d{2}/m)) return 'whatsapp';
+    }
+    // Try JSON parse
+    try {
+      const data = JSON.parse(text);
+      // Telegram has type: "personal_chat" or messages with from field
+      if (data.type || (data.messages && data.messages[0]?.from)) return 'telegram';
+      // Signal has messages with body+source or conversationId
+      if (data.messages && data.messages[0]?.body) return 'signal';
+      if (Array.isArray(data) && data[0]?.body) return 'signal';
+    } catch { /* not json */ }
+    // Default: check WhatsApp txt pattern
+    if (text.match(/^\d{1,2}\/\d{1,2}\/\d{2,4},?\s+\d{1,2}:\d{2}/m)) return 'whatsapp';
+    return '';
+  }
+
+  async function handleImportFile(file: File, sourceOverride?: string) {
+    importStatus.textContent = '';
+    setProgress(5, 'Reading file...');
 
     try {
       const text = await file.text();
+      const source = sourceOverride || autoDetectSource(text, file.name);
+      if (!source) {
+        hideProgress();
+        importStatus.textContent = '⚠️ Could not detect format. Please use a specific import button.';
+        return;
+      }
+
+      setProgress(15, `Detected ${source} format. Parsing...`);
       let parsed: Array<{ sender_name: string; body: string; timestamp: string }> = [];
 
-      if (importSource === 'whatsapp') {
-        // WhatsApp .txt format: "MM/DD/YY, HH:MM - Sender: Message"
+      if (source === 'whatsapp') {
         const lines = text.split('\n');
         for (const line of lines) {
           const match = line.match(/^(\d{1,2}\/\d{1,2}\/\d{2,4},?\s+\d{1,2}:\d{2}(?:\s*[AP]M)?)\s*-\s*([^:]+):\s*(.+)$/);
@@ -1031,8 +1078,7 @@ export function renderSettings(container: HTMLElement) {
             parsed.push({ timestamp: match[1], sender_name: match[2].trim(), body: match[3] });
           }
         }
-      } else if (importSource === 'telegram') {
-        // Telegram JSON: { messages: [{ from, text, date }] }
+      } else if (source === 'telegram') {
         const data = JSON.parse(text);
         const msgs = data.messages || data;
         for (const m of (Array.isArray(msgs) ? msgs : [])) {
@@ -1040,8 +1086,7 @@ export function renderSettings(container: HTMLElement) {
             parsed.push({ sender_name: m.from || m.from_id || 'Unknown', body: m.text, timestamp: m.date || '' });
           }
         }
-      } else if (importSource === 'signal') {
-        // Signal JSON backup
+      } else if (source === 'signal') {
         const data = JSON.parse(text);
         const msgs = data.messages || data;
         for (const m of (Array.isArray(msgs) ? msgs : [])) {
@@ -1052,33 +1097,79 @@ export function renderSettings(container: HTMLElement) {
       }
 
       if (parsed.length === 0) {
+        hideProgress();
         importStatus.textContent = 'No messages found in file. Check the file format.';
         return;
       }
 
-      // Pick conversation to import into
-      const convName = prompt(`Found ${parsed.length} messages. Enter conversation name to import into:`);
-      if (!convName) { importStatus.textContent = ''; return; }
+      setProgress(30, `Found ${parsed.length} messages from ${source}`);
 
-      // Create or find conversation
+      const convName = prompt(`Found ${parsed.length} messages (${source}). Enter conversation name to import into:`);
+      if (!convName) { hideProgress(); importStatus.textContent = ''; return; }
+
+      setProgress(35, 'Creating conversation...');
       const convRes = await api.createConversation({ type: 'direct', member_ids: [], name: convName });
       const convId = convRes.data?.conversation_id;
-      if (!convId) { importStatus.textContent = 'Failed to create conversation'; return; }
+      if (!convId) { hideProgress(); importStatus.textContent = 'Failed to create conversation'; return; }
 
-      // Batch upload (chunks of 500)
+      // Batch upload with progress
       let total = 0;
-      for (let i = 0; i < parsed.length; i += 500) {
-        const batch = parsed.slice(i, i + 500);
-        const res = await api.importMessages(importSource, convId, batch);
+      const chunkSize = 500;
+      const totalChunks = Math.ceil(parsed.length / chunkSize);
+      for (let i = 0; i < parsed.length; i += chunkSize) {
+        const batch = parsed.slice(i, i + chunkSize);
+        const res = await api.importMessages(source, convId, batch);
         total += res.data?.imported || 0;
-        importStatus.textContent = `Imported ${total} of ${parsed.length} messages...`;
+        const chunksDone = Math.floor(i / chunkSize) + 1;
+        const pct = 35 + (chunksDone / totalChunks) * 65;
+        setProgress(pct, `Importing: ${total} of ${parsed.length} messages...`);
       }
-      importStatus.textContent = `✅ Imported ${total} messages from ${importSource}`;
-      showToast(`Imported ${total} messages`, 'success');
+
+      setProgress(100, 'Complete!');
+      importStatus.textContent = `✅ Imported ${total} messages from ${source}`;
+      showToast(`Imported ${total} messages from ${source}`, 'success');
+      setTimeout(hideProgress, 3000);
     } catch (err) {
+      hideProgress();
       importStatus.textContent = 'Import failed — check file format';
       showToast('Import failed', 'error');
     }
+  }
+
+  // Drag & drop
+  importDropzone?.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    importDropzone.style.borderColor = 'var(--roc-gold)';
+    importDropzone.style.background = 'var(--roc-gold-bg, rgba(212,175,55,0.05))';
+  });
+  importDropzone?.addEventListener('dragleave', () => {
+    importDropzone.style.borderColor = 'var(--border-norm)';
+    importDropzone.style.background = '';
+  });
+  importDropzone?.addEventListener('drop', (e) => {
+    e.preventDefault();
+    importDropzone.style.borderColor = 'var(--border-norm)';
+    importDropzone.style.background = '';
+    const file = (e as DragEvent).dataTransfer?.files[0];
+    if (file) handleImportFile(file);
+  });
+  importDropzone?.addEventListener('click', () => {
+    importSource = '';
+    importFileInput.click();
+  });
+
+  // Manual source buttons
+  document.querySelectorAll('.import-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      importSource = (btn as HTMLElement).dataset.source || '';
+      importFileInput.click();
+    });
+  });
+
+  importFileInput?.addEventListener('change', async () => {
+    const file = importFileInput.files?.[0];
+    if (!file) return;
+    await handleImportFile(file, importSource || undefined);
     importFileInput.value = '';
   });
 

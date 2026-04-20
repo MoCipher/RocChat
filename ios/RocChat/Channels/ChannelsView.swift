@@ -1,5 +1,11 @@
 import SwiftUI
 
+// MARK: - Config
+
+enum APIConfig {
+    static let baseURL = "https://rocchat-api.spoass.workers.dev"
+}
+
 // MARK: - Channel Models
 
 struct ChannelItem: Identifiable, Codable {

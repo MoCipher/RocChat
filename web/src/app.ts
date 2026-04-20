@@ -27,7 +27,7 @@ import { renderSidebar, type Tab } from './components/sidebar.js';
 import { renderChats } from './chat/chat.js';
 import { renderCalls } from './calls/calls.js';
 import { renderChannels } from './channels/channels.js';
-import { renderSettings, applyTheme } from './components/settings.js';
+import { renderSettings, applyTheme, checkAppLock, showAppLockScreen } from './components/settings.js';
 import { getToken, getPreKeyCount, uploadPreKeys, getMe, registerPushToken, getTransparencyReports, getSupportersWall } from './api.js';
 import { migrateLegacySecrets } from './crypto/secure-store.js';
 
@@ -64,6 +64,19 @@ function init() {
   // Apply saved theme
   const savedTheme = localStorage.getItem('rocchat_theme') || 'auto';
   applyTheme(savedTheme);
+
+  // App Lock — check before showing any UI
+  if (!checkAppLock()) {
+    const loading = document.getElementById('loading-screen');
+    if (loading) loading.remove();
+    showAppLockScreen(() => initAfterUnlock());
+    return;
+  }
+
+  initAfterUnlock();
+}
+
+function initAfterUnlock() {
 
   // Initialize PWA install prompts (iOS explainer + Chromium deferred prompt).
   import('./pwa-install.js').then((m) => m.initInstallPrompts()).catch(() => {});

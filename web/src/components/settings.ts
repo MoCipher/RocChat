@@ -130,6 +130,55 @@ export function renderSettings(container: HTMLElement) {
               <option value="nobody">Nobody</option>
             </select>
           </div>
+          <div class="setting-row">
+            <div>
+              <div class="setting-label">Last seen visible to</div>
+              <div class="setting-desc">Who can see when you were last active</div>
+            </div>
+            <select class="form-input" style="width:auto;padding:var(--sp-2) var(--sp-3)" id="last-seen-visibility">
+              <option value="everyone">Everyone</option>
+              <option value="contacts">Contacts only</option>
+              <option value="nobody">Nobody</option>
+            </select>
+          </div>
+          <div class="setting-row">
+            <div>
+              <div class="setting-label">Profile photo visible to</div>
+              <div class="setting-desc">Who can see your profile picture</div>
+            </div>
+            <select class="form-input" style="width:auto;padding:var(--sp-2) var(--sp-3)" id="photo-visibility">
+              <option value="everyone">Everyone</option>
+              <option value="contacts">Contacts only</option>
+              <option value="nobody">Nobody</option>
+            </select>
+          </div>
+          <div class="setting-row">
+            <div>
+              <div class="setting-label">Screenshot detection</div>
+              <div class="setting-desc">Notify sender when you screenshot a view-once or disappearing message</div>
+            </div>
+            <label class="toggle">
+              <input type="checkbox" id="toggle-screenshot-detect" checked />
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          <div class="setting-row" style="cursor:pointer" id="blocked-contacts-row">
+            <div>
+              <div class="setting-label">Blocked contacts</div>
+              <div class="setting-desc">Manage your block list</div>
+            </div>
+            <span style="color:var(--text-tertiary);font-size:var(--text-sm)">›</span>
+          </div>
+          <div class="setting-row">
+            <div>
+              <div class="setting-label">App lock</div>
+              <div class="setting-desc">Require PIN to open RocChat</div>
+            </div>
+            <label class="toggle">
+              <input type="checkbox" id="toggle-app-lock" />
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
         </div>
 
         <div class="settings-section">
@@ -795,6 +844,40 @@ export function renderSettings(container: HTMLElement) {
   document.getElementById('who-can-add')?.addEventListener('change', async (e) => {
     const value = (e.target as HTMLSelectElement).value;
     await saveSetting(() => api.updateSettings({ who_can_add: value }));
+  });
+
+  // Last seen visibility
+  document.getElementById('last-seen-visibility')?.addEventListener('change', async (e) => {
+    const value = (e.target as HTMLSelectElement).value;
+    await saveSetting(() => api.updateSettings({ show_last_seen_to: value }));
+  });
+
+  // Profile photo visibility
+  document.getElementById('photo-visibility')?.addEventListener('change', async (e) => {
+    const value = (e.target as HTMLSelectElement).value;
+    await saveSetting(() => api.updateSettings({ show_photo_to: value }));
+  });
+
+  // Screenshot detection toggle
+  document.getElementById('toggle-screenshot-detect')?.addEventListener('change', async (e) => {
+    const checked = (e.target as HTMLInputElement).checked;
+    await saveSetting(() => api.updateSettings({ screenshot_detection: checked ? 1 : 0 }));
+  });
+
+  // Blocked contacts management
+  document.getElementById('blocked-contacts-row')?.addEventListener('click', () => {
+    showBlockedContactsDialog();
+  });
+
+  // App lock toggle
+  document.getElementById('toggle-app-lock')?.addEventListener('change', (e) => {
+    const checked = (e.target as HTMLInputElement).checked;
+    if (checked) {
+      showAppLockSetup();
+    } else {
+      localStorage.removeItem('rocchat_app_lock_pin');
+      showToast('App lock disabled', 'success');
+    }
   });
 
   // Default disappearing timer
@@ -2036,6 +2119,14 @@ async function loadProfile() {
       if (whoAdd && user.who_can_add) whoAdd.value = user.who_can_add as string;
       const disappear = document.getElementById('default-disappear') as HTMLSelectElement;
       if (disappear) disappear.value = String(user.default_disappear_timer || 0);
+      const lastSeen = document.getElementById('last-seen-visibility') as HTMLSelectElement;
+      if (lastSeen && user.show_last_seen_to) lastSeen.value = user.show_last_seen_to as string;
+      const photoVis = document.getElementById('photo-visibility') as HTMLSelectElement;
+      if (photoVis && user.show_photo_to) photoVis.value = user.show_photo_to as string;
+      const screenshotDetect = document.getElementById('toggle-screenshot-detect') as HTMLInputElement;
+      if (screenshotDetect) screenshotDetect.checked = user.screenshot_detection !== 0;
+      const appLock = document.getElementById('toggle-app-lock') as HTMLInputElement;
+      if (appLock) appLock.checked = !!localStorage.getItem('rocchat_app_lock_pin');
 
       // Ghost Mode: detect if all ghost settings are active
       const ghostToggle = document.getElementById('toggle-ghost-mode') as HTMLInputElement;
@@ -2045,6 +2136,139 @@ async function loadProfile() {
       }
     }
   } catch {}
+}
+
+// ── Blocked Contacts Dialog ──
+async function showBlockedContactsDialog() {
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:1000;display:flex;align-items:center;justify-content:center';
+  const dialog = document.createElement('div');
+  dialog.style.cssText = 'background:var(--bg-secondary);border-radius:var(--radius-lg);padding:var(--sp-6);width:90%;max-width:400px;max-height:70vh;overflow-y:auto';
+  dialog.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--sp-4)">
+    <h3 style="margin:0;color:var(--text-primary)">Blocked Contacts</h3>
+    <button id="close-blocked" style="background:none;border:none;color:var(--text-tertiary);font-size:24px;cursor:pointer">&times;</button>
+  </div>
+  <div id="blocked-list" style="color:var(--text-secondary)">Loading...</div>`;
+  overlay.appendChild(dialog);
+  document.body.appendChild(overlay);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+  dialog.querySelector('#close-blocked')!.addEventListener('click', () => overlay.remove());
+
+  try {
+    const res = await api.req<Array<{ user_id: string; display_name: string }>>('/contacts/blocked');
+    const list = dialog.querySelector('#blocked-list')!;
+    const contacts = res?.data;
+    if (!contacts || contacts.length === 0) {
+      list.innerHTML = '<p style="text-align:center;color:var(--text-tertiary);padding:var(--sp-6) 0">No blocked contacts</p>';
+      return;
+    }
+    list.innerHTML = '';
+    for (const c of contacts) {
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:var(--sp-3);border-bottom:1px solid var(--border-color)';
+      row.innerHTML = `<span style="color:var(--text-primary)">${escapeHtml(c.display_name || c.user_id)}</span>
+        <button class="btn-secondary" style="font-size:var(--text-xs);padding:var(--sp-1) var(--sp-3)" data-uid="${escapeHtml(c.user_id)}">Unblock</button>`;
+      row.querySelector('button')!.addEventListener('click', async (e) => {
+        const btn = e.target as HTMLButtonElement;
+        btn.disabled = true;
+        btn.textContent = '...';
+        await api.blockContact(c.user_id, false);
+        row.remove();
+        if (!list.children.length) list.innerHTML = '<p style="text-align:center;color:var(--text-tertiary);padding:var(--sp-6) 0">No blocked contacts</p>';
+      });
+      list.appendChild(row);
+    }
+  } catch {
+    dialog.querySelector('#blocked-list')!.innerHTML = '<p style="color:var(--text-tertiary)">Could not load blocked contacts</p>';
+  }
+}
+
+function escapeHtml(s: string): string {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+// ── App Lock PIN Setup ──
+function showAppLockSetup() {
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:1000;display:flex;align-items:center;justify-content:center';
+  const dialog = document.createElement('div');
+  dialog.style.cssText = 'background:var(--bg-secondary);border-radius:var(--radius-lg);padding:var(--sp-6);width:90%;max-width:340px;text-align:center';
+  dialog.innerHTML = `<h3 style="margin:0 0 var(--sp-3);color:var(--text-primary)">Set App Lock PIN</h3>
+    <p style="font-size:var(--text-sm);color:var(--text-tertiary);margin-bottom:var(--sp-4)">Enter a 4-6 digit PIN to lock RocChat</p>
+    <input type="password" inputmode="numeric" pattern="[0-9]*" id="pin-input" maxlength="6" placeholder="Enter PIN" autocomplete="off" style="width:100%;padding:var(--sp-3);font-size:var(--text-lg);text-align:center;border:1px solid var(--border-color);border-radius:var(--radius);background:var(--bg-primary);color:var(--text-primary);letter-spacing:8px;margin-bottom:var(--sp-3)" />
+    <input type="password" inputmode="numeric" pattern="[0-9]*" id="pin-confirm" maxlength="6" placeholder="Confirm PIN" autocomplete="off" style="width:100%;padding:var(--sp-3);font-size:var(--text-lg);text-align:center;border:1px solid var(--border-color);border-radius:var(--radius);background:var(--bg-primary);color:var(--text-primary);letter-spacing:8px;margin-bottom:var(--sp-4)" />
+    <div style="display:flex;gap:var(--sp-3);justify-content:center">
+      <button class="btn-secondary" id="pin-cancel">Cancel</button>
+      <button class="btn-primary" id="pin-save">Save</button>
+    </div>`;
+  overlay.appendChild(dialog);
+  document.body.appendChild(overlay);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) { cancelLock(); } });
+  dialog.querySelector('#pin-cancel')!.addEventListener('click', cancelLock);
+  dialog.querySelector('#pin-save')!.addEventListener('click', () => {
+    const pin = (dialog.querySelector('#pin-input') as HTMLInputElement).value;
+    const confirm = (dialog.querySelector('#pin-confirm') as HTMLInputElement).value;
+    if (pin.length < 4 || !/^\d+$/.test(pin)) {
+      showToast('PIN must be 4-6 digits', 'error');
+      return;
+    }
+    if (pin !== confirm) {
+      showToast('PINs do not match', 'error');
+      return;
+    }
+    // Store hash in localStorage (for client-side lock only)
+    crypto.subtle.digest('SHA-256', new TextEncoder().encode(pin)).then(hash => {
+      const hex = Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2, '0')).join('');
+      localStorage.setItem('rocchat_app_lock_pin', hex);
+      overlay.remove();
+      showToast('App lock enabled', 'success');
+    });
+  });
+
+  function cancelLock() {
+    const toggle = document.getElementById('toggle-app-lock') as HTMLInputElement;
+    if (toggle) toggle.checked = false;
+    overlay.remove();
+  }
+}
+
+// ── App Lock Challenge (on app start) ──
+export function checkAppLock(): boolean {
+  const pinHash = localStorage.getItem('rocchat_app_lock_pin');
+  if (!pinHash) return true; // no lock
+  return false; // locked
+}
+
+export function showAppLockScreen(onUnlock: () => void) {
+  const overlay = document.createElement('div');
+  overlay.id = 'app-lock-overlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:var(--bg-primary);z-index:9999;display:flex;align-items:center;justify-content:center;flex-direction:column';
+  overlay.innerHTML = `<div style="text-align:center;width:90%;max-width:300px">
+    <div style="font-size:48px;margin-bottom:var(--sp-4)">🔒</div>
+    <h2 style="color:var(--text-primary);margin-bottom:var(--sp-4)">RocChat Locked</h2>
+    <input type="password" inputmode="numeric" pattern="[0-9]*" id="lock-pin-input" maxlength="6" placeholder="Enter PIN" autocomplete="off" style="width:100%;padding:var(--sp-3);font-size:var(--text-lg);text-align:center;border:1px solid var(--border-color);border-radius:var(--radius);background:var(--bg-secondary);color:var(--text-primary);letter-spacing:8px;margin-bottom:var(--sp-4)" />
+    <button class="btn-primary" id="lock-unlock-btn" style="width:100%">Unlock</button>
+    <p id="lock-error" style="color:red;font-size:var(--text-sm);margin-top:var(--sp-2);display:none">Wrong PIN</p>
+  </div>`;
+  document.body.appendChild(overlay);
+
+  const savedHash = localStorage.getItem('rocchat_app_lock_pin')!;
+  overlay.querySelector('#lock-unlock-btn')!.addEventListener('click', async () => {
+    const pin = (overlay.querySelector('#lock-pin-input') as HTMLInputElement).value;
+    const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(pin));
+    const hex = Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2, '0')).join('');
+    if (hex === savedHash) {
+      overlay.remove();
+      onUnlock();
+    } else {
+      overlay.querySelector('#lock-error')!.setAttribute('style', 'color:red;font-size:var(--text-sm);margin-top:var(--sp-2)');
+    }
+  });
+  overlay.querySelector('#lock-pin-input')!.addEventListener('keydown', (e) => {
+    if ((e as KeyboardEvent).key === 'Enter') (overlay.querySelector('#lock-unlock-btn') as HTMLButtonElement).click();
+  });
 }
 
 export function applyTheme(theme: string) {

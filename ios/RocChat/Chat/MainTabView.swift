@@ -2682,6 +2682,9 @@ struct SettingsView: View {
     @State private var typingIndicators = true
     @State private var onlineVisibility = "everyone"
     @State private var whoCanAdd = "everyone"
+    @State private var lastSeenVisibility = "everyone"
+    @State private var photoVisibility = "everyone"
+    @State private var screenshotDetection = true
     @State private var ghostMode = false
     @State private var username = "loading..."
     @State private var displayName = "Loading..."
@@ -3126,6 +3129,35 @@ struct SettingsView: View {
                             _ = try? await APIClient.shared.postRaw("/me/settings", body: body, method: "PATCH")
                         }
                     }
+                    Picker("Last seen visible to", selection: $lastSeenVisibility) {
+                        Text("Everyone").tag("everyone")
+                        Text("Contacts only").tag("contacts")
+                        Text("Nobody").tag("nobody")
+                    }
+                    .onChange(of: lastSeenVisibility) { _, val in
+                        Task {
+                            let body: [String: Any] = ["show_last_seen_to": val]
+                            _ = try? await APIClient.shared.postRaw("/me/settings", body: body, method: "PATCH")
+                        }
+                    }
+                    Picker("Profile photo visible to", selection: $photoVisibility) {
+                        Text("Everyone").tag("everyone")
+                        Text("Contacts only").tag("contacts")
+                        Text("Nobody").tag("nobody")
+                    }
+                    .onChange(of: photoVisibility) { _, val in
+                        Task {
+                            let body: [String: Any] = ["show_photo_to": val]
+                            _ = try? await APIClient.shared.postRaw("/me/settings", body: body, method: "PATCH")
+                        }
+                    }
+                    Toggle("Screenshot detection", isOn: $screenshotDetection)
+                        .onChange(of: screenshotDetection) { _, val in
+                            Task {
+                                let body: [String: Any] = ["screenshot_detection": val ? 1 : 0]
+                                _ = try? await APIClient.shared.postRaw("/me/settings", body: body, method: "PATCH")
+                            }
+                        }
                 }
                 .tint(.rocGold)
 

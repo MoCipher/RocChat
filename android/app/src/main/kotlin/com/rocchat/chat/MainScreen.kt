@@ -3113,9 +3113,66 @@ fun SettingsTab(onLogout: () -> Unit) {
             }
         }
 
-        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+        // Last seen visible to picker
+        var lastSeenVisibility by remember { mutableStateOf("everyone") }
+        var lastSeenExpanded by remember { mutableStateOf(false) }
+        Box(modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
+            Row(modifier = Modifier.fillMaxWidth().clickable { lastSeenExpanded = true }, verticalAlignment = Alignment.CenterVertically) {
+                Text("Last seen visible to", modifier = Modifier.weight(1f), fontSize = 14.sp)
+                Text(lastSeenVisibility.replaceFirstChar { it.uppercase() }, color = RocColors.TextSecondary, fontSize = 14.sp)
+                Icon(Icons.Default.ArrowDropDown, contentDescription = null, tint = RocColors.TextSecondary)
+            }
+            DropdownMenu(expanded = lastSeenExpanded, onDismissRequest = { lastSeenExpanded = false }) {
+                listOf("everyone", "contacts", "nobody").forEach { opt ->
+                    DropdownMenuItem(
+                        text = { Text(opt.replaceFirstChar { it.uppercase() }) },
+                        onClick = {
+                            lastSeenVisibility = opt
+                            lastSeenExpanded = false
+                            scope.launch { try { APIClient.updateSettings(mapOf("show_last_seen_to" to opt)) } catch (_: Exception) {} }
+                        },
+                    )
+                }
+            }
+        }
 
-        // Quiet Hours
+        // Profile photo visible to picker
+        var photoVisibility by remember { mutableStateOf("everyone") }
+        var photoVisExpanded by remember { mutableStateOf(false) }
+        Box(modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
+            Row(modifier = Modifier.fillMaxWidth().clickable { photoVisExpanded = true }, verticalAlignment = Alignment.CenterVertically) {
+                Text("Profile photo visible to", modifier = Modifier.weight(1f), fontSize = 14.sp)
+                Text(photoVisibility.replaceFirstChar { it.uppercase() }, color = RocColors.TextSecondary, fontSize = 14.sp)
+                Icon(Icons.Default.ArrowDropDown, contentDescription = null, tint = RocColors.TextSecondary)
+            }
+            DropdownMenu(expanded = photoVisExpanded, onDismissRequest = { photoVisExpanded = false }) {
+                listOf("everyone", "contacts", "nobody").forEach { opt ->
+                    DropdownMenuItem(
+                        text = { Text(opt.replaceFirstChar { it.uppercase() }) },
+                        onClick = {
+                            photoVisibility = opt
+                            photoVisExpanded = false
+                            scope.launch { try { APIClient.updateSettings(mapOf("show_photo_to" to opt)) } catch (_: Exception) {} }
+                        },
+                    )
+                }
+            }
+        }
+
+        // Screenshot detection toggle
+        var screenshotDetect by remember { mutableStateOf(true) }
+        Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text("Screenshot detection", fontSize = 14.sp)
+                Text("Notify when view-once messages are screenshotted", fontSize = 12.sp, color = RocColors.TextSecondary)
+            }
+            Switch(checked = screenshotDetect, onCheckedChange = { v ->
+                screenshotDetect = v
+                scope.launch { try { APIClient.updateSettings(mapOf("screenshot_detection" to if (v) 1 else 0)) } catch (_: Exception) {} }
+            })
+        }
+
+        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
         Text("Quiet Hours", modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp), fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = RocColors.RocGold)
         var quietEnabled by remember { mutableStateOf(false) }
         var quietStartHour by remember { mutableIntStateOf(22) }

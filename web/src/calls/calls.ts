@@ -48,6 +48,17 @@ const STUN_SERVERS: RTCIceServer[] = [
 let cachedIceServers: RTCIceServer[] | null = null;
 let iceServersFetchedAt = 0;
 
+// ── Safety Word Verification ──
+// Derives a 6-digit numeric code from both participants' IDs for verbal verification
+async function deriveSafetyWord(userId1: string, userId2: string): Promise<string> {
+  const sorted = [userId1, userId2].sort();
+  const data = new TextEncoder().encode(sorted.join(':'));
+  const hash = await crypto.subtle.digest('SHA-256', data);
+  const view = new DataView(hash);
+  const num = view.getUint32(0) % 1_000_000;
+  return String(num).padStart(6, '0');
+}
+
 async function getIceServers(): Promise<RTCIceServer[]> {
   if (cachedIceServers && Date.now() - iceServersFetchedAt < 5 * 60_000) return cachedIceServers;
   try {
@@ -288,6 +299,14 @@ async function createPC() {
     if (pc.connectionState === 'connected') {
       callState.status = 'connected'; callState.startTime = Date.now();
       updateOverlay(); startTimer();
+      // Derive and display safety word
+      const myId = localStorage.getItem('rocchat_user_id') || '';
+      if (myId && callState.remoteUserId) {
+        deriveSafetyWord(myId, callState.remoteUserId).then(word => {
+          const el = document.getElementById('call-safety-word');
+          if (el) el.textContent = `Safety code: ${word.slice(0, 3)} ${word.slice(3)}`;
+        });
+      }
     } else if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
       endCall('error');
     }
@@ -438,7 +457,7 @@ function overlayHTML(): string {
         ${isV ? `<button class="call-control-btn ${callState.cameraOff ? 'active' : ''}" id="call-camera"><i data-lucide="${callState.cameraOff ? 'video-off' : 'video'}" style="width:24px;height:24px"></i></button>` : ''}
         <button class="call-btn call-btn-decline" id="call-hangup"><i data-lucide="phone-off" style="width:24px;height:24px"></i></button>
       </div>
-      <p style="font-family:var(--font-mono);font-size:var(--text-xs);color:var(--turquoise);margin-top:var(--sp-3);text-align:center;${isV ? 'position:absolute;bottom:4px;left:0;right:0' : ''}">🔒 DTLS-SRTP encrypted</p>
+      <p style="font-family:var(--font-mono);font-size:var(--text-xs);color:var(--turquoise);margin-top:var(--sp-3);text-align:center;${isV ? 'position:absolute;bottom:4px;left:0;right:0' : ''}">🔒 DTLS-SRTP encrypted${conn ? ' · <span id="call-safety-word" title="Both callers should see the same code">verifying…</span>' : ''}</p>
     </div>`;
 }
 

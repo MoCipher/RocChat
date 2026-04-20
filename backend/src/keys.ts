@@ -147,6 +147,15 @@ async function rotateSignedPreKey(
     .bind(body.id, session.userId, body.publicKey, body.signature)
     .run();
 
+  // Log key rotation for transparency audit
+  try {
+    const fp = body.publicKey.slice(0, 16);
+    await env.DB.prepare(
+      `INSERT INTO key_audit_log (id, user_id, event_type, new_key_fingerprint)
+       VALUES (?, ?, 'signed_prekey_rotation', ?)`,
+    ).bind(crypto.randomUUID(), session.userId, fp).run();
+  } catch { /* table may not exist yet */ }
+
   // Clean up old signed pre-keys (keep last 2)
   await env.DB.prepare(
     `DELETE FROM signed_pre_keys WHERE user_id = ? AND id NOT IN (

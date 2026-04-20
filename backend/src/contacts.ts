@@ -36,6 +36,11 @@ export async function handleContacts(
     return blockUser(request, env, session);
   }
 
+  // GET /api/contacts/blocked — list blocked users
+  if (path === '/api/contacts/blocked' && request.method === 'GET') {
+    return listBlockedContacts(env, session);
+  }
+
   // POST /api/contacts/verify — mark contact as verified (Safety Number)
   if (path === '/api/contacts/verify' && request.method === 'POST') {
     return verifyContact(request, env, session);
@@ -152,6 +157,20 @@ async function blockUser(request: Request, env: Env, session: Session): Promise<
     .run();
 
   return jsonResponse({ ok: true });
+}
+
+async function listBlockedContacts(env: Env, session: Session): Promise<Response> {
+  const result = await env.DB.prepare(
+    `SELECT u.id as user_id, u.username, u.display_name
+     FROM contacts c
+     JOIN users u ON u.id = c.contact_user_id
+     WHERE c.user_id = ? AND c.blocked = 1
+     ORDER BY u.display_name ASC`,
+  )
+    .bind(session.userId)
+    .all();
+
+  return jsonResponse(result.results);
 }
 
 async function verifyContact(request: Request, env: Env, session: Session): Promise<Response> {

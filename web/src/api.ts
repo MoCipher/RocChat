@@ -389,6 +389,12 @@ export function updateSettings(settings: Record<string, unknown>) {
   return req('/me/settings', { method: 'PATCH', body: JSON.stringify(settings) });
 }
 
+// ── Key Transparency ──
+
+export function getKeyAuditLog(userId: string) {
+  return req<Array<{ event_type: string; new_key_fingerprint: string; old_key_fingerprint: string | null; created_at: string }>>(`/key-audit/${userId}`);
+}
+
 // ── Devices ──
 
 export function getDevices() {

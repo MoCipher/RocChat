@@ -3131,11 +3131,11 @@ export function showVaultComposer() {
     const type = typeSelect.value;
     let html = '';
     if (type === 'password') {
-      html = `<input class="input vault-field" data-key="username" placeholder="Username" style="width:100%;margin-bottom:8px"><input class="input vault-field" data-key="password" placeholder="Password" type="password" style="width:100%;margin-bottom:8px"><input class="input vault-field" data-key="url" placeholder="URL (optional)" style="width:100%">`;
+      html = `<input class="input vault-field" data-key="username" placeholder="Username" autocomplete="off" spellcheck="false" style="width:100%;margin-bottom:8px"><input class="input vault-field" data-key="password" placeholder="Password" type="password" autocomplete="off" style="width:100%;margin-bottom:8px"><input class="input vault-field" data-key="url" placeholder="URL (optional)" autocomplete="off" style="width:100%">`;
     } else if (type === 'wifi') {
-      html = `<input class="input vault-field" data-key="ssid" placeholder="Network name (SSID)" style="width:100%;margin-bottom:8px"><input class="input vault-field" data-key="password" placeholder="Password" type="password" style="width:100%">`;
+      html = `<input class="input vault-field" data-key="ssid" placeholder="Network name (SSID)" autocomplete="off" spellcheck="false" style="width:100%;margin-bottom:8px"><input class="input vault-field" data-key="password" placeholder="Password" type="password" autocomplete="off" style="width:100%">`;
     } else if (type === 'card') {
-      html = `<input class="input vault-field" data-key="number" placeholder="Card number" maxlength="19" style="width:100%;margin-bottom:8px"><input class="input vault-field" data-key="expiry" placeholder="MM/YY" maxlength="5" style="width:100%;margin-bottom:8px"><input class="input vault-field" data-key="name" placeholder="Cardholder name" style="width:100%">`;
+      html = `<input class="input vault-field" data-key="number" placeholder="Card number" maxlength="19" autocomplete="off" inputmode="numeric" style="width:100%;margin-bottom:8px"><input class="input vault-field" data-key="expiry" placeholder="MM/YY" maxlength="5" autocomplete="off" style="width:100%;margin-bottom:8px"><input class="input vault-field" data-key="name" placeholder="Cardholder name" autocomplete="off" spellcheck="false" style="width:100%">`;
     } else {
       html = `<textarea class="input vault-field" data-key="note" placeholder="Secure note content" rows="4" style="width:100%;resize:vertical"></textarea>`;
     }

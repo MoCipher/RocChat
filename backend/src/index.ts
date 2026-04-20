@@ -297,6 +297,17 @@ export default {
         return withCors(await handleKeys(request, env, session, url));
       }
 
+      // Key transparency audit log — view a user's key change history
+      if (path.startsWith('/api/key-audit/') && request.method === 'GET') {
+        const targetUserId = path.split('/api/key-audit/')[1];
+        if (!targetUserId) return withCors(errorResponse('Missing user ID', 400));
+        const result = await env.DB.prepare(
+          `SELECT event_type, new_key_fingerprint, old_key_fingerprint, created_at
+           FROM key_audit_log WHERE user_id = ? ORDER BY created_at DESC LIMIT 50`,
+        ).bind(targetUserId).all();
+        return withCors(jsonResponse(result.results));
+      }
+
       // Contacts & discovery
       if (path.startsWith('/api/contacts')) {
         return withCors(await handleContacts(request, env, session, url));
@@ -429,6 +440,12 @@ export default {
         if (body.who_can_add && !validWhoCanAdd.includes(body.who_can_add as string)) {
           return withCors(errorResponse('Invalid who_can_add option', 400));
         }
+        if (body.show_last_seen_to && !validOnlineTo.includes(body.show_last_seen_to as string)) {
+          return withCors(errorResponse('Invalid last seen visibility option', 400));
+        }
+        if (body.show_photo_to && !validOnlineTo.includes(body.show_photo_to as string)) {
+          return withCors(errorResponse('Invalid photo visibility option', 400));
+        }
 
         if (typeof body.status_text === 'string' && body.status_text.length > 140) {
           return withCors(errorResponse('Status must be 140 characters or less', 400));
@@ -438,6 +455,7 @@ export default {
           'display_name', 'discoverable',
           'show_read_receipts', 'show_typing_indicator',
           'show_online_to', 'who_can_add', 'default_disappear_timer', 'status_text',
+          'show_last_seen_to', 'show_photo_to', 'screenshot_detection',
         ];
         const updates: string[] = [];
         const values: unknown[] = [];

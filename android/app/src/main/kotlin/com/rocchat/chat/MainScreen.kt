@@ -1381,6 +1381,23 @@ fun ConversationScreen(conversationId: String, conversationName: String, recipie
                     } else notExpired
                 }) { msg ->
                     val isMine = msg.senderId == userId
+                    if (msg.messageType == "screenshot_alert") {
+                        val senderName = if (msg.senderId == userId) "You"
+                            else groupMembers.firstOrNull { it.optString("user_id") == msg.senderId }
+                                ?.run { optString("display_name").ifBlank { optString("username") } }
+                                ?: conversationName
+                        Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                            Text(
+                                text = "📸 $senderName took a screenshot",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                                modifier = Modifier
+                                    .background(MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(50))
+                                    .padding(horizontal = 12.dp, vertical = 4.dp),
+                            )
+                        }
+                        return@items
+                    }
                     MessageBubble(
                         msg = msg,
                         isMine = isMine,

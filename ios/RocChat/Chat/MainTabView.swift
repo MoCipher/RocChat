@@ -992,6 +992,23 @@ struct ConversationView: View {
             ScrollView {
                 LazyVStack(spacing: 4) {
                     ForEach(filteredMessages) { msg in
+                        if msg.messageType == "screenshot_alert" {
+                            let senderName = conversation.members.first(where: { $0.userId == msg.senderId })?.displayName
+                                ?? conversation.members.first(where: { $0.userId == msg.senderId })?.username
+                                ?? "Someone"
+                            HStack {
+                                Spacer()
+                                Text("📸 \(senderName) took a screenshot")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 4)
+                                    .background(Color(.secondarySystemBackground))
+                                    .clipShape(Capsule())
+                                Spacer()
+                            }
+                            .id(msg.id)
+                        } else {
                         MessageBubbleView(
                             message: msg,
                             isMine: msg.senderId == userId,
@@ -1021,6 +1038,7 @@ struct ConversationView: View {
                                     .combined(with: .offset(y: 12)),
                                 removal: .opacity.combined(with: .scale(scale: 0.9))
                             ))
+                        } // end else
                     }
                 }
                 .padding(.horizontal, 12)

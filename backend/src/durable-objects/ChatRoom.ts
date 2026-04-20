@@ -286,6 +286,18 @@ export class ChatRoom implements DurableObject {
               `DELETE FROM messages WHERE id = ? AND message_type = 'view_once'`
             ).bind(messageId).run();
           } catch { /* ignore */ }
+          // Burn-on-read conversation setting: delete any message when burn_on_read is enabled
+          try {
+            const bor = await this.env.DB.prepare(
+              `SELECT cm.burn_on_read FROM conversation_meta cm
+               JOIN messages m ON m.conversation_id = cm.conversation_id
+               WHERE m.id = ? AND cm.burn_on_read = 1`
+            ).bind(messageId).first<{ burn_on_read: number }>();
+            if (bor) {
+              await this.env.DB.prepare(`DELETE FROM messages WHERE id = ?`).bind(messageId).run();
+              this.broadcast({ type: 'message_deleted', payload: { message_id: messageId } }, sender.userId);
+            }
+          } catch { /* ignore */ }
         }
         break;
       }

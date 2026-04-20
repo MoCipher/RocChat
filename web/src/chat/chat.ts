@@ -854,6 +854,16 @@ async function loadReactionsForMessages(msgs: Message[]) {
 
 /** Apply decrypted plaintext content to a message row (shared by cache-hit and async-decrypt paths) */
 function applyDecryptedContent(div: HTMLElement, plaintext: string, isMine: boolean, msg: Message) {
+  // Screenshot alert — replace bubble with centered system notification
+  if (msg.message_type === 'screenshot_alert' || plaintext === '📸 Screenshot taken') {
+    const senderName = (msg as any).sender_name || (msg as any).sender_username || 'Someone';
+    div.className = 'message-row system-notification';
+    div.removeAttribute('aria-label');
+    div.setAttribute('role', 'status');
+    div.innerHTML = `<div class="system-message screenshot-alert">📸 ${escapeHtml(senderName)} took a screenshot</div>`;
+    return;
+  }
+
   const gif = tryParseGif(plaintext);
   const fileMsg = tryParseFileMessage(plaintext);
   const bubble = div.querySelector('.message-bubble');
@@ -957,8 +967,20 @@ function renderMessages(messages: Message[]) {
 
     // ── Create new message row ──
     const div = document.createElement('div');
-    div.className = `message-row ${isMine ? 'mine' : 'theirs'}`;
     div.dataset.msgId = msg.id;
+
+    // Screenshot alert — render as centered system notification inline in chat
+    if (msg.message_type === 'screenshot_alert') {
+      const senderName = (msg as any).sender_name || (msg as any).sender_username || 'Someone';
+      div.className = 'message-row system-notification';
+      div.setAttribute('role', 'status');
+      div.innerHTML = `<div class="system-message screenshot-alert">📸 ${escapeHtml(senderName)} took a screenshot</div>`;
+      if (prevChild) prevChild.after(div); else area.prepend(div);
+      prevChild = div;
+      return;
+    }
+
+    div.className = `message-row ${isMine ? 'mine' : 'theirs'}`;
     div.setAttribute('role', 'article');
     div.setAttribute('aria-label', `${isMine ? 'You' : 'Message'} at ${formatTime(msg.created_at)}`);
 

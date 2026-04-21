@@ -1,4 +1,4 @@
-const CACHE_NAME = 'rocchat-v6';
+const CACHE_NAME = 'rocchat-v7';
 const SHELL_ASSETS = [
   '/',
   '/index.html',

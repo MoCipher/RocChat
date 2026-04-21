@@ -57,7 +57,7 @@ window.addEventListener('unhandledrejection', (e) => {
   if (!errorFlushTimer) errorFlushTimer = setTimeout(() => { errorFlushTimer = null; flushErrors(); }, 5000);
 });
 
-function init() {
+async function init() {
   // Migrate any legacy secrets from localStorage to encrypted IDB
   migrateLegacySecrets().catch(e => console.warn('Secret migration failed:', e));
 
@@ -66,10 +66,10 @@ function init() {
   applyTheme(savedTheme);
 
   // App Lock — check before showing any UI
-  if (!checkAppLock()) {
+  if (!(await checkAppLock())) {
     const loading = document.getElementById('loading-screen');
     if (loading) loading.remove();
-    showAppLockScreen(() => initAfterUnlock());
+    await showAppLockScreen(() => initAfterUnlock());
     return;
   }
 
@@ -496,4 +496,4 @@ function showOnboardingIfNeeded() {
 }
 
 // Boot
-window.addEventListener('DOMContentLoaded', init);
+window.addEventListener('DOMContentLoaded', () => { void init(); });

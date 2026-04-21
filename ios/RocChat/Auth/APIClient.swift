@@ -1,5 +1,47 @@
 import Foundation
 import CommonCrypto
+import CryptoKit
+import Security
+
+private final class PinnedSessionDelegate: NSObject, URLSessionDelegate {
+    static let shared = PinnedSessionDelegate()
+
+    private let pinnedLeafFingerprints: [String: String] = [
+        "chat.mocipher.com": "9fe88e6203b5c859d5d5afad6b2efe52b3f01bb06ea1b140c43b1b77ebd89dbb",
+        "rocchat-api.spoass.workers.dev": "fced5d78a8da9d40a74f053b91aed908a2a0ef097a8878b002409be9b35eead1",
+    ]
+
+    func urlSession(_ session: URLSession, didReceive challenge: URLAuthenticationChallenge, completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
+        guard challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
+              let trust = challenge.protectionSpace.serverTrust else {
+            completionHandler(.performDefaultHandling, nil)
+            return
+        }
+
+        let host = challenge.protectionSpace.host.lowercased()
+        guard let expectedFingerprint = pinnedLeafFingerprints[host] else {
+            completionHandler(.performDefaultHandling, nil)
+            return
+        }
+
+        var trustError: CFError?
+        guard SecTrustEvaluateWithError(trust, &trustError),
+              let certificate = SecTrustGetCertificateAtIndex(trust, 0) else {
+            completionHandler(.cancelAuthenticationChallenge, nil)
+            return
+        }
+
+        let certificateData = SecCertificateCopyData(certificate) as Data
+        let actualFingerprint = SHA256.hash(data: certificateData).map { String(format: "%02x", $0) }.joined()
+
+        guard actualFingerprint == expectedFingerprint else {
+            completionHandler(.cancelAuthenticationChallenge, nil)
+            return
+        }
+
+        completionHandler(.useCredential, URLCredential(trust: trust))
+    }
+}
 
 class APIClient {
     static let shared = APIClient()
@@ -7,13 +49,31 @@ class APIClient {
     var sessionToken: String?
     var refreshToken: String?
     private let baseURL: String
+    let session: URLSession
     
     init(baseURL: String = "https://chat.mocipher.com/api") {
         self.baseURL = baseURL
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.waitsForConnectivity = true
+        self.session = URLSession(configuration: configuration, delegate: PinnedSessionDelegate.shared, delegateQueue: nil)
+        // Migrate session_token from UserDefaults to SecureStorage if needed
+        if let legacySession = UserDefaults.standard.string(forKey: "session_token"),
+           SecureStorage.shared.get(forKey: "session_token") == nil {
+            SecureStorage.shared.set(legacySession, forKey: "session_token")
+            UserDefaults.standard.removeObject(forKey: "session_token")
+        }
         self.sessionToken = SecureStorage.shared.get(forKey: "session_token")
-            ?? UserDefaults.standard.string(forKey: "session_token")
+        // Migrate refresh_token from UserDefaults to SecureStorage if needed
+        if let legacyRefresh = UserDefaults.standard.string(forKey: "refresh_token"),
+           SecureStorage.shared.get(forKey: "refresh_token") == nil {
+            SecureStorage.shared.set(legacyRefresh, forKey: "refresh_token")
+            UserDefaults.standard.removeObject(forKey: "refresh_token")
+        }
         self.refreshToken = SecureStorage.shared.get(forKey: "refresh_token")
-            ?? UserDefaults.standard.string(forKey: "refresh_token")
+    }
+
+    func webSocketTask(with url: URL) -> URLSessionWebSocketTask {
+        session.webSocketTask(with: url)
     }
     
     struct LoginResult {
@@ -32,6 +92,9 @@ class APIClient {
               let userId = json["user_id"] as? String else {
             throw APIError.invalidResponse
         }
+        sessionToken = token
+        SecureStorage.shared.set(token, forKey: "session_token")
+        UserDefaults.standard.removeObject(forKey: "session_token")
         refreshToken = json["refresh_token"] as? String
         if let refreshToken {
             SecureStorage.shared.set(refreshToken, forKey: "refresh_token")
@@ -90,6 +153,14 @@ class APIClient {
               let token = json["session_token"] as? String,
               let userId = json["user_id"] as? String else {
             throw APIError.invalidResponse
+        }
+        sessionToken = token
+        SecureStorage.shared.set(token, forKey: "session_token")
+        UserDefaults.standard.removeObject(forKey: "session_token")
+        refreshToken = json["refresh_token"] as? String
+        if let refreshToken {
+            SecureStorage.shared.set(refreshToken, forKey: "refresh_token")
+            UserDefaults.standard.removeObject(forKey: "refresh_token")
         }
         return RegisterResult(
             sessionToken: token,
@@ -266,22 +337,34 @@ class APIClient {
     // MARK: - Refresh Token Rotation
 
     func refreshSession() async throws -> Bool {
-        guard let rt = refreshToken else { return false }
+        let refresh = refreshToken ?? SecureStorage.shared.get(forKey: "refresh_token")
+        guard let rt = refresh else { return false }
         var request = URLRequest(url: URL(string: "\(baseURL)/auth/refresh")!)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONSerialization.data(withJSONObject: ["refresh_token": rt])
-        let (data, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else { return false }
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+            clearAuthState()
+            return false
+        }
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let newSession = json["session_token"] as? String else { return false }
         sessionToken = newSession
         refreshToken = json["refresh_token"] as? String
+        SecureStorage.shared.set(newSession, forKey: "session_token")
+        UserDefaults.standard.removeObject(forKey: "session_token")
+        if let refreshToken {
+            SecureStorage.shared.set(refreshToken, forKey: "refresh_token")
+            UserDefaults.standard.removeObject(forKey: "refresh_token")
+        } else {
+            SecureStorage.shared.remove(forKey: "refresh_token")
+        }
         return true
     }
 
     private func requestWithRetry(_ request: URLRequest) async throws -> (Data, URLResponse) {
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await session.data(for: request)
         if let http = response as? HTTPURLResponse, http.statusCode == 401 {
             // Try to refresh and retry once
             if try await refreshSession() {
@@ -289,9 +372,19 @@ class APIClient {
                 if let token = sessionToken {
                     retryReq.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
                 }
-                return try await URLSession.shared.data(for: retryReq)
+                return try await session.data(for: retryReq)
             }
+            clearAuthState()
         }
         return (data, response)
+    }
+
+    private func clearAuthState() {
+        sessionToken = nil
+        refreshToken = nil
+        SecureStorage.shared.remove(forKey: "session_token")
+        SecureStorage.shared.remove(forKey: "refresh_token")
+        UserDefaults.standard.removeObject(forKey: "session_token")
+        UserDefaults.standard.removeObject(forKey: "refresh_token")
     }
 }

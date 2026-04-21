@@ -1,11 +1,15 @@
 package com.rocchat.network
 
+import android.content.Context
+import com.rocchat.crypto.SecureStorage
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
 import java.security.MessageDigest
+import java.security.cert.X509Certificate
+import javax.net.ssl.HttpsURLConnection
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -14,6 +18,66 @@ object APIClient {
 
     var sessionToken: String? = null
     var refreshToken: String? = null
+    private var appContext: Context? = null
+
+    private val pinnedLeafFingerprints = mapOf(
+        "chat.mocipher.com" to "9fe88e6203b5c859d5d5afad6b2efe52b3f01bb06ea1b140c43b1b77ebd89dbb",
+        "rocchat-api.spoass.workers.dev" to "fced5d78a8da9d40a74f053b91aed908a2a0ef097a8878b002409be9b35eead1",
+    )
+
+    fun initialize(context: Context) {
+        appContext = context.applicationContext
+        val ctx = appContext ?: return
+        refreshToken = SecureStorage.get(ctx, "refresh_token", "rocchat")
+        if (refreshToken == null) {
+            val legacy = ctx.getSharedPreferences("rocchat", Context.MODE_PRIVATE).getString("refresh_token", null)
+            if (!legacy.isNullOrEmpty()) {
+                refreshToken = legacy
+                SecureStorage.set(ctx, "refresh_token", legacy)
+                ctx.getSharedPreferences("rocchat", Context.MODE_PRIVATE).edit().remove("refresh_token").apply()
+            }
+        }
+    }
+
+    fun clearPersistedAuth() {
+        val ctx = appContext ?: return
+        SecureStorage.remove(ctx, "session_token")
+        SecureStorage.remove(ctx, "refresh_token")
+        ctx.getSharedPreferences("rocchat", Context.MODE_PRIVATE).edit()
+            .remove("session_token")
+            .remove("refresh_token")
+            .apply()
+    }
+
+    private fun persistRefreshToken(token: String?) {
+        val ctx = appContext ?: return
+        if (token.isNullOrEmpty()) {
+            SecureStorage.remove(ctx, "refresh_token")
+            ctx.getSharedPreferences("rocchat", Context.MODE_PRIVATE).edit().remove("refresh_token").apply()
+            return
+        }
+        SecureStorage.set(ctx, "refresh_token", token)
+        ctx.getSharedPreferences("rocchat", Context.MODE_PRIVATE).edit().remove("refresh_token").apply()
+    }
+
+    private fun responseCodeWithPinning(conn: HttpURLConnection): Int {
+        val code = conn.responseCode
+        if (conn is HttpsURLConnection) {
+            val host = conn.url.host.lowercase()
+            val expected = pinnedLeafFingerprints[host]
+            if (expected != null) {
+                val leaf = conn.serverCertificates.firstOrNull() as? X509Certificate
+                    ?: throw IOException("Pinned TLS certificate missing")
+                val actual = MessageDigest.getInstance("SHA-256")
+                    .digest(leaf.encoded)
+                    .joinToString("") { "%02x".format(it) }
+                if (!actual.equals(expected, ignoreCase = true)) {
+                    throw IOException("Pinned TLS certificate mismatch")
+                }
+            }
+        }
+        return code
+    }
 
     // ── Auth ──
 
@@ -31,6 +95,7 @@ object APIClient {
         }
         val json = post("/auth/login", body)
         refreshToken = json.optString("refresh_token", null)
+        persistRefreshToken(refreshToken)
         return LoginResult(
             sessionToken = json.getString("session_token"),
             userId = json.getString("user_id"),
@@ -70,7 +135,10 @@ object APIClient {
             pow["token"]?.let { put("pow_token", it) }
             pow["nonce"]?.let { put("pow_nonce", it) }
         }
-        return post("/auth/register", body)
+        val json = post("/auth/register", body)
+        refreshToken = json.optString("refresh_token", null)
+        persistRefreshToken(refreshToken)
+        return json
     }
 
     // ── Conversations ──
@@ -246,7 +314,7 @@ object APIClient {
         }
         try {
             conn.outputStream.use { it.write(data) }
-            val code = conn.responseCode
+            val code = responseCodeWithPinning(conn)
             val body = (if (code in 200..299) conn.inputStream else conn.errorStream)
                 ?.bufferedReader()?.use { it.readText() } ?: "{}"
             if (code !in 200..299) throw IOException("HTTP $code: $body")
@@ -270,7 +338,7 @@ object APIClient {
         }
         try {
             conn.outputStream.use { it.write(data) }
-            val code = conn.responseCode
+            val code = responseCodeWithPinning(conn)
             val body = (if (code in 200..299) conn.inputStream else conn.errorStream)
                 ?.bufferedReader()?.use { it.readText() } ?: "{}"
             if (code !in 200..299) throw IOException("HTTP $code: $body")
@@ -291,7 +359,7 @@ object APIClient {
                 readTimeout = 15_000
             }
             try {
-                val code = conn.responseCode
+                val code = responseCodeWithPinning(conn)
                 val body = (if (code in 200..299) conn.inputStream else conn.errorStream)
                     ?.bufferedReader()?.use { it.readText() } ?: "{}"
                 if (code !in 200..299) throw IOException("HTTP $code: $body")
@@ -310,7 +378,7 @@ object APIClient {
             readTimeout = 15_000
         }
         try {
-            val code = conn.responseCode
+            val code = responseCodeWithPinning(conn)
             val body = (if (code in 200..299) conn.inputStream else conn.errorStream)
                 ?.bufferedReader()?.use { it.readText() } ?: "[]"
             if (code !in 200..299) throw IOException("HTTP $code: $body")
@@ -328,7 +396,7 @@ object APIClient {
             readTimeout = 30_000
         }
         try {
-            val code = conn.responseCode
+            val code = responseCodeWithPinning(conn)
             if (code !in 200..299) throw IOException("HTTP $code")
             conn.inputStream.readBytes()
         } finally {
@@ -344,7 +412,7 @@ object APIClient {
             readTimeout = 15_000
         }
         try {
-            val code = conn.responseCode
+            val code = responseCodeWithPinning(conn)
             val body = (if (code in 200..299) conn.inputStream else conn.errorStream)
                 ?.bufferedReader()?.use { it.readText() } ?: "{}"
             if (code !in 200..299) throw IOException("HTTP $code: $body")
@@ -368,7 +436,7 @@ object APIClient {
                 }
                 try {
                     conn.outputStream.bufferedWriter().use { it.write(body.toString()) }
-                    val code = conn.responseCode
+                    val code = responseCodeWithPinning(conn)
                     val respBody = (if (code in 200..299) conn.inputStream else conn.errorStream)
                         ?.bufferedReader()?.use { it.readText() } ?: "{}"
                     if (code !in 200..299) throw IOException("HTTP $code: $respBody")
@@ -390,7 +458,7 @@ object APIClient {
         }
         try {
             conn.outputStream.use { it.write(data) }
-            val code = conn.responseCode
+            val code = responseCodeWithPinning(conn)
             val respBody = (if (code in 200..299) conn.inputStream else conn.errorStream)
                 ?.bufferedReader()?.use { it.readText() } ?: "{}"
             if (code !in 200..299) throw IOException("HTTP $code: $respBody")
@@ -411,7 +479,7 @@ object APIClient {
                 readTimeout = 15_000
             }
             val json = try {
-                val code = conn.responseCode
+                val code = responseCodeWithPinning(conn)
                 val body = (if (code in 200..299) conn.inputStream else conn.errorStream)
                     ?.bufferedReader()?.use { it.readText() } ?: "{}"
                 if (code !in 200..299) return@withContext emptyMap()
@@ -454,7 +522,7 @@ object APIClient {
     // ── Refresh Token Rotation ──
 
     private suspend fun refreshSession(): Boolean = withContext(Dispatchers.IO) {
-        val rt = refreshToken ?: return@withContext false
+        val rt = refreshToken ?: SecureStorage.get(appContext ?: return@withContext false, "refresh_token", "rocchat") ?: return@withContext false
         val conn = (URL("$BASE_URL/auth/refresh").openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
             setRequestProperty("Content-Type", "application/json; charset=utf-8")
@@ -466,12 +534,16 @@ object APIClient {
             conn.outputStream.bufferedWriter().use {
                 it.write(JSONObject().apply { put("refresh_token", rt) }.toString())
             }
-            val code = conn.responseCode
-            if (code !in 200..299) return@withContext false
+            val code = responseCodeWithPinning(conn)
+            if (code !in 200..299) {
+                clearPersistedAuth()
+                return@withContext false
+            }
             val body = conn.inputStream.bufferedReader().use { it.readText() }
             val json = JSONObject(body)
             sessionToken = json.optString("session_token", null)
             refreshToken = json.optString("refresh_token", null)
+            persistRefreshToken(refreshToken)
             sessionToken != null
         } catch (_: Exception) {
             false

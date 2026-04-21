@@ -19,7 +19,7 @@
  */
 
 import * as api from './api.js';
-import { chatState } from './chat/chat.js';
+import { chatState, getPlaintextCacheSnapshot } from './chat/chat.js';
 import { escapeHtml } from './utils.js';
 import { showToast as toast } from './components/toast.js';
 import { aesGcmEncrypt, aesGcmDecrypt, pbkdf2 } from '@rocchat/shared';
@@ -325,28 +325,25 @@ function runSearch(q: string): SearchHit[] {
     }
   }
 
-  // 2) Messages via the local plaintext cache in localStorage.
+  // 2) Messages via the decrypted plaintext cache held in memory.
   try {
-    const raw = localStorage.getItem('rocchat_plaintext_v1');
-    if (raw) {
-      const cache = JSON.parse(raw) as Record<string, string>;
-      for (const [messageId, plaintext] of Object.entries(cache)) {
-        if (typeof plaintext !== 'string') continue;
-        if (!plaintext.toLowerCase().includes(needle)) continue;
-        // Resolve which conversation this message belongs to via state.messages.
-        let convId = '';
-        let convName = '';
-        for (const [cid, list] of chatState.messages.entries()) {
-          if (list.some((m) => m.id === messageId)) {
-            convId = cid;
-            convName = chatState.conversations.find((c) => c.id === cid)?.name || 'Direct message';
-            break;
-          }
+    const cache = getPlaintextCacheSnapshot();
+    for (const [messageId, plaintext] of Object.entries(cache)) {
+      if (typeof plaintext !== 'string') continue;
+      if (!plaintext.toLowerCase().includes(needle)) continue;
+      // Resolve which conversation this message belongs to via state.messages.
+      let convId = '';
+      let convName = '';
+      for (const [cid, list] of chatState.messages.entries()) {
+        if (list.some((m) => m.id === messageId)) {
+          convId = cid;
+          convName = chatState.conversations.find((c) => c.id === cid)?.name || 'Direct message';
+          break;
         }
-        if (!convId) continue;
-        hits.push({ conversationId: convId, conversationName: convName, messageId, snippet: plaintext });
-        if (hits.length > 100) break;
       }
+      if (!convId) continue;
+      hits.push({ conversationId: convId, conversationName: convName, messageId, snippet: plaintext });
+      if (hits.length > 100) break;
     }
   } catch { /* ignore */ }
 
@@ -564,7 +561,7 @@ export async function importEncryptedBackup(file: File, passphrase: string): Pro
       indexedDB: { ratchet: unknown[]; senderKeys: unknown[]; messageQueue: unknown[] };
     };
     // Audit #8: Only restore whitelisted keys; route secrets through secure-store
-    const SECRET_KEYS = new Set(['rocchat_identity_priv', 'rocchat_keys', 'rocchat_spk_priv']);
+    const SECRET_KEYS = new Set(['rocchat_identity_priv', 'rocchat_keys', 'rocchat_spk_priv', 'rocchat_plaintext_v1']);
     const ALLOWED_KEYS = new Set([
       'rocchat_identity_pub', 'rocchat_identity_priv', 'rocchat_keys', 'rocchat_spk_priv',
       'rocchat_user_id', 'rocchat_device_id', 'rocchat_plaintext_v1',

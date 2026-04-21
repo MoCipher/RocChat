@@ -29,6 +29,8 @@ import kotlinx.coroutines.launch
 class MainActivity : FragmentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        APIClient.initialize(this)
         enableEdgeToEdge()
 
         // Prevent screenshots & screen recording
@@ -57,6 +59,7 @@ class MainActivity : FragmentActivity() {
                     val token = SecureStorage.get(this@MainActivity, "session_token", "rocchat")
                     if (token != null) {
                         APIClient.sessionToken = token
+                        APIClient.refreshToken = SecureStorage.get(this@MainActivity, "refresh_token", "rocchat")
                     }
                     if (isAuthenticated) {
                         val userId = prefs.getString("user_id", null)
@@ -90,6 +93,8 @@ class MainActivity : FragmentActivity() {
                             onFallback = {
                                 biometricLocked = false
                                 APIClient.sessionToken = null
+                                APIClient.refreshToken = null
+                                APIClient.clearPersistedAuth()
                                 prefs.edit().clear().apply()
                                 isAuthenticated = false
                             }
@@ -101,6 +106,8 @@ class MainActivity : FragmentActivity() {
                                 onFailure = {
                                     biometricLocked = false
                                     APIClient.sessionToken = null
+                                    APIClient.refreshToken = null
+                                    APIClient.clearPersistedAuth()
                                     prefs.edit().clear().apply()
                                     isAuthenticated = false
                                 },
@@ -115,6 +122,8 @@ class MainActivity : FragmentActivity() {
                                     try { APIClient.postPublic("/auth/logout", org.json.JSONObject()) } catch (_: Exception) {}
                                 }
                                 APIClient.sessionToken = null
+                                APIClient.refreshToken = null
+                                APIClient.clearPersistedAuth()
                                 prefs.edit().clear().apply()
                                 isAuthenticated = false
                             }

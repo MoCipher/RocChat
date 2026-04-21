@@ -63,18 +63,26 @@ struct AuthView: View {
                         .textFieldStyle(RocTextFieldStyle())
                         .autocapitalization(.none)
                         .disableAutocorrection(true)
+                        .textContentType(.username)
+                        .accessibilityLabel("Username")
                     
                     if isRegistering {
                         TextField("Display Name", text: $displayName)
                             .textFieldStyle(RocTextFieldStyle())
+                            .textContentType(.name)
+                            .accessibilityLabel("Display name")
                     }
                     
                     SecureField("Passphrase", text: $passphrase)
                         .textFieldStyle(RocTextFieldStyle())
+                        .textContentType(isRegistering ? .newPassword : .password)
+                        .accessibilityLabel("Passphrase")
                     
                     if isRegistering {
                         SecureField("Confirm Passphrase", text: $passphraseConfirm)
                             .textFieldStyle(RocTextFieldStyle())
+                            .textContentType(.newPassword)
+                            .accessibilityLabel("Confirm passphrase")
                     }
                     
                     if let error = authVM.errorMessage {
@@ -99,12 +107,14 @@ struct AuthView: View {
                         .cornerRadius(8)
                     }
                     .disabled(authVM.isLoading)
+                    .accessibilityLabel(isRegistering ? "Create account" : "Sign in")
                     
                     Button(isRegistering ? "Already have an account? Sign in" : "New to RocChat? Create account") {
                         withAnimation { isRegistering.toggle() }
                     }
                     .font(.subheadline)
                     .foregroundColor(.rocGold)
+                    .accessibilityHint("Switches between sign in and account creation")
                 }
                 .padding(32)
                 .background(Color.bgCard)

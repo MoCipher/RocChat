@@ -13,7 +13,7 @@ let profileKeyCache: CryptoKey | null = null;
 
 async function getProfileKey(): Promise<CryptoKey> {
   if (profileKeyCache) return profileKeyCache;
-  const idKey = localStorage.getItem('rocchat_identity_key') || 'default';
+  const idKey = localStorage.getItem('rocchat_identity_pub') || 'default';
   const raw = new TextEncoder().encode(idKey + ':profile:encrypt');
   const hash = await crypto.subtle.digest('SHA-256', raw);
   const key = await crypto.subtle.importKey('raw', hash, 'AES-GCM', false, ['encrypt', 'decrypt']);

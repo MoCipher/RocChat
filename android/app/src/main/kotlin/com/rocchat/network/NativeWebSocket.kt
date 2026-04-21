@@ -3,7 +3,10 @@ package com.rocchat.network
 import java.io.InputStream
 import java.io.OutputStream
 import java.net.URI
+import java.security.MessageDigest
+import java.security.cert.X509Certificate
 import java.security.SecureRandom
+import javax.net.ssl.SSLSocket
 import javax.net.ssl.SSLSocketFactory
 import kotlin.concurrent.thread
 
@@ -17,6 +20,13 @@ class NativeWebSocket private constructor(
     private val output: OutputStream,
     private val closable: AutoCloseable,
 ) {
+
+    private companion object {
+        val pinnedLeafFingerprints = mapOf(
+            "chat.mocipher.com" to "9fe88e6203b5c859d5d5afad6b2efe52b3f01bb06ea1b140c43b1b77ebd89dbb",
+            "rocchat-api.spoass.workers.dev" to "fced5d78a8da9d40a74f053b91aed908a2a0ef097a8878b002409be9b35eead1",
+        )
+    }
 
     interface Listener {
         fun onOpen(ws: NativeWebSocket) {}
@@ -141,6 +151,22 @@ class NativeWebSocket private constructor(
                 SSLSocketFactory.getDefault().createSocket(host, port)
             } else {
                 java.net.Socket(host, port)
+            }
+
+            if (isSecure && socket is SSLSocket) {
+                socket.startHandshake()
+                val expected = pinnedLeafFingerprints[host.lowercase()]
+                if (expected != null) {
+                    val cert = socket.session.peerCertificates.firstOrNull() as? X509Certificate
+                        ?: throw java.io.IOException("Pinned TLS certificate missing")
+                    val actual = MessageDigest.getInstance("SHA-256")
+                        .digest(cert.encoded)
+                        .joinToString("") { "%02x".format(it) }
+                    if (!actual.equals(expected, ignoreCase = true)) {
+                        socket.close()
+                        throw java.io.IOException("Pinned TLS certificate mismatch")
+                    }
+                }
             }
 
             val output = socket.getOutputStream()

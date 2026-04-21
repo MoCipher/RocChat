@@ -28,6 +28,29 @@ async function requireOrgAdmin(env: Env, orgId: string, userId: string): Promise
   return null;
 }
 
+async function logOrgAudit(
+  env: Env,
+  orgId: string,
+  actorUserId: string,
+  action: string,
+  opts?: { targetUserId?: string; targetDeviceId?: string; metadata?: Record<string, unknown> },
+): Promise<void> {
+  const metadata = opts?.metadata ? JSON.stringify(opts.metadata) : null;
+  await env.DB.prepare(
+    `INSERT INTO organization_audit_log
+      (id, org_id, actor_user_id, action, target_user_id, target_device_id, metadata_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?)`
+  ).bind(
+    crypto.randomUUID(),
+    orgId,
+    actorUserId,
+    action,
+    opts?.targetUserId || null,
+    opts?.targetDeviceId || null,
+    metadata,
+  ).run();
+}
+
 export async function handleBusiness(
   request: Request,
   env: Env,
@@ -130,6 +153,10 @@ export async function handleBusiness(
       values.push(orgId);
       await env.DB.prepare(`UPDATE organizations SET ${updates.join(', ')} WHERE id = ?`)
         .bind(...values).run();
+
+      await logOrgAudit(env, orgId, session.userId, 'org_updated', {
+        metadata: { fields: updates.map((u) => u.split(' = ')[0]) },
+      });
     }
     return jsonResponse({ ok: true });
   }
@@ -156,6 +183,11 @@ export async function handleBusiness(
       'INSERT OR REPLACE INTO organization_members (org_id, user_id, role) VALUES (?, ?, ?)'
     ).bind(orgId, body.user_id, role).run();
 
+    await logOrgAudit(env, orgId, session.userId, 'member_role_set', {
+      targetUserId: body.user_id,
+      metadata: { role },
+    });
+
     return jsonResponse({ ok: true });
   }
 
@@ -178,6 +210,10 @@ export async function handleBusiness(
       'DELETE FROM organization_members WHERE org_id = ? AND user_id = ?'
     ).bind(orgId, targetUserId).run();
 
+    await logOrgAudit(env, orgId, session.userId, 'member_removed', {
+      targetUserId,
+    });
+
     return jsonResponse({ ok: true });
   }
 
@@ -199,6 +235,11 @@ export async function handleBusiness(
     // Delete the device
     await env.DB.prepare('DELETE FROM devices WHERE id = ? AND user_id = ?')
       .bind(body.device_id, body.user_id).run();
+
+    await logOrgAudit(env, orgId, session.userId, 'device_wiped', {
+      targetUserId: body.user_id,
+      targetDeviceId: body.device_id,
+    });
 
     return jsonResponse({ ok: true, wiped_device: body.device_id });
   }
@@ -263,6 +304,10 @@ export async function handleBusiness(
       VALUES (?, ?, ?)
     `).bind(orgId, maxAge, body.auto_delete ? 1 : 0).run();
 
+    await logOrgAudit(env, orgId, session.userId, 'retention_updated', {
+      metadata: { max_age_days: maxAge, auto_delete: body.auto_delete ? 1 : 0 },
+    });
+
     return jsonResponse({ ok: true });
   }
 
@@ -313,6 +358,10 @@ export async function handleBusiness(
       VALUES (?, ?, ?, ?, ?, ?, ?, unixepoch())
     `).bind(orgId, provider, body.issuer_url, body.client_id, body.client_secret, body.redirect_uri, body.enabled ? 1 : 0).run();
 
+    await logOrgAudit(env, orgId, session.userId, 'sso_updated', {
+      metadata: { provider, enabled: body.enabled ? 1 : 0 },
+    });
+
     return jsonResponse({ ok: true });
   }
 
@@ -323,6 +372,7 @@ export async function handleBusiness(
     if (adminCheck) return adminCheck;
 
     await env.DB.prepare('DELETE FROM sso_configs WHERE org_id = ?').bind(orgId).run();
+    await logOrgAudit(env, orgId, session.userId, 'sso_removed');
     return jsonResponse({ ok: true });
   }
 
@@ -495,6 +545,11 @@ export async function handleBusiness(
         'INSERT INTO organization_members (org_id, user_id, role) VALUES (?, ?, ?)'
       ).bind(orgId, user.id, role).run();
 
+      await logOrgAudit(env, orgId, session.userId, 'member_role_set', {
+        targetUserId: user.id,
+        metadata: { role, source: 'bulk' },
+      });
+
       results.push({ username: entry.username, status: 'added', user_id: user.id });
     }
 
@@ -621,6 +676,16 @@ export async function handleBusiness(
     await env.DB.prepare(
       `INSERT INTO webhooks (id, org_id, url, events, signing_secret, created_by) VALUES (?, ?, ?, ?, ?, ?)`
     ).bind(hookId, orgId, webhookUrl, events, signingSecret, session.userId).run();
+
+    let webhookHost = '';
+    try {
+      webhookHost = new URL(webhookUrl).host;
+    } catch {
+      webhookHost = '';
+    }
+    await logOrgAudit(env, orgId, session.userId, 'webhook_created', {
+      metadata: { webhook_id: hookId, host: webhookHost },
+    });
 
     return jsonResponse({ id: hookId, url: webhookUrl, signing_secret: signingSecret });
   }

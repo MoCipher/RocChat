@@ -4,9 +4,34 @@
 
 import * as api from '../api.js';
 import { generateQRCodeSVG } from '../auth/qr-login.js';
-import { clearAllSecrets } from '../crypto/secure-store.js';
+import { clearAllSecrets, deleteSecret, getSecretString, putSecretString } from '../crypto/secure-store.js';
 import { showToast } from './toast.js';
 import { encryptProfileField, decryptProfileField } from '../crypto/profile-crypto.js';
+
+const APP_LOCK_KEY = 'rocchat_app_lock_v1';
+const APP_LOCK_LEGACY_KEY = 'rocchat_app_lock_pin';
+const APP_LOCK_ITERATIONS = 250_000;
+
+async function deriveAppLockVerifier(pin: string, salt: Uint8Array): Promise<string> {
+  const baseKey = await crypto.subtle.importKey('raw', new TextEncoder().encode(pin), 'PBKDF2', false, ['deriveBits']);
+  const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt: salt as unknown as BufferSource, iterations: APP_LOCK_ITERATIONS }, baseKey, 256);
+  return Array.from(new Uint8Array(bits)).map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+async function loadAppLockConfig(): Promise<{ salt?: string; verifier: string } | null> {
+  const secureValue = await getSecretString(APP_LOCK_KEY);
+  if (secureValue) return JSON.parse(secureValue) as { salt?: string; verifier: string };
+
+  const legacyVerifier = localStorage.getItem(APP_LOCK_LEGACY_KEY);
+  if (!legacyVerifier) return null;
+  return { verifier: legacyVerifier };
+}
+
+function focusFirstDialogField(dialog: ParentNode) {
+  requestAnimationFrame(() => {
+    dialog.querySelector<HTMLElement>('input, button, select, textarea')?.focus();
+  });
+}
 
 async function saveSetting(fn: () => Promise<unknown>) {
   try {
@@ -884,12 +909,13 @@ export function renderSettings(container: HTMLElement) {
   });
 
   // App lock toggle
-  document.getElementById('toggle-app-lock')?.addEventListener('change', (e) => {
+  document.getElementById('toggle-app-lock')?.addEventListener('change', async (e) => {
     const checked = (e.target as HTMLInputElement).checked;
     if (checked) {
-      showAppLockSetup();
+      await showAppLockSetup();
     } else {
-      localStorage.removeItem('rocchat_app_lock_pin');
+      await deleteSecret(APP_LOCK_KEY);
+      localStorage.removeItem(APP_LOCK_LEGACY_KEY);
       showToast('App lock disabled', 'success');
     }
   });
@@ -2265,7 +2291,7 @@ async function loadProfile() {
       const screenshotDetect = document.getElementById('toggle-screenshot-detect') as HTMLInputElement;
       if (screenshotDetect) screenshotDetect.checked = user.screenshot_detection !== 0;
       const appLock = document.getElementById('toggle-app-lock') as HTMLInputElement;
-      if (appLock) appLock.checked = !!localStorage.getItem('rocchat_app_lock_pin');
+      if (appLock) void loadAppLockConfig().then((config) => { appLock.checked = !!config; });
 
       // Ghost Mode: detect if all ghost settings are active
       const ghostToggle = document.getElementById('toggle-ghost-mode') as HTMLInputElement;
@@ -2329,14 +2355,20 @@ function escapeHtml(s: string): string {
 }
 
 // ── App Lock PIN Setup ──
-function showAppLockSetup() {
+async function showAppLockSetup() {
   const overlay = document.createElement('div');
+  overlay.setAttribute('role', 'presentation');
   overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:1000;display:flex;align-items:center;justify-content:center';
   const dialog = document.createElement('div');
+  dialog.setAttribute('role', 'dialog');
+  dialog.setAttribute('aria-modal', 'true');
+  dialog.setAttribute('aria-labelledby', 'app-lock-setup-title');
   dialog.style.cssText = 'background:var(--bg-secondary);border-radius:var(--radius-lg);padding:var(--sp-6);width:90%;max-width:340px;text-align:center';
-  dialog.innerHTML = `<h3 style="margin:0 0 var(--sp-3);color:var(--text-primary)">Set App Lock PIN</h3>
+  dialog.innerHTML = `<h3 id="app-lock-setup-title" style="margin:0 0 var(--sp-3);color:var(--text-primary)">Set App Lock PIN</h3>
     <p style="font-size:var(--text-sm);color:var(--text-tertiary);margin-bottom:var(--sp-4)">Enter a 4-6 digit PIN to lock RocChat</p>
+    <label for="pin-input" style="display:block;text-align:left;font-size:var(--text-sm);color:var(--text-secondary);margin-bottom:var(--sp-1)">PIN</label>
     <input type="password" inputmode="numeric" pattern="[0-9]*" id="pin-input" maxlength="6" placeholder="Enter PIN" autocomplete="off" style="width:100%;padding:var(--sp-3);font-size:var(--text-lg);text-align:center;border:1px solid var(--border-color);border-radius:var(--radius);background:var(--bg-primary);color:var(--text-primary);letter-spacing:8px;margin-bottom:var(--sp-3)" />
+    <label for="pin-confirm" style="display:block;text-align:left;font-size:var(--text-sm);color:var(--text-secondary);margin-bottom:var(--sp-1)">Confirm PIN</label>
     <input type="password" inputmode="numeric" pattern="[0-9]*" id="pin-confirm" maxlength="6" placeholder="Confirm PIN" autocomplete="off" style="width:100%;padding:var(--sp-3);font-size:var(--text-lg);text-align:center;border:1px solid var(--border-color);border-radius:var(--radius);background:var(--bg-primary);color:var(--text-primary);letter-spacing:8px;margin-bottom:var(--sp-4)" />
     <div style="display:flex;gap:var(--sp-3);justify-content:center">
       <button class="btn-secondary" id="pin-cancel">Cancel</button>
@@ -2344,9 +2376,10 @@ function showAppLockSetup() {
     </div>`;
   overlay.appendChild(dialog);
   document.body.appendChild(overlay);
+  focusFirstDialogField(dialog);
   overlay.addEventListener('click', (e) => { if (e.target === overlay) { cancelLock(); } });
   dialog.querySelector('#pin-cancel')!.addEventListener('click', cancelLock);
-  dialog.querySelector('#pin-save')!.addEventListener('click', () => {
+  dialog.querySelector('#pin-save')!.addEventListener('click', async () => {
     const pin = (dialog.querySelector('#pin-input') as HTMLInputElement).value;
     const confirm = (dialog.querySelector('#pin-confirm') as HTMLInputElement).value;
     if (pin.length < 4 || !/^\d+$/.test(pin)) {
@@ -2357,13 +2390,18 @@ function showAppLockSetup() {
       showToast('PINs do not match', 'error');
       return;
     }
-    // Store hash in localStorage (for client-side lock only)
-    crypto.subtle.digest('SHA-256', new TextEncoder().encode(pin)).then(hash => {
-      const hex = Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2, '0')).join('');
-      localStorage.setItem('rocchat_app_lock_pin', hex);
-      overlay.remove();
-      showToast('App lock enabled', 'success');
-    });
+    const salt = crypto.getRandomValues(new Uint8Array(16));
+    const verifier = await deriveAppLockVerifier(pin, salt);
+    await putSecretString(APP_LOCK_KEY, JSON.stringify({
+      salt: btoa(String.fromCharCode(...salt)),
+      verifier,
+    }));
+    localStorage.removeItem(APP_LOCK_LEGACY_KEY);
+    overlay.remove();
+    showToast('App lock enabled', 'success');
+  });
+  overlay.addEventListener('keydown', (e) => {
+    if ((e as KeyboardEvent).key === 'Escape') cancelLock();
   });
 
   function cancelLock() {
@@ -2374,31 +2412,44 @@ function showAppLockSetup() {
 }
 
 // ── App Lock Challenge (on app start) ──
-export function checkAppLock(): boolean {
-  const pinHash = localStorage.getItem('rocchat_app_lock_pin');
-  if (!pinHash) return true; // no lock
-  return false; // locked
+export async function checkAppLock(): Promise<boolean> {
+  const config = await loadAppLockConfig();
+  return !config;
 }
 
-export function showAppLockScreen(onUnlock: () => void) {
+export async function showAppLockScreen(onUnlock: () => void) {
   const overlay = document.createElement('div');
   overlay.id = 'app-lock-overlay';
+  overlay.setAttribute('role', 'presentation');
   overlay.style.cssText = 'position:fixed;inset:0;background:var(--bg-primary);z-index:9999;display:flex;align-items:center;justify-content:center;flex-direction:column';
-  overlay.innerHTML = `<div style="text-align:center;width:90%;max-width:300px">
+  overlay.innerHTML = `<div role="dialog" aria-modal="true" aria-labelledby="app-lock-title" style="text-align:center;width:90%;max-width:300px">
     <div style="font-size:48px;margin-bottom:var(--sp-4)">🔒</div>
-    <h2 style="color:var(--text-primary);margin-bottom:var(--sp-4)">RocChat Locked</h2>
+    <h2 id="app-lock-title" style="color:var(--text-primary);margin-bottom:var(--sp-4)">RocChat Locked</h2>
+    <label for="lock-pin-input" style="display:block;text-align:left;font-size:var(--text-sm);color:var(--text-secondary);margin-bottom:var(--sp-1)">PIN</label>
     <input type="password" inputmode="numeric" pattern="[0-9]*" id="lock-pin-input" maxlength="6" placeholder="Enter PIN" autocomplete="off" style="width:100%;padding:var(--sp-3);font-size:var(--text-lg);text-align:center;border:1px solid var(--border-color);border-radius:var(--radius);background:var(--bg-secondary);color:var(--text-primary);letter-spacing:8px;margin-bottom:var(--sp-4)" />
-    <button class="btn-primary" id="lock-unlock-btn" style="width:100%">Unlock</button>
-    <p id="lock-error" style="color:red;font-size:var(--text-sm);margin-top:var(--sp-2);display:none">Wrong PIN</p>
+    <button class="btn-primary" id="lock-unlock-btn" style="width:100%" aria-describedby="lock-error">Unlock</button>
+    <p id="lock-error" style="color:red;font-size:var(--text-sm);margin-top:var(--sp-2);display:none" aria-live="polite">Wrong PIN</p>
   </div>`;
   document.body.appendChild(overlay);
+  focusFirstDialogField(overlay);
 
-  const savedHash = localStorage.getItem('rocchat_app_lock_pin')!;
+  const config = await loadAppLockConfig();
+  if (!config) {
+    overlay.remove();
+    onUnlock();
+    return;
+  }
   overlay.querySelector('#lock-unlock-btn')!.addEventListener('click', async () => {
     const pin = (overlay.querySelector('#lock-pin-input') as HTMLInputElement).value;
-    const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(pin));
-    const hex = Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2, '0')).join('');
-    if (hex === savedHash) {
+    let verifier: string;
+    if (config.salt) {
+      const saltBytes = Uint8Array.from(atob(config.salt), (ch) => ch.charCodeAt(0));
+      verifier = await deriveAppLockVerifier(pin, saltBytes);
+    } else {
+      const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(pin));
+      verifier = Array.from(new Uint8Array(hash)).map((b) => b.toString(16).padStart(2, '0')).join('');
+    }
+    if (verifier === config.verifier) {
       overlay.remove();
       onUnlock();
     } else {

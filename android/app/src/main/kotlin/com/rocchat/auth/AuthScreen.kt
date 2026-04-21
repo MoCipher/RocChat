@@ -11,6 +11,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
@@ -89,7 +91,7 @@ fun AuthScreen(onSuccess: () -> Unit) {
                     value = username,
                     onValueChange = { username = it },
                     label = { Text("Username") },
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier.fillMaxWidth().semantics { contentDescription = "Username" },
                     singleLine = true,
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedBorderColor = RocColors.RocGold,
@@ -103,7 +105,7 @@ fun AuthScreen(onSuccess: () -> Unit) {
                         value = displayName,
                         onValueChange = { displayName = it },
                         label = { Text("Display Name") },
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier.fillMaxWidth().semantics { contentDescription = "Display name" },
                         singleLine = true,
                         colors = OutlinedTextFieldDefaults.colors(
                             focusedBorderColor = RocColors.RocGold,
@@ -119,7 +121,7 @@ fun AuthScreen(onSuccess: () -> Unit) {
                     value = passphrase,
                     onValueChange = { passphrase = it },
                     label = { Text("Passphrase") },
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier.fillMaxWidth().semantics { contentDescription = "Passphrase" },
                     singleLine = true,
                     visualTransformation = PasswordVisualTransformation(),
                     colors = OutlinedTextFieldDefaults.colors(
@@ -134,7 +136,7 @@ fun AuthScreen(onSuccess: () -> Unit) {
                         value = passphraseConfirm,
                         onValueChange = { passphraseConfirm = it },
                         label = { Text("Confirm Passphrase") },
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier.fillMaxWidth().semantics { contentDescription = "Confirm passphrase" },
                         singleLine = true,
                         visualTransformation = PasswordVisualTransformation(),
                         colors = OutlinedTextFieldDefaults.colors(
@@ -223,11 +225,14 @@ fun AuthScreen(onSuccess: () -> Unit) {
                                     val regUserId = regResult.optString("user_id", "")
                                     if (regToken.isNotEmpty()) {
                                         APIClient.sessionToken = regToken
+                                        APIClient.refreshToken = regResult.optString("refresh_token", null)
                                         val prefs = context.getSharedPreferences("rocchat", Context.MODE_PRIVATE)
                                         SecureStorage.set(context, "session_token", regToken)
+                                        APIClient.refreshToken?.let { SecureStorage.set(context, "refresh_token", it) }
                                         prefs.edit()
                                             .putString("user_id", regUserId)
                                             .remove("session_token")
+                                            .remove("refresh_token")
                                             .apply()
                                     }
                                     // Cache key material for E2E session manager
@@ -242,11 +247,13 @@ fun AuthScreen(onSuccess: () -> Unit) {
                                 } else {
                                     val result = APIClient.login(cleanUsername, authHashB64)
                                     APIClient.sessionToken = result.sessionToken
+                                    APIClient.refreshToken?.let { SecureStorage.set(context, "refresh_token", it) }
                                     val prefs = context.getSharedPreferences("rocchat", Context.MODE_PRIVATE)
                                     SecureStorage.set(context, "session_token", result.sessionToken)
                                     prefs.edit()
                                         .putString("user_id", result.userId)
                                         .remove("session_token")
+                                        .remove("refresh_token")
                                         .apply()
                                     SessionManager.loadCachedKeyMaterial(context)
                                     onSuccess()

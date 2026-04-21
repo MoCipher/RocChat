@@ -136,7 +136,7 @@ struct ChannelsView: View {
               let url = URL(string: "\(APIConfig.baseURL)\(path)") else { return nil }
         var req = URLRequest(url: url)
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        return try? await URLSession.shared.data(for: req).0
+        return try? await APIClient.shared.session.data(for: req).0
     }
 }
 
@@ -302,7 +302,7 @@ struct ChannelDetailView: View {
         req.httpMethod = method
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         if let body { req.setValue("application/json", forHTTPHeaderField: "Content-Type"); req.httpBody = body }
-        return try? await URLSession.shared.data(for: req).0
+        return try? await APIClient.shared.session.data(for: req).0
     }
 }
 
@@ -366,7 +366,7 @@ struct ChannelPostSheet: View {
         req.httpMethod = method
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         if let body { req.setValue("application/json", forHTTPHeaderField: "Content-Type"); req.httpBody = body }
-        return try? await URLSession.shared.data(for: req).0
+        return try? await APIClient.shared.session.data(for: req).0
     }
 }
 
@@ -419,7 +419,7 @@ struct ChannelAnalyticsView: View {
               let url = URL(string: "\(APIConfig.baseURL)/api/channels/\(channelId)/analytics") else { return }
         var req = URLRequest(url: url)
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        guard let (data, _) = try? await URLSession.shared.data(for: req),
+        guard let (data, _) = try? await APIClient.shared.session.data(for: req),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
         subscriberCount = json["subscriber_count"] as? Int ?? 0
         posts = json["posts"] as? [[String: Any]] ?? []
@@ -469,7 +469,7 @@ struct ChannelScheduledListView: View {
               let url = URL(string: "\(APIConfig.baseURL)/api/channels/\(channelId)/scheduled") else { return }
         var req = URLRequest(url: url)
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        guard let (data, _) = try? await URLSession.shared.data(for: req),
+        guard let (data, _) = try? await APIClient.shared.session.data(for: req),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
         posts = json["posts"] as? [[String: Any]] ?? []
     }
@@ -481,7 +481,7 @@ struct ChannelScheduledListView: View {
         var req = URLRequest(url: url)
         req.httpMethod = "DELETE"
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        let _ = try? await URLSession.shared.data(for: req)
+        let _ = try? await APIClient.shared.session.data(for: req)
         await load()
     }
 }
@@ -592,7 +592,7 @@ struct CommunityRow: View {
               let url = URL(string: "\(APIConfig.baseURL)/api/communities/\(community.id)") else { return }
         var req = URLRequest(url: url)
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        guard let (data, _) = try? await URLSession.shared.data(for: req),
+        guard let (data, _) = try? await APIClient.shared.session.data(for: req),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
         role = json["role"] as? String
         joined = role != nil
@@ -618,7 +618,7 @@ struct CommunityRow: View {
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        if let (_, resp) = try? await URLSession.shared.data(for: req),
+        if let (_, resp) = try? await APIClient.shared.session.data(for: req),
            (resp as? HTTPURLResponse)?.statusCode == 200 {
             await MainActor.run { joined = true; role = "member" }
         }
@@ -669,7 +669,7 @@ struct CreateChannelSheet: View {
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         let body: [String: Any] = ["name": name, "description": description, "tags": tags, "is_public": isPublic]
         req.httpBody = try? JSONSerialization.data(withJSONObject: body)
-        if let (_, resp) = try? await URLSession.shared.data(for: req),
+        if let (_, resp) = try? await APIClient.shared.session.data(for: req),
            (resp as? HTTPURLResponse)?.statusCode == 200 {
             await MainActor.run {
                 onCreated()

@@ -4,6 +4,7 @@
   "description": "End-to-end encrypted messaging. Messages. Calls. Nothing else.",
   "start_url": "/",
   "display": "standalone",
+  "display_override": ["window-controls-overlay", "standalone"],
   "orientation": "any",
   "theme_color": "#D4AF37",
   "background_color": "#0D1117",
@@ -40,18 +41,18 @@
   "prefer_related_applications": false,
   "screenshots": [
     {
-      "src": "/favicon.svg",
-      "sizes": "512x512",
+      "src": "/screenshots/install-narrow.svg",
+      "sizes": "720x1280",
       "type": "image/svg+xml",
       "form_factor": "narrow",
-      "label": "RocChat — Encrypted messaging"
+      "label": "RocChat mobile view with encrypted chats and calls"
     },
     {
-      "src": "/favicon.svg",
-      "sizes": "512x512",
+      "src": "/screenshots/install-wide.svg",
+      "sizes": "1600x900",
       "type": "image/svg+xml",
       "form_factor": "wide",
-      "label": "RocChat — Desktop view"
+      "label": "RocChat desktop workspace with chat list, active thread, and calls"
     }
   ],
   "shortcuts": [

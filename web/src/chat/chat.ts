@@ -17,6 +17,7 @@ import { generateSafetyNumber, fromBase64, toBase64, randomBytes, sha256 as cryp
 import { initEmojiPicker } from './emoji-picker.js';
 import { initGifPicker } from './gif-picker.js';
 import { attachPreviewIfAny } from './link-preview.js';
+import { getSecretString, putSecretString, deleteSecret } from '../crypto/secure-store.js';
 import {
   consumeOneShotExpiry,
   openPerMessageTimerMenu,
@@ -34,7 +35,7 @@ const metaKeyCache = new Map<string, CryptoKey>();
 async function getMetaKey(conversationId: string): Promise<CryptoKey> {
   const cached = metaKeyCache.get(conversationId);
   if (cached) return cached;
-  const idKey = localStorage.getItem('rocchat_identity_key') || conversationId;
+  const idKey = localStorage.getItem('rocchat_identity_pub') || conversationId;
   const raw = new TextEncoder().encode(idKey + ':meta:' + conversationId);
   const hash = await crypto.subtle.digest('SHA-256', raw);
   const key = await crypto.subtle.importKey('raw', hash, 'AES-GCM', false, ['encrypt', 'decrypt']);
@@ -82,29 +83,55 @@ async function decryptConversationMeta(convs: Conversation[]): Promise<void> {
 // Prevents "Unable to decrypt" on the sender's own messages after reload,
 // and caches successful receiver decrypts so reloads stay instant.
 const PLAINTEXT_CACHE_KEY = 'rocchat_plaintext_v1';
-const plaintextCache: Map<string, string> = (() => {
-  try {
-    const raw = localStorage.getItem(PLAINTEXT_CACHE_KEY);
-    if (!raw) return new Map();
-    const obj = JSON.parse(raw) as Record<string, string>;
-    return new Map(Object.entries(obj));
-  } catch { return new Map(); }
-})();
+const plaintextCache = new Map<string, string>();
+let plaintextCacheHydratePromise: Promise<void> | null = null;
 let plaintextCacheSaveTimer: ReturnType<typeof setTimeout> | null = null;
+
+async function hydratePlaintextCache(): Promise<void> {
+  if (plaintextCacheHydratePromise) return plaintextCacheHydratePromise;
+  plaintextCacheHydratePromise = (async () => {
+    try {
+      const secureRaw = await getSecretString(PLAINTEXT_CACHE_KEY);
+      const legacyRaw = localStorage.getItem(PLAINTEXT_CACHE_KEY);
+      const raw = secureRaw ?? legacyRaw;
+      if (raw) {
+        const obj = JSON.parse(raw) as Record<string, string>;
+        plaintextCache.clear();
+        for (const [key, value] of Object.entries(obj)) plaintextCache.set(key, value);
+      }
+      if (legacyRaw) {
+        await putSecretString(PLAINTEXT_CACHE_KEY, JSON.stringify(Object.fromEntries(plaintextCache)));
+        localStorage.removeItem(PLAINTEXT_CACHE_KEY);
+      }
+    } catch {
+      plaintextCache.clear();
+    }
+  })();
+  return plaintextCacheHydratePromise;
+}
+
 function savePlaintextCache() {
   if (plaintextCacheSaveTimer) return;
   plaintextCacheSaveTimer = setTimeout(() => {
     plaintextCacheSaveTimer = null;
-    try {
+    void (async () => {
       // Cap to last ~5000 entries to avoid unbounded growth.
       const entries = [...plaintextCache.entries()];
       const capped = entries.slice(-5000);
       plaintextCache.clear();
       for (const [k, v] of capped) plaintextCache.set(k, v);
-      localStorage.setItem(PLAINTEXT_CACHE_KEY, JSON.stringify(Object.fromEntries(plaintextCache)));
-    } catch {}
+      try {
+        await putSecretString(PLAINTEXT_CACHE_KEY, JSON.stringify(Object.fromEntries(plaintextCache)));
+        localStorage.removeItem(PLAINTEXT_CACHE_KEY);
+      } catch {}
+    })();
   }, 300);
 }
+
+export function getPlaintextCacheSnapshot(): Record<string, string> {
+  return Object.fromEntries(plaintextCache);
+}
+
 function cachePlaintext(messageId: string, plaintext: string) {
   if (!messageId || messageId.startsWith('queued-')) return;
   plaintextCache.set(messageId, plaintext);
@@ -241,6 +268,7 @@ window.addEventListener('offline', () => {
 });
 
 export async function renderChats(container: HTMLElement) {
+  await hydratePlaintextCache();
   container.innerHTML = `
     <div class="panel-list" id="conversations-panel">
       <div class="panel-header">
@@ -249,7 +277,7 @@ export async function renderChats(container: HTMLElement) {
           <button class="icon-btn" id="global-search-btn" title="Search (⌘/Ctrl+K)" aria-label="Search">
             <i data-lucide="search" style="width:18px;height:18px"></i>
           </button>
-          <button class="icon-btn" id="new-chat-btn" title="New conversation">
+          <button class="icon-btn" id="new-chat-btn" title="New conversation" aria-label="New conversation">
             <i data-lucide="edit" style="width:18px;height:18px"></i>
           </button>
         </div>
@@ -402,16 +430,22 @@ function renderFolderTabs(folders: api.ChatFolder[]) {
   if (!folders.length) { tabsEl.style.display = 'none'; return; }
 
   tabsEl.style.display = 'flex';
+  tabsEl.setAttribute('role', 'tablist');
+  tabsEl.setAttribute('aria-label', 'Chat folders');
   tabsEl.innerHTML = `
-    <button class="folder-tab ${activeFolderId === null ? 'active' : ''}" data-folder-id="">All</button>
-    ${folders.map(f => `<button class="folder-tab ${activeFolderId === f.id ? 'active' : ''}" data-folder-id="${f.id}" data-conv-ids="${f.conversation_ids.join(',')}">${escapeHtml(f.icon)} ${escapeHtml(f.name)}</button>`).join('')}
+    <button class="folder-tab ${activeFolderId === null ? 'active' : ''}" role="tab" aria-selected="${activeFolderId === null ? 'true' : 'false'}" data-folder-id="">All</button>
+    ${folders.map(f => `<button class="folder-tab ${activeFolderId === f.id ? 'active' : ''}" role="tab" aria-selected="${activeFolderId === f.id ? 'true' : 'false'}" data-folder-id="${f.id}" data-conv-ids="${f.conversation_ids.join(',')}">${escapeHtml(f.icon)} ${escapeHtml(f.name)}</button>`).join('')}
   `;
   tabsEl.querySelectorAll('.folder-tab').forEach(btn => {
     btn.addEventListener('click', () => {
       const fid = (btn as HTMLElement).dataset.folderId || null;
       activeFolderId = fid || null;
-      tabsEl.querySelectorAll('.folder-tab').forEach(b => b.classList.remove('active'));
+      tabsEl.querySelectorAll('.folder-tab').forEach(b => {
+        b.classList.remove('active');
+        b.setAttribute('aria-selected', 'false');
+      });
       btn.classList.add('active');
+      btn.setAttribute('aria-selected', 'true');
       renderConversationsList();
     });
   });
@@ -467,9 +501,9 @@ function renderConversationsList(filter = '') {
         <div class="swipe-container" data-conv-id="${c.id}">
           <div class="swipe-actions-right">
             <button class="swipe-action swipe-pin" title="${c.pinned ? 'Unpin' : 'Pin'}" aria-label="${c.pinned ? 'Unpin conversation' : 'Pin conversation'}">📌</button>
-            <button class="swipe-action swipe-mute" title="Mute"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18.8 5.2a1 1 0 0 0-1.4 0l-12 12a1 1 0 1 0 1.4 1.4l12-12a1 1 0 0 0 0-1.4z"/><path d="M2 1 1 2"/><path d="m7 7-3.8 3.8a2 2 0 0 0 0 2.8L8 18.4a2 2 0 0 0 2.8 0L14.7 14.7"/><path d="m10 10 4-4a2 2 0 0 1 2.8 0l2.4 2.4a2 2 0 0 1 0 2.8L15.3 15.3"/></svg></button>
-            <button class="swipe-action swipe-archive" title="Archive"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></svg></button>
-            <button class="swipe-action swipe-delete" title="Delete"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg></button>
+            <button class="swipe-action swipe-mute" title="Mute" aria-label="Mute conversation"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18.8 5.2a1 1 0 0 0-1.4 0l-12 12a1 1 0 1 0 1.4 1.4l12-12a1 1 0 0 0 0-1.4z"/><path d="M2 1 1 2"/><path d="m7 7-3.8 3.8a2 2 0 0 0 0 2.8L8 18.4a2 2 0 0 0 2.8 0L14.7 14.7"/><path d="m10 10 4-4a2 2 0 0 1 2.8 0l2.4 2.4a2 2 0 0 1 0 2.8L15.3 15.3"/></svg></button>
+            <button class="swipe-action swipe-archive" title="Archive" aria-label="Archive conversation"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></svg></button>
+            <button class="swipe-action swipe-delete" title="Delete" aria-label="Delete conversation"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg></button>
           </div>
           <div class="conversation-item swipeable ${isActive ? 'active' : ''}" data-id="${c.id}" role="button" tabindex="0" aria-label="Chat with ${escapeHtml(name)}" ${isActive ? 'aria-current="true"' : ''}>
             ${renderAvatar(name, other?.avatar_url, other?.user_id, 50, 18, other?.account_tier)}
@@ -661,14 +695,21 @@ async function openConversation(conversationId: string) {
     // Auto-resize
     input.style.height = 'auto';
     input.style.height = Math.min(input.scrollHeight, 120) + 'px';
-    // Save draft
+    // Save draft to secure store (fire-and-forget)
     const v = input.value;
-    if (v) localStorage.setItem(`rocchat_draft_${conversationId}`, v);
-    else localStorage.removeItem(`rocchat_draft_${conversationId}`);
+    void (v ? putSecretString(`rocchat_draft_${conversationId}`, v) : deleteSecret(`rocchat_draft_${conversationId}`));
   });
 
-  // Restore draft
-  const savedDraft = localStorage.getItem(`rocchat_draft_${conversationId}`);
+  // Restore draft — check secure store first, fall back to legacy localStorage and migrate
+  const [secureDraft, legacyDraft] = await Promise.all([
+    getSecretString(`rocchat_draft_${conversationId}`).catch(() => null),
+    Promise.resolve(localStorage.getItem(`rocchat_draft_${conversationId}`)),
+  ]);
+  const savedDraft = secureDraft ?? legacyDraft;
+  if (legacyDraft && !secureDraft) {
+    void putSecretString(`rocchat_draft_${conversationId}`, legacyDraft);
+    localStorage.removeItem(`rocchat_draft_${conversationId}`);
+  }
   if (savedDraft && input) {
     input.value = savedDraft;
     sendBtn.disabled = false;
@@ -1105,7 +1146,8 @@ async function sendMessageHandler() {
   input.value = '';
   input.style.height = 'auto';
   sendBtn.disabled = true;
-  localStorage.removeItem(`rocchat_draft_${state.activeConversationId}`);
+  void deleteSecret(`rocchat_draft_${state.activeConversationId}`);
+  localStorage.removeItem(`rocchat_draft_${state.activeConversationId}`); // clean legacy
 
   const conv = state.conversations.find((c) => c.id === state.activeConversationId);
   const userId = localStorage.getItem('rocchat_user_id') || '';

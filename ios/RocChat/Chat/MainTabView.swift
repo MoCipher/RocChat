@@ -2324,8 +2324,7 @@ struct ConversationView: View {
         let urlStr = "wss://\(wsHost)/api/ws/\(conversation.id)?userId=\(userId)&deviceId=ios&token=\(token)"
         guard let url = URL(string: urlStr) else { return }
 
-        let session = URLSession(configuration: .default)
-        let task = session.webSocketTask(with: url)
+        let task = APIClient.shared.webSocketTask(with: url)
         wsTask = task
         task.resume()
         // Successful resume does not mean the socket is open, but receive()
@@ -4125,7 +4124,7 @@ struct SettingsView: View {
                 // Load default disappear timer
                 if let ddt = me["default_disappear_timer"] as? Int { defaultDisappearTimer = ddt }
                 // Generate identity key fingerprint from local key
-                if let keyData = UserDefaults.standard.data(forKey: "identity_key_public") {
+                if let keyData = secureData(forKey: "identity_key_public") {
                     identityKeyFingerprint = keyData.map { String(format: "%02x", $0) }.joined(separator: " ").uppercased()
                 }
             } catch {}
@@ -4169,16 +4168,34 @@ struct SettingsView: View {
         } catch {}
     }
 
+    private func secureData(forKey key: String) -> Data? {
+        SecureStorage.shared.getData(forKey: key) ?? UserDefaults.standard.data(forKey: key)
+    }
+
+    private func secureString(forKey key: String) -> String? {
+        SecureStorage.shared.get(forKey: key) ?? UserDefaults.standard.string(forKey: key)
+    }
+
+    private func storeSecureData(_ data: Data, forKey key: String) {
+        SecureStorage.shared.setData(data, forKey: key)
+        UserDefaults.standard.removeObject(forKey: key)
+    }
+
+    private func storeSecureString(_ value: String, forKey key: String) {
+        SecureStorage.shared.set(value, forKey: key)
+        UserDefaults.standard.removeObject(forKey: key)
+    }
+
     private func generateRecoveryPhrase() {
         let result = BIP39.generate()
         recoveryPhrase = result.mnemonic
 
         // Derive recovery key and encrypt the identity private keys for server-side backup
         let recoveryKey = BIP39.deriveRecoveryKey(entropy: result.entropy)
-        if let identityPriv = UserDefaults.standard.data(forKey: "rocchat_identity_dh_priv") {
+        if let identityPriv = secureData(forKey: "rocchat_identity_dh_priv") {
             let keyBundle: [String: String] = [
                 "identityDHPrivate": identityPriv.base64EncodedString(),
-                "identityPrivate": (UserDefaults.standard.data(forKey: "identity_key_private") ?? Data()).base64EncodedString()
+                "identityPrivate": (secureData(forKey: "identity_key_private") ?? Data()).base64EncodedString()
             ]
             if let bundleData = try? JSONSerialization.data(withJSONObject: keyBundle),
                let encrypted = try? BIP39.encryptForRecovery(keyBundle: bundleData, recoveryKey: recoveryKey) {
@@ -4192,7 +4209,7 @@ struct SettingsView: View {
         }
 
         // Store mnemonic in Keychain (not UserDefaults)
-        SecureStorage.shared.set(recoveryPhrase, forKey: "recovery_phrase")
+        storeSecureString(recoveryPhrase, forKey: "recovery_phrase")
     }
 
     // MARK: - Key Transfer (Source Device)
@@ -4228,10 +4245,10 @@ struct SettingsView: View {
 
                 // Gather local keys
                 let keyBundle: [String: String] = [
-                    "identityDHPrivate": (UserDefaults.standard.data(forKey: "rocchat_identity_dh_priv") ?? Data()).base64EncodedString(),
-                    "identityDHPublic": (UserDefaults.standard.data(forKey: "rocchat_identity_dh_pub") ?? Data()).base64EncodedString(),
-                    "identityPrivate": (UserDefaults.standard.data(forKey: "identity_key_private") ?? Data()).base64EncodedString(),
-                    "identityPublic": (UserDefaults.standard.data(forKey: "identity_key_public") ?? Data()).base64EncodedString()
+                    "identityDHPrivate": (secureData(forKey: "rocchat_identity_dh_priv") ?? Data()).base64EncodedString(),
+                    "identityDHPublic": (secureData(forKey: "rocchat_identity_dh_pub") ?? Data()).base64EncodedString(),
+                    "identityPrivate": (secureData(forKey: "identity_key_private") ?? Data()).base64EncodedString(),
+                    "identityPublic": (secureData(forKey: "identity_key_public") ?? Data()).base64EncodedString()
                 ]
                 let bundleData = try JSONSerialization.data(withJSONObject: keyBundle)
 
@@ -4297,18 +4314,18 @@ struct SettingsView: View {
 
                 // Store received keys
                 if let v = keyBundle["identityDHPrivate"], let d = Data(base64Encoded: v) {
-                    UserDefaults.standard.set(d, forKey: "rocchat_identity_dh_priv")
+                    storeSecureData(d, forKey: "rocchat_identity_dh_priv")
                     SessionManager.shared.identityDHPrivate = d
                 }
                 if let v = keyBundle["identityDHPublic"], let d = Data(base64Encoded: v) {
-                    UserDefaults.standard.set(d, forKey: "rocchat_identity_dh_pub")
+                    storeSecureData(d, forKey: "rocchat_identity_dh_pub")
                     SessionManager.shared.identityDHPublic = d
                 }
                 if let v = keyBundle["identityPrivate"], let d = Data(base64Encoded: v) {
-                    UserDefaults.standard.set(d, forKey: "identity_key_private")
+                    storeSecureData(d, forKey: "identity_key_private")
                 }
                 if let v = keyBundle["identityPublic"], let d = Data(base64Encoded: v) {
-                    UserDefaults.standard.set(d, forKey: "identity_key_public")
+                    storeSecureData(d, forKey: "identity_key_public")
                 }
 
                 linkMessage = "✓ Keys received — encryption ready"
@@ -4579,9 +4596,18 @@ struct SettingsView: View {
         guard passphrase.count >= 12 else { backupStatus = "Passphrase must be 12+ characters"; return }
         // Gather local data
         var backupData: [String: Any] = [:]
-        let keysToBackup = ["identity_key_public", "identity_key_private", "recovery_phrase",
-                            "rocchat_custom_emoji", "rocchat_decoy_convs", "default_disappear_timer"]
-        for key in keysToBackup {
+        let secureDataKeys = ["identity_key_public", "identity_key_private", "rocchat_identity_dh_pub", "rocchat_identity_dh_priv"]
+        for key in secureDataKeys {
+            if let data = secureData(forKey: key) {
+                backupData[key] = data.base64EncodedString()
+            }
+        }
+        if let recoveryPhrase = secureString(forKey: "recovery_phrase") {
+            backupData["recovery_phrase"] = recoveryPhrase
+        }
+
+        let defaultsBackedKeys = ["rocchat_custom_emoji", "rocchat_decoy_convs", "default_disappear_timer"]
+        for key in defaultsBackedKeys {
             if let val = UserDefaults.standard.object(forKey: key) {
                 if let data = val as? Data {
                     backupData[key] = data.base64EncodedString()
@@ -4667,11 +4693,21 @@ struct SettingsView: View {
             }
 
             // Restore keys
-            if let identityKey = json["identity_key"] as? String, let data = Data(base64Encoded: identityKey) {
-                UserDefaults.standard.set(data, forKey: "identity_private_key")
+            if let identityKey = (json["identity_key_private"] as? String) ?? (json["identity_key"] as? String),
+               let data = Data(base64Encoded: identityKey) {
+                storeSecureData(data, forKey: "identity_key_private")
             }
             if let identityPub = json["identity_key_public"] as? String, let data = Data(base64Encoded: identityPub) {
-                UserDefaults.standard.set(data, forKey: "identity_key_public")
+                storeSecureData(data, forKey: "identity_key_public")
+            }
+            if let identityDhPub = json["rocchat_identity_dh_pub"] as? String, let data = Data(base64Encoded: identityDhPub) {
+                storeSecureData(data, forKey: "rocchat_identity_dh_pub")
+            }
+            if let identityDhPriv = json["rocchat_identity_dh_priv"] as? String, let data = Data(base64Encoded: identityDhPriv) {
+                storeSecureData(data, forKey: "rocchat_identity_dh_priv")
+            }
+            if let recoveryPhrase = json["recovery_phrase"] as? String {
+                storeSecureString(recoveryPhrase, forKey: "recovery_phrase")
             }
             // Restore sessions
             if let sessions = json["sessions"] as? [String: Any] {

@@ -183,8 +183,10 @@ class AuthViewModel: ObservableObject {
                 try RocCrypto.storeKeys(vaultKey: vaultKey, encryptedKeys: encryptedKeys)
                 
                 // Cache key material for E2E session manager
-                UserDefaults.standard.set(identityDHKey.publicKey.rawRepresentation, forKey: "rocchat_identity_dh_pub")
-                UserDefaults.standard.set(identityDHKey.rawRepresentation, forKey: "rocchat_identity_dh_priv")
+                SecureStorage.shared.setData(identityDHKey.publicKey.rawRepresentation, forKey: "rocchat_identity_dh_pub")
+                SecureStorage.shared.setData(identityDHKey.rawRepresentation, forKey: "rocchat_identity_dh_priv")
+                UserDefaults.standard.removeObject(forKey: "rocchat_identity_dh_pub")
+                UserDefaults.standard.removeObject(forKey: "rocchat_identity_dh_priv")
                 SessionManager.shared.identityDHPublic = identityDHKey.publicKey.rawRepresentation
                 SessionManager.shared.identityDHPrivate = identityDHKey.rawRepresentation
                 SessionManager.shared.cacheKeyMaterial(
@@ -239,7 +241,8 @@ class AuthViewModel: ObservableObject {
     private static func generateRecoveryPhrase() -> [String] {
         let result = BIP39.generate()
         // Store entropy for recovery key derivation
-        UserDefaults.standard.set(result.entropy, forKey: "bip39_entropy")
+        SecureStorage.shared.setData(result.entropy, forKey: "bip39_entropy")
+        UserDefaults.standard.removeObject(forKey: "bip39_entropy")
         return result.mnemonic.split(separator: " ").map(String.init)
     }
 }

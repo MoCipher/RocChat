@@ -49,17 +49,6 @@ export async function handleKeys(
     return jsonResponse({ refill: false });
   }
 
-  // GET /api/keys/refill-signal — client polls this after reconnect to learn if it should upload more OTPKs
-  if (path === '/api/keys/refill-signal' && request.method === 'GET') {
-    const signal = await env.KV.get(`refill_signal:${session.userId}`);
-    if (signal !== null) {
-      // Consume the signal
-      await env.KV.delete(`refill_signal:${session.userId}`);
-      return jsonResponse({ refill: true, remaining: parseInt(signal, 10) });
-    }
-    return jsonResponse({ refill: false });
-  }
-
   return errorResponse('Not found', 404);
 }
 

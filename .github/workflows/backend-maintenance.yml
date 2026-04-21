@@ -1,0 +1,53 @@
+name: Backend Maintenance
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backend-maintenance
+  cancel-in-progress: false
+
+jobs:
+  run-maintenance:
+    name: Trigger RocChat Maintenance
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Validate scheduler secrets
+        env:
+          MAINTENANCE_URL: ${{ secrets.ROCCHAT_MAINTENANCE_URL }}
+          SCHEDULER_SECRET: ${{ secrets.ROCCHAT_SCHEDULER_SECRET }}
+        run: |
+          set -euo pipefail
+          if [ -z "${MAINTENANCE_URL}" ]; then
+            echo "Missing secret ROCCHAT_MAINTENANCE_URL" >&2
+            exit 1
+          fi
+          if [ -z "${SCHEDULER_SECRET}" ]; then
+            echo "Missing secret ROCCHAT_SCHEDULER_SECRET" >&2
+            exit 1
+          fi
+
+      - name: Call backend maintenance endpoint
+        env:
+          MAINTENANCE_URL: ${{ secrets.ROCCHAT_MAINTENANCE_URL }}
+          SCHEDULER_SECRET: ${{ secrets.ROCCHAT_SCHEDULER_SECRET }}
+        run: |
+          set -euo pipefail
+          curl --fail --show-error --silent \
+            --request POST \
+            --max-time 45 \
+            --retry 2 \
+            --retry-delay 2 \
+            --header "x-scheduler-secret: ${SCHEDULER_SECRET}" \
+            --header 'content-type: application/json' \
+            --data '{}' \
+            "${MAINTENANCE_URL}" | tee maintenance-response.json
+
+      - name: Print maintenance result
+        run: cat maintenance-response.json

@@ -6,7 +6,8 @@ struct RocChatApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @StateObject private var authVM = AuthViewModel()
     @Environment(\.scenePhase) var scenePhase
-    
+    @State private var isObscured = false
+
     var body: some Scene {
         WindowGroup {
             Group {
@@ -27,7 +28,19 @@ struct RocChatApp: App {
             }
             .preferredColorScheme(nil) // Follow system
             .tint(.rocGold)
+            // Screenshot / app-switcher blur overlay
+            .overlay {
+                if isObscured {
+                    Rectangle()
+                        .fill(.ultraThinMaterial)
+                        .ignoresSafeArea()
+                        .transition(.opacity)
+                }
+            }
             .onChange(of: scenePhase) { _, newPhase in
+                withAnimation(.easeInOut(duration: 0.15)) {
+                    isObscured = (newPhase == .inactive || newPhase == .background)
+                }
                 if newPhase == .background {
                     // Re-lock if biometric is enabled
                     if authVM.biometricEnabled && authVM.biometricAvailable && authVM.isAuthenticated {

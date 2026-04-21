@@ -47,7 +47,7 @@ export async function rateLimit(
   env: Env,
   userId: string,
   path: string,
-): Promise<{ ok: boolean }> {
+): Promise<{ ok: boolean; retryAfter?: number }> {
   let limit: number;
   let window: number;
   let bucket: string;
@@ -75,7 +75,7 @@ export async function rateLimit(
   const timestamps: number[] = raw ? JSON.parse(raw) : [];
   // Prune entries outside the window
   const valid = timestamps.filter(t => now - t < windowMs);
-  if (valid.length >= limit) return { ok: false };
+  if (valid.length >= limit) return { ok: false, retryAfter: Math.ceil((valid[0] + windowMs - now) / 1000) };
   valid.push(now);
   await env.KV.put(key, JSON.stringify(valid), { expirationTtl: window });
   return { ok: true };

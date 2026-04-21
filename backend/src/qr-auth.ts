@@ -10,7 +10,7 @@
  */
 
 import type { Env } from './index.js';
-import { jsonResponse, errorResponse } from './middleware.js';
+import { jsonResponse, errorResponse, logEvent } from './middleware.js';
 
 const QR_TTL = 300; // 5 minutes
 
@@ -23,9 +23,9 @@ export async function handleQrAuth(
 ): Promise<Response> {
   switch (action) {
     case 'generate':
-      return generate(env);
+      return generate(request, env);
     case 'poll':
-      return poll(env, url);
+      return poll(request, env, url);
     case 'authorize':
       return authorize(request, env, session);
     default:
@@ -33,20 +33,28 @@ export async function handleQrAuth(
   }
 }
 
-async function generate(env: Env): Promise<Response> {
+async function generate(request: Request, env: Env): Promise<Response> {
   const token = crypto.randomUUID();
-  // Store in KV with 5 min TTL, status = pending
+  const ip = request.headers.get('CF-Connecting-IP') ?? 'unknown';
+  // Store in KV with 5 min TTL, status = pending, bind to generating IP
   await env.KV.put(
     `qr:${token}`,
-    JSON.stringify({ status: 'pending', created: Date.now() }),
+    JSON.stringify({ status: 'pending', created: Date.now(), ip }),
     { expirationTtl: QR_TTL },
   );
   return jsonResponse({ token, expires_in: QR_TTL });
 }
 
-async function poll(env: Env, url: URL): Promise<Response> {
+async function poll(request: Request, env: Env, url: URL): Promise<Response> {
   const token = url.pathname.split('/api/auth/qr/poll/')[1];
   if (!token) return errorResponse('Missing token', 400);
+
+  // Soft rate-limit polls by IP: max 60 polls/min per IP
+  const pollIp = request.headers.get('CF-Connecting-IP') ?? 'unknown';
+  const pollKey = `qr_poll_rl:${pollIp}`;
+  const pollHits = parseInt(await env.KV.get(pollKey) ?? '0', 10);
+  if (pollHits > 60) return errorResponse('Too many poll requests', 429);
+  await env.KV.put(pollKey, String(pollHits + 1), { expirationTtl: 60 });
 
   const raw = await env.KV.get(`qr:${token}`);
   if (!raw) return jsonResponse({ status: 'expired' });
@@ -87,8 +95,13 @@ async function authorize(
   const raw = await env.KV.get(`qr:${body.qr_token}`);
   if (!raw) return errorResponse('QR code expired', 410);
 
-  const data = JSON.parse(raw) as { status: string };
-  if (data.status !== 'pending') return errorResponse('QR code already used', 409);
+  const data = JSON.parse(raw) as { status: string; ip?: string };
+
+  // Log IP mismatch (informational — mobile may have different IP, do not block)
+  const authIp = request.headers.get('CF-Connecting-IP') ?? 'unknown';
+  if (data.ip && data.ip !== 'unknown' && data.ip !== authIp) {
+    logEvent('warn', 'qr_ip_mismatch', { userId: session.userId, generateIp: data.ip, authorizeIp: authIp });
+  }
 
   // Fetch user data for the web session
   const user = await env.DB.prepare(

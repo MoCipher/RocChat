@@ -193,6 +193,48 @@
   --shadow-modal: 0 25px 60px rgba(0, 0, 0, 0.5), 0 10px 30px rgba(212, 175, 55, 0.05);
 }
 
+/* ── AMOLED / Pure Black theme ── */
+:root.amoled {
+  --bg-app:          #000000;
+  --bg-sidebar:      #000000;
+  --bg-card:         #0A0A0A;
+  --bg-card-hover:   #111111;
+  --bg-elevated:     #0D0D0D;
+  --bg-input:        rgba(212, 175, 55, 0.06);
+
+  --bg-bubble-mine:       rgba(212, 175, 55, 0.14);
+  --bg-bubble-theirs:     #0A0A0A;
+  --bg-bubble-mine-hover: rgba(212, 175, 55, 0.2);
+
+  --text-primary:   #E8E2D4;
+  --text-secondary: #A09888;
+  --text-tertiary:  #8A8078;
+
+  --border-weak:   rgba(139, 115, 85, 0.08);
+  --border-norm:   rgba(139, 115, 85, 0.12);
+  --border-strong: rgba(139, 115, 85, 0.24);
+
+  --surface-primary:   rgba(0, 0, 0, 0.98);
+  --surface-secondary: rgba(0, 0, 0, 0.9);
+  --surface-elevated:  rgba(10, 10, 10, 0.96);
+  --surface-solid:     #0A0A0A;
+
+  --sidebar-bg:     #000000;
+  --sidebar-hover:  rgba(212, 175, 55, 0.08);
+  --sidebar-active: rgba(212, 175, 55, 0.15);
+
+  --shadow-card:  0 8px 30px rgba(0, 0, 0, 0.8);
+  --shadow-modal: 0 25px 60px rgba(0, 0, 0, 0.9), 0 10px 30px rgba(212, 175, 55, 0.04);
+}
+
+/* ── Font scale (user preference, applied via --roc-font-scale CSS var) ── */
+:root {
+  --roc-font-scale: 1;
+}
+html {
+  font-size: calc(var(--roc-font-scale, 1) * 15px);
+}
+
 /* ── Auto theme: apply light variables when OS prefers light (and no explicit .dark/.light class) ── */
 @media (prefers-color-scheme: light) {
   :root:not(.dark):not(.light) {

@@ -115,6 +115,10 @@ async function init() {
   const savedTheme = localStorage.getItem('rocchat_theme') || 'auto';
   applyTheme(savedTheme);
 
+  // Apply saved font scale
+  const savedFontScale = parseFloat(localStorage.getItem('rocchat_font_scale') || '1');
+  if (!isNaN(savedFontScale)) document.documentElement.style.setProperty('--roc-font-scale', String(savedFontScale));
+
   // App Lock — check before showing any UI
   if (!(await checkAppLock())) {
     const loading = document.getElementById('loading-screen');
@@ -164,6 +168,35 @@ function initAfterUnlock() {
   bootstrapVapidKey().then(() => registerWebPush());
   showOnboardingIfNeeded();
 
+  // Listen for REFILL_KEYS signal from SW (triggered by periodic sync)
+  navigator.serviceWorker?.addEventListener('message', (evt: MessageEvent<{ type?: string; remaining?: number }>) => {
+    if (evt.data?.type === 'REFILL_KEYS') {
+      checkPreKeyReplenishment();
+    }
+  });
+
+  // SW update toast — inform user when a new version is waiting
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.ready.then((reg) => {
+      reg.addEventListener('updatefound', () => {
+        const newSW = reg.installing;
+        if (!newSW) return;
+        newSW.addEventListener('statechange', () => {
+          if (newSW.state === 'installed' && navigator.serviceWorker.controller) {
+            showSwUpdateToast();
+          }
+        });
+      });
+    });
+    // Register periodic sync for pre-key replenishment (Chrome/Android)
+    navigator.serviceWorker.ready.then(async (reg) => {
+      try {
+        const ps = (reg as unknown as { periodicSync?: { register: (tag: string, opts: object) => Promise<void> } }).periodicSync;
+        if (ps) await ps.register('refill-prekeys', { minInterval: 24 * 60 * 60 * 1000 });
+      } catch { /* periodic sync not supported */ }
+    });
+  }
+
   // ── Command palette commands (lazy-registered, idempotent) ──
   registerPaletteCommand({ id: 'tab.chats',    label: 'Go to Chats',    shortcut: '⌘1', action: () => { currentTab = 'chats';    renderApp(); } });
   registerPaletteCommand({ id: 'tab.calls',    label: 'Go to Calls',    shortcut: '⌘2', action: () => { currentTab = 'calls';    renderApp(); } });
@@ -200,6 +233,21 @@ function initAfterUnlock() {
     else if (key === '3') { e.preventDefault(); currentTab = 'channels'; renderApp(); }
     else if (key === ',') { e.preventDefault(); currentTab = 'settings'; renderApp(); }
   });
+
+  // '?' shortcut — show keyboard shortcut cheatsheet
+  window.addEventListener('keydown', (e) => {
+    if (e.key !== '?' || e.metaKey || e.ctrlKey || e.altKey) return;
+    const target = e.target as HTMLElement | null;
+    if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return;
+    e.preventDefault();
+    showShortcutCheatsheet();
+  });
+
+  // Handle ?action= URL parameters for PWA share/open-file targets
+  const searchParams = new URLSearchParams(window.location.search);
+  const urlAction = searchParams.get('action');
+  if (urlAction === 'open-file') handleOpenFileAction();
+  else if (urlAction === 'share') handleShareAction();
 }
 
 function showLanding() {
@@ -508,10 +556,44 @@ function showOnboardingIfNeeded() {
             <div style="margin-top:var(--sp-3);display:flex;justify-content:center;gap:6px">
               <div style="width:8px;height:8px;border-radius:50%;background:var(--roc-gold,#D4AF37)"></div>
               <div style="width:8px;height:8px;border-radius:50%;background:var(--border-norm)"></div>
+              <div style="width:8px;height:8px;border-radius:50%;background:var(--border-norm)"></div>
             </div>
           </div>
         </div>`));
       overlay.querySelector('#onboard-next')?.addEventListener('click', () => renderStep(2));
+    } else if (step === 2) {
+      // Recovery phrase reminder
+      overlay.replaceChildren(parseHTML(`
+        <div class="rc-dialog" style="max-width:440px">
+          <div style="text-align:center;padding:var(--sp-6)">
+            <div style="font-size:56px;margin-bottom:var(--sp-4)">🗝️</div>
+            <h2 style="margin:0 0 var(--sp-2);font-size:var(--text-xl);color:var(--roc-gold,#D4AF37)">Back Up Your Keys</h2>
+            <p style="color:var(--text-secondary);font-size:var(--text-sm);line-height:1.6;margin:0 0 var(--sp-4)">
+              Your encryption keys are stored only on your device. If you lose access, your messages cannot be recovered without a backup.
+            </p>
+            <div style="background:rgba(212,175,55,0.08);border:1px solid rgba(212,175,55,0.3);border-radius:12px;padding:var(--sp-4);margin-bottom:var(--sp-4);text-align:left">
+              <div style="font-size:var(--text-sm);margin-bottom:var(--sp-2)">
+                <strong style="color:var(--roc-gold,#D4AF37)">⚠️ Zero-knowledge means zero recovery</strong>
+              </div>
+              <ul style="margin:0;padding-left:var(--sp-4);color:var(--text-secondary);font-size:var(--text-sm);line-height:1.7">
+                <li>Export your key backup in <strong>Settings → Privacy → Export Keys</strong></li>
+                <li>Store it in a password manager or encrypted drive</li>
+                <li>Never share your passphrase with anyone</li>
+              </ul>
+            </div>
+            <div style="display:flex;gap:var(--sp-2)">
+              <button class="btn btn-secondary" style="flex:1" id="onboard-skip-backup">Remind me later</button>
+              <button class="btn btn-primary" style="flex:1" id="onboard-backup-next">I understand →</button>
+            </div>
+            <div style="margin-top:var(--sp-3);display:flex;justify-content:center;gap:6px">
+              <div style="width:8px;height:8px;border-radius:50%;background:var(--border-norm)"></div>
+              <div style="width:8px;height:8px;border-radius:50%;background:var(--roc-gold,#D4AF37)"></div>
+              <div style="width:8px;height:8px;border-radius:50%;background:var(--border-norm)"></div>
+            </div>
+          </div>
+        </div>`));
+      overlay.querySelector('#onboard-backup-next')?.addEventListener('click', () => renderStep(3));
+      overlay.querySelector('#onboard-skip-backup')?.addEventListener('click', () => renderStep(3));
     } else {
       overlay.replaceChildren(parseHTML(`
         <div class="rc-dialog" style="max-width:440px">
@@ -533,8 +615,7 @@ function showOnboardingIfNeeded() {
               <button class="btn btn-primary" style="flex:1" id="onboard-done">Get Started</button>
             </div>
             <div style="margin-top:var(--sp-3);display:flex;justify-content:center;gap:6px">
-              <div style="width:8px;height:8px;border-radius:50%;background:var(--border-norm)"></div>
-              <div style="width:8px;height:8px;border-radius:50%;background:var(--roc-gold,#D4AF37)"></div>
+              <div style="width:8px;height:8px;border-radius:50%;background:var(--border-norm)"></div>              <div style="width:8px;height:8px;border-radius:50%;background:var(--border-norm)"></div>              <div style="width:8px;height:8px;border-radius:50%;background:var(--roc-gold,#D4AF37)"></div>
             </div>
           </div>
         </div>`));
@@ -580,6 +661,88 @@ function showOnboardingIfNeeded() {
       overlay.remove();
     }
   });
+}
+
+/** Show a dismissable toast when a new SW is waiting to activate. */
+function showSwUpdateToast() {
+  if (document.getElementById('sw-update-toast')) return;
+  const toast = document.createElement('div');
+  toast.id = 'sw-update-toast';
+  toast.setAttribute('role', 'alert');
+  toast.style.cssText = 'position:fixed;bottom:80px;left:50%;transform:translateX(-50%);z-index:9999;background:var(--bg-elevated,#1C1814);border:1px solid var(--roc-gold,#D4AF37);border-radius:12px;padding:12px 20px;display:flex;align-items:center;gap:12px;box-shadow:var(--shadow-lg);font-size:13px;color:var(--text-primary,#E8E2D4);white-space:nowrap';
+  toast.replaceChildren(parseHTML(`
+    <span>🔄 A new version is available.</span>
+    <button id="sw-reload-btn" style="background:var(--roc-gold,#D4AF37);color:#000;border:none;border-radius:6px;padding:4px 12px;font-size:12px;font-weight:600;cursor:pointer">Reload</button>
+    <button id="sw-dismiss-btn" style="background:none;border:none;color:var(--text-tertiary);font-size:16px;cursor:pointer;line-height:1" aria-label="Dismiss">✕</button>
+  `));
+  document.body.appendChild(toast);
+  toast.querySelector('#sw-reload-btn')?.addEventListener('click', () => window.location.reload());
+  toast.querySelector('#sw-dismiss-btn')?.addEventListener('click', () => toast.remove());
+  setTimeout(() => toast.remove(), 30000);
+}
+
+/** Handle ?action=open-file — open the "import" section of Settings */
+function handleOpenFileAction() {
+  currentTab = 'settings';
+  renderApp();
+  // After render, trigger the import flow if available
+  const importBtn = document.querySelector('[data-settings-action="import"]') as HTMLElement | null;
+  if (importBtn) importBtn.click();
+}
+
+/** Handle ?action=share — open a "share to contact" dialog. */
+function handleShareAction() {
+  const params = new URLSearchParams(window.location.search);
+  const title = params.get('title') ?? '';
+  const text = params.get('text') ?? '';
+  const url = params.get('url') ?? '';
+  const shared = [title, text, url].filter(Boolean).join('\n');
+  if (!shared) return;
+  // Store in sessionStorage so the chat composer can pick it up
+  sessionStorage.setItem('rocchat_share_payload', shared);
+  currentTab = 'chats';
+  renderApp();
+}
+
+/** '?' keyboard shortcut — show a keyboard shortcut cheatsheet modal. */
+function showShortcutCheatsheet() {
+  const existing = document.getElementById('shortcut-cheatsheet-overlay');
+  if (existing) { existing.remove(); return; }
+  const overlay = document.createElement('div');
+  overlay.id = 'shortcut-cheatsheet-overlay';
+  overlay.className = 'rc-dialog-overlay';
+  overlay.replaceChildren(parseHTML(`
+    <div class="rc-dialog" style="max-width:480px" role="dialog" aria-modal="true" aria-label="Keyboard shortcuts">
+      <div style="padding:var(--sp-6)">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--sp-4)">
+          <h2 style="margin:0;font-size:var(--text-xl);color:var(--roc-gold,#D4AF37)">Keyboard Shortcuts</h2>
+          <button id="cheatsheet-close" style="background:none;border:none;font-size:20px;color:var(--text-secondary);cursor:pointer" aria-label="Close">✕</button>
+        </div>
+        <div style="display:grid;gap:8px;font-size:var(--text-sm)">
+          ${[
+            ['⌘K', 'Open command palette'],
+            ['⌘1', 'Go to Chats'],
+            ['⌘2', 'Go to Calls'],
+            ['⌘3', 'Go to Channels'],
+            ['⌘,', 'Go to Settings'],
+            ['?', 'Show this cheatsheet'],
+            ['Esc', 'Close dialogs / deselect'],
+          ].map(([key, desc]) => `
+            <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--border-weak)">
+              <span style="color:var(--text-secondary)">${desc}</span>
+              <kbd style="background:var(--surface-primary);border:1px solid var(--border-norm);border-radius:4px;padding:2px 8px;font-family:var(--font-mono);font-size:12px;color:var(--roc-gold,#D4AF37)">${key}</kbd>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+    </div>
+  `));
+  document.body.appendChild(overlay);
+  overlay.querySelector('#cheatsheet-close')?.addEventListener('click', () => overlay.remove());
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+  document.addEventListener('keydown', function escClose(e) {
+    if (e.key === 'Escape') { overlay.remove(); document.removeEventListener('keydown', escClose); }
+  }, { once: false });
 }
 
 // Boot

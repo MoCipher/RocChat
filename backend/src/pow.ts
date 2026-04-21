@@ -42,6 +42,18 @@ function leadingZeroBitsFromHex(hex: string): number {
   return bits;
 }
 
+/** Read PoW difficulty from KV (runtime-updatable), fall back to env, clamp to sane range. */
+export async function getPowDifficulty(env: Env): Promise<number> {
+  try {
+    const kv = await env.KV.get('pow:difficulty');
+    if (kv) {
+      const n = parseInt(kv, 10);
+      if (!isNaN(n)) return Math.min(Math.max(n, 12), 28);
+    }
+  } catch { /* KV unavailable */ }
+  return Math.min(Math.max(parseInt(env.POW_DIFFICULTY || '18', 10) || 18, 12), 28);
+}
+
 export async function createPowChallenge(env: Env, difficulty: number, ip: string): Promise<PowChallenge> {
   const token = crypto.randomUUID();
   const challenge = toHex(crypto.getRandomValues(new Uint8Array(16)));

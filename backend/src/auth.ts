@@ -7,7 +7,8 @@
 
 import type { Env } from './index.js';
 import { jsonResponse, errorResponse, apiError, generateSessionToken, logEvent } from './middleware.js';
-import { verifyPowSolution } from './pow.js';
+import { verifyPowSolution, getPowDifficulty } from './pow.js';
+import { sendLoginNotification } from './notifications.js';
 
 /** Minimum PBKDF2/scrypt iterations we will accept from clients. */
 const MIN_KDF_ITERATIONS = 100_000;
@@ -169,7 +170,7 @@ async function handleRegister(request: Request, env: Env): Promise<Response> {
   }
 
   // Proof-of-work anti-bot protection — no third-party CAPTCHA services
-  const difficulty = parseInt(env.POW_DIFFICULTY || '18', 10);
+  const difficulty = await getPowDifficulty(env);
   if (difficulty > 0) {
     const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
     if (!powToken || !powNonce) {
@@ -274,7 +275,7 @@ async function handleLogin(request: Request, env: Env): Promise<Response> {
     return apiError('WEAK_KDF', `Auth hash iteration count below minimum (${MIN_KDF_ITERATIONS})`);
   }
 
-  const difficulty = parseInt(env.POW_DIFFICULTY || '0', 10) || 0;
+  const difficulty = await getPowDifficulty(env);
   if (difficulty > 0) {
     const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
     if (!powToken || !powNonce) {
@@ -321,6 +322,9 @@ async function handleLogin(request: Request, env: Env): Promise<Response> {
 
   // Create session + refresh token
   const { sessionToken, refreshToken, sessionExpiresAt, refreshExpiresAt } = await issueSession(env, user.id, deviceId);
+
+  // Notify other devices of this new login (fire-and-forget — do not await)
+  void sendLoginNotification(env, user.id, deviceId, platform || 'web', deviceName || 'Unknown device', request.headers.get('CF-Connecting-IP') ?? undefined).catch(() => { /* non-critical */ });
 
   // Fetch signed pre-key public for client-side caching
   const spk = await env.DB.prepare(

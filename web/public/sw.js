@@ -1,4 +1,4 @@
-const CACHE_NAME = 'rocchat-v7';
+const CACHE_NAME = 'rocchat-v8';
 const SHELL_ASSETS = [
   '/',
   '/index.html',
@@ -255,4 +255,57 @@ self.addEventListener('sync', (event) => {
       })()
     );
   }
+});
+
+// Periodic Background Sync — check for pre-key replenishment once a day
+self.addEventListener('periodicsync', (event) => {
+  if (event.tag === 'refill-prekeys') {
+    event.waitUntil(
+      (async () => {
+        try {
+          const token = await requestAuthTokenFromClients();
+          if (!token) return;
+          const res = await fetch('/api/keys/refill-signal', {
+            headers: { Authorization: `Bearer ${token}` },
+          });
+          if (!res.ok) return;
+          const data = await res.json();
+          if (data.refill) {
+            // Notify all app tabs to upload more OTPKs
+            const clients = await self.clients.matchAll({ type: 'window' });
+            for (const client of clients) {
+              client.postMessage({ type: 'REFILL_KEYS', remaining: data.remaining });
+            }
+          }
+        } catch { /* non-critical */ }
+      })()
+    );
+  }
+});
+
+// Avatar cache — cache-first with background revalidation, max 200 entries
+const AVATAR_CACHE = 'rocchat-avatars-v1';
+const AVATAR_MAX_ENTRIES = 200;
+self.addEventListener('fetch', (event) => {
+  // Only handle /api/users/*/avatar GET requests in this secondary handler
+  if (event.request.method !== 'GET') return;
+  const url = new URL(event.request.url);
+  if (!/^\/api\/users\/[^/]+\/avatar$/.test(url.pathname)) return;
+
+  event.respondWith(
+    (async () => {
+      const cache = await caches.open(AVATAR_CACHE);
+      const cached = await cache.match(event.request);
+      // Background revalidate
+      const fetchPromise = fetch(event.request).then(async (response) => {
+        if (response.ok) {
+          const keys = await cache.keys();
+          if (keys.length >= AVATAR_MAX_ENTRIES) await cache.delete(keys[0]);
+          await cache.put(event.request, response.clone());
+        }
+        return response;
+      }).catch(() => null);
+      return cached || await fetchPromise || new Response('', { status: 503 });
+    })()
+  );
 });

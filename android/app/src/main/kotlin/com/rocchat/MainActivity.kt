@@ -41,6 +41,15 @@ class MainActivity : FragmentActivity() {
 
         // Create notification channel
         PushManager.createNotificationChannel(this)
+
+        // Root detection advisory check
+        val rootResult = RootDetectionHelper.check()
+        if (rootResult.isRooted) {
+            // We don't block — just warn the user about elevated risk
+            android.util.Log.w("RocChat", "Root indicators detected: ${rootResult.reasons}")
+            // Will show advisory dialog once the Compose UI is up (via a state flag)
+        }
+        val deviceIsRooted = rootResult.isRooted
         setContent {
             RocChatTheme {
                 val prefs = getSharedPreferences("rocchat", MODE_PRIVATE)
@@ -100,6 +109,10 @@ class MainActivity : FragmentActivity() {
                             }
                         )
                         LaunchedEffect(Unit) {
+                            // Root advisory shown once per app session before biometric
+                            if (deviceIsRooted) {
+                                // Shown after biometric so we don't block the lock screen
+                            }
                             BiometricHelper.authenticate(
                                 this@MainActivity,
                                 onSuccess = { biometricLocked = false; isAuthenticated = true },
@@ -115,6 +128,15 @@ class MainActivity : FragmentActivity() {
                         }
                     }
                     isAuthenticated -> {
+                        var showRootWarning by remember { mutableStateOf(deviceIsRooted) }
+                        if (showRootWarning) {
+                            AlertDialog(
+                                onDismissRequest = { showRootWarning = false },
+                                title = { Text("Security Advisory") },
+                                text = { Text("This device appears to be rooted or running a custom OS build. Rooting removes important security boundaries that protect your encryption keys. For maximum security, use RocChat on an unmodified device.") },
+                                confirmButton = { TextButton(onClick = { showRootWarning = false }) { Text("I Understand") } },
+                            )
+                        }
                         MainScreen(
                             onLogout = {
                                 // Server-side session invalidation

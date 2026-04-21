@@ -7,13 +7,16 @@
 
 const BASE = '/api';
 
-let sessionToken: string | null = localStorage.getItem('rocchat_token');
+// Session token is ephemeral — stored in sessionStorage so it's scoped to this tab
+// and is never persisted to disk. Refresh token is kept in localStorage for cross-session
+// persistence (it's rotated on each use and has a 30-day expiry).
+let sessionToken: string | null = sessionStorage.getItem('rocchat_token');
 let refreshToken: string | null = localStorage.getItem('rocchat_refresh_token');
 
 export function setToken(token: string | null) {
   sessionToken = token;
-  if (token) localStorage.setItem('rocchat_token', token);
-  else localStorage.removeItem('rocchat_token');
+  if (token) sessionStorage.setItem('rocchat_token', token);
+  else sessionStorage.removeItem('rocchat_token');
 }
 
 export function setRefreshToken(token: string | null) {

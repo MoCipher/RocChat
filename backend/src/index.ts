@@ -18,7 +18,7 @@ import { handleFeatures } from './features.js';
 import { handleLinkPreview } from './link-preview.js';
 import { handleGroups } from './groups.js';
 import { handleChannels } from './channels.js';
-import { createPowChallenge } from './pow.js';
+import { createPowChallenge, getPowDifficulty } from './pow.js';
 import { ChatRoom } from './durable-objects/ChatRoom.js';
 import { verifySession, rateLimit, jsonResponse, errorResponse, isOriginAllowed, apiError, logEvent } from './middleware.js';
 import type { Session } from './middleware.js';
@@ -75,14 +75,14 @@ export default {
         // Rate limit login by IP
         const loginIp = request.headers.get('CF-Connecting-IP') || 'unknown';
         const loginRl = await rateLimit(env, `ip:${loginIp}`, '/api/auth/login');
-        if (!loginRl.ok) return withCors(errorResponse('Too many login attempts', 429));
+        if (!loginRl.ok) return withCors(new Response(JSON.stringify({ error: 'Too many login attempts', code: 'RATE_LIMITED', retry_after: loginRl.retryAfter ?? 60 }), { status: 429, headers: { 'Content-Type': 'application/json', 'Retry-After': String(loginRl.retryAfter ?? 60) } }));
         return withCors(await handleAuth(request, env, 'login'));
       }
       if (path === '/api/auth/refresh' && request.method === 'POST') {
         // Rate limit refresh by IP to blunt refresh-token guessing
         const refIp = request.headers.get('CF-Connecting-IP') || 'unknown';
         const refRl = await rateLimit(env, `ip:${refIp}`, '/api/auth/refresh');
-        if (!refRl.ok) return withCors(errorResponse('Too many refresh attempts', 429));
+        if (!refRl.ok) return withCors(new Response(JSON.stringify({ error: 'Too many refresh attempts', code: 'RATE_LIMITED', retry_after: refRl.retryAfter ?? 60 }), { status: 429, headers: { 'Content-Type': 'application/json', 'Retry-After': String(refRl.retryAfter ?? 60) } }));
         return withCors(await handleRefresh(request, env));
       }
       if (path === '/api/health') {
@@ -132,14 +132,15 @@ export default {
       }
 
       if (path === '/api/config' && request.method === 'GET') {
+        const difficulty = await getPowDifficulty(env);
         return withCors(jsonResponse({
           pow_enabled: true,
-          pow_difficulty: parseInt(env.POW_DIFFICULTY || '18', 10),
+          pow_difficulty: difficulty,
         }));
       }
       if (path === '/api/features/pow/challenge' && request.method === 'GET') {
         const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
-        const difficulty = Math.min(Math.max(parseInt(env.POW_DIFFICULTY || '18', 10) || 18, 12), 24);
+        const difficulty = await getPowDifficulty(env);
         return withCors(jsonResponse(await createPowChallenge(env, difficulty, ip)));
       }
       if (path === '/api/features/transparency' && request.method === 'GET') {
@@ -278,7 +279,7 @@ export default {
       // Rate limit check
       const rlResult = await rateLimit(env, session.userId, path);
       if (!rlResult.ok) {
-        return withCors(errorResponse('Rate limit exceeded', 429));
+        return withCors(new Response(JSON.stringify({ error: 'Rate limit exceeded', code: 'RATE_LIMITED', retry_after: rlResult.retryAfter ?? 60 }), { status: 429, headers: { 'Content-Type': 'application/json', 'Retry-After': String(rlResult.retryAfter ?? 60) } }));
       }
 
       // QR authorize (authenticated)

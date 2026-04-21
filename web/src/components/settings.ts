@@ -238,6 +238,7 @@ export function renderSettings(container: HTMLElement) {
               <option value="auto">Auto</option>
               <option value="light">Light</option>
               <option value="dark">Dark</option>
+              <option value="amoled">AMOLED (Pure black)</option>
               <option value="scheduled">Scheduled</option>
             </select>
           </div>
@@ -249,6 +250,17 @@ export function renderSettings(container: HTMLElement) {
               <label style="font-size:var(--text-sm);color:var(--text-tertiary)">to</label>
               <input type="time" id="theme-dark-end" value="07:00" style="background:var(--bg-primary);border:1px solid var(--border);border-radius:var(--radius);padding:4px 8px;color:var(--text-primary);font-size:var(--text-sm)" />
               <button class="btn btn-outline" id="save-theme-schedule" style="font-size:var(--text-xs);padding:4px 12px">Save</button>
+            </div>
+          </div>
+          <div class="setting-row" style="margin-top:var(--sp-3)">
+            <div>
+              <div class="setting-label">Font Size</div>
+              <div class="setting-desc">Adjust text size across the app</div>
+            </div>
+            <div style="display:flex;gap:6px">
+              <button class="btn btn-outline font-size-btn" data-scale="0.9" style="font-size:11px;padding:4px 10px">A</button>
+              <button class="btn btn-outline font-size-btn" data-scale="1" style="font-size:13px;padding:4px 10px">A</button>
+              <button class="btn btn-outline font-size-btn" data-scale="1.15" style="font-size:15px;padding:4px 10px">A</button>
             </div>
           </div>
         </div>
@@ -291,6 +303,14 @@ export function renderSettings(container: HTMLElement) {
               <div class="setting-desc">Receive message alerts even when RocChat is closed</div>
             </div>
             <button class="btn btn-outline" id="btn-enable-push" style="font-size:var(--text-xs);padding:6px 16px">Enable</button>
+
+        <div class="settings-section">
+          <h3>Active Sessions</h3>
+          <div class="setting-desc" style="margin-bottom:var(--sp-3)">Devices currently logged in to your account. Revoke any you don't recognise.</div>
+          <div id="active-sessions-list" style="display:flex;flex-direction:column;gap:8px">
+            <div style="color:var(--text-tertiary);font-size:var(--text-sm)">Loading…</div>
+          </div>
+        </div>
           </div>
           <div id="push-status" style="font-size:var(--text-xs);color:var(--text-tertiary);margin-top:var(--sp-1)"></div>
         </div>
@@ -729,6 +749,21 @@ export function renderSettings(container: HTMLElement) {
     applyTheme('scheduled');
     showToast('Theme schedule saved');
   });
+
+  // Font size buttons
+  const savedScale = parseFloat(localStorage.getItem('rocchat_font_scale') || '1');
+  document.querySelectorAll<HTMLButtonElement>('.font-size-btn').forEach((btn) => {
+    const scale = parseFloat(btn.dataset.scale || '1');
+    if (Math.abs(scale - savedScale) < 0.01) btn.style.borderColor = 'var(--roc-gold,#D4AF37)';
+    btn.addEventListener('click', () => {
+      localStorage.setItem('rocchat_font_scale', String(scale));
+      document.documentElement.style.setProperty('--roc-font-scale', String(scale));
+      document.querySelectorAll<HTMLButtonElement>('.font-size-btn').forEach(b => b.style.borderColor = '');
+      btn.style.borderColor = 'var(--roc-gold,#D4AF37)';
+    });
+  });
+  // Apply saved font scale on settings open
+  if (!isNaN(savedScale)) document.documentElement.style.setProperty('--roc-font-scale', String(savedScale));
 
   // QR Code generation
   const username = localStorage.getItem('rocchat_username') || '';
@@ -1492,6 +1527,47 @@ export function renderSettings(container: HTMLElement) {
 
   // Identity key — click-to-copy and QR display
   const identityKeyEl = document.getElementById('identity-key-display');
+
+  // Active Sessions — load device list and wire revoke buttons
+  void (async () => {
+    const listEl = document.getElementById('active-sessions-list');
+    if (!listEl) return;
+    try {
+      const token = (await import('../api.js')).getToken();
+      if (!token) return;
+      const res = await fetch('/api/devices', { headers: { Authorization: `Bearer ${token}` } });
+      if (!res.ok) { listEl.replaceChildren(); listEl.insertAdjacentHTML('beforeend', '<div style="color:var(--text-tertiary);font-size:var(--text-sm)">Could not load devices</div>'); return; }
+      const { devices } = await res.json() as { devices: Array<{ id: string; device_name: string; platform: string; last_active: number; created_at: number }> };
+      if (!devices?.length) { listEl.replaceChildren(); listEl.insertAdjacentHTML('beforeend', '<div style="color:var(--text-tertiary);font-size:var(--text-sm)">No active sessions found</div>'); return; }
+      const currentDeviceId = localStorage.getItem('rocchat_device_id') ?? '';
+      listEl.replaceChildren();
+      for (const d of devices) {
+        const isThis = d.id === currentDeviceId;
+        const lastActive = new Date(d.last_active * 1000).toLocaleDateString();
+        const row = document.createElement('div');
+        row.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:10px 12px;background:var(--bg-card);border-radius:10px;border:1px solid var(--border-weak)';
+        row.innerHTML = `
+          <div>
+            <div style="font-size:var(--text-sm);font-weight:600;color:var(--text-primary)">${d.device_name}${isThis ? ' <span style="color:var(--turquoise,#40E0D0);font-size:11px">(this device)</span>' : ''}</div>
+            <div style="font-size:11px;color:var(--text-tertiary)">${d.platform} · Last active ${lastActive}</div>
+          </div>
+          ${!isThis ? `<button class="btn btn-outline revoke-device-btn" data-id="${d.id}" style="font-size:11px;padding:4px 10px;color:var(--danger);border-color:var(--danger)">Revoke</button>` : ''}
+        `;
+        listEl.appendChild(row);
+      }
+      listEl.querySelectorAll<HTMLButtonElement>('.revoke-device-btn').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          if (!confirm('Revoke this session? The device will be logged out.')) return;
+          const deviceId = btn.dataset.id!;
+          const t = (await import('../api.js')).getToken();
+          if (!t) return;
+          const r = await fetch(`/api/devices/${deviceId}`, { method: 'DELETE', headers: { Authorization: `Bearer ${t}` } });
+          if (r.ok) { btn.closest('div[data-device-row]')?.remove() || btn.parentElement?.parentElement?.remove(); showToast('Session revoked', 'success'); }
+          else showToast('Could not revoke session', 'error');
+        });
+      });
+    } catch { /* best-effort */ }
+  })();
   const copyIdentityBtn = document.getElementById('btn-copy-identity-key');
   const showIdentityQrBtn = document.getElementById('btn-show-identity-qr');
 
@@ -2581,8 +2657,9 @@ export async function showAppLockScreen(onUnlock: () => void) {
 
 export function applyTheme(theme: string) {
   const root = document.documentElement;
-  root.classList.remove('dark', 'light');
-  if (theme === 'dark') root.classList.add('dark');
+  root.classList.remove('dark', 'light', 'amoled');
+  if (theme === 'amoled') root.classList.add('amoled');
+  else if (theme === 'dark') root.classList.add('dark');
   else if (theme === 'light') root.classList.add('light');
   else if (theme === 'scheduled') {
     const darkStart = localStorage.getItem('rocchat_theme_dark_start') || '20:00';

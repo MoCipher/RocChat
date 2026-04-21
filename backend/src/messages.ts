@@ -334,8 +334,9 @@ async function sendMessage(request: Request, env: Env, session: Session): Promis
   if (encrypted.ratchet_header && encrypted.ratchet_header.length > 2048) {
     return errorResponse('Ratchet header too large', 400);
   }
-  if (encrypted.ciphertext.length > 10 * 1024 * 1024) {
-    return errorResponse('Ciphertext too large', 413);
+  // Hard cap: 256 KB for text/key material; media is stored in R2 via /api/media
+  if (encrypted.ciphertext.length > 256 * 1024) {
+    return errorResponse('Ciphertext too large (max 256 KB for messages; use /api/media for files)', 413);
   }
   if (encrypted.iv && encrypted.iv.length > 64) {
     return errorResponse('IV too large', 400);

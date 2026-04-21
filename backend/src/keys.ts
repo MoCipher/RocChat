@@ -7,6 +7,7 @@
 import type { Env } from './index.js';
 import type { Session } from './middleware.js';
 import { jsonResponse, errorResponse } from './middleware.js';
+import { signalPreKeyRefill } from './notifications.js';
 
 export async function handleKeys(
   request: Request,
@@ -36,6 +37,27 @@ export async function handleKeys(
   // GET /api/keys/count — check how many unused one-time pre-keys remain
   if (path === '/api/keys/count' && request.method === 'GET') {
     return getPreKeyCount(env, session);
+  }
+
+  // GET /api/keys/refill-signal — check if a refill signal was written for this user (used by SW periodic sync)
+  if (path === '/api/keys/refill-signal' && request.method === 'GET') {
+    const sig = await env.KV.get(`refill_signal:${session.userId}`);
+    if (sig !== null) {
+      await env.KV.delete(`refill_signal:${session.userId}`);
+      return jsonResponse({ refill: true, remaining: parseInt(sig, 10) });
+    }
+    return jsonResponse({ refill: false });
+  }
+
+  // GET /api/keys/refill-signal — client polls this after reconnect to learn if it should upload more OTPKs
+  if (path === '/api/keys/refill-signal' && request.method === 'GET') {
+    const signal = await env.KV.get(`refill_signal:${session.userId}`);
+    if (signal !== null) {
+      // Consume the signal
+      await env.KV.delete(`refill_signal:${session.userId}`);
+      return jsonResponse({ refill: true, remaining: parseInt(signal, 10) });
+    }
+    return jsonResponse({ refill: false });
   }
 
   return errorResponse('Not found', 404);
@@ -87,7 +109,7 @@ async function getBundle(env: Env, targetUserId: string): Promise<Response> {
     // Another request claimed it first — retry.
   }
 
-  return jsonResponse({
+  const bundle = {
     identityKey: user.identity_key,
     identityDHKey: user.identity_dh_key,
     signedPreKey: {
@@ -98,7 +120,21 @@ async function getBundle(env: Env, targetUserId: string): Promise<Response> {
     oneTimePreKey: oneTimePreKey
       ? { id: oneTimePreKey.id, publicKey: oneTimePreKey.public_key }
       : undefined,
-  });
+  };
+
+  // Check if target user's OTPK count has dropped below threshold and write a refill signal (fire-and-forget)
+  void (async () => {
+    try {
+      const remaining = await env.DB.prepare(
+        'SELECT COUNT(*) as c FROM one_time_pre_keys WHERE user_id = ? AND used = 0',
+      ).bind(targetUserId).first<{ c: number }>();
+      if ((remaining?.c ?? 0) < 10) {
+        await signalPreKeyRefill(env, targetUserId, remaining?.c ?? 0);
+      }
+    } catch { /* non-critical */ }
+  })();
+
+  return jsonResponse(bundle);
 }
 
 async function uploadPreKeys(request: Request, env: Env, session: Session): Promise<Response> {

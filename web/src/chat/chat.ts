@@ -132,9 +132,38 @@ export function getPlaintextCacheSnapshot(): Record<string, string> {
   return Object.fromEntries(plaintextCache);
 }
 
-function cachePlaintext(messageId: string, plaintext: string) {
+// Per-conversation "last decrypted message" for sidebar preview text.
+// Keys: conversationId → { ts: epoch-ms, preview: display string }
+const lastConvPreview = new Map<string, { ts: number; preview: string }>();
+
+function buildConvPreview(plaintext: string): string {
+  try {
+    const obj = JSON.parse(plaintext);
+    if (obj && (obj.blobId || obj.blob_id || obj.mediaId || obj.media_id) && (obj.filename || obj.file_name)) {
+      const mime: string = obj.mime || '';
+      if (mime.startsWith('image/')) return '📷 Photo';
+      if (mime.startsWith('video/')) return '🎥 Video';
+      if (mime.startsWith('audio/')) return obj.type === 'voice_note' ? '🎤 Voice message' : '🎵 Audio';
+      return `📎 ${obj.filename}`;
+    }
+    if (obj && obj.type === 'gif') return '🎞 GIF';
+    if (obj && obj.type === 'vault_item') return '🔑 Vault item';
+  } catch { /* not JSON */ }
+  // Plain text — truncate
+  return plaintext.length > 80 ? plaintext.slice(0, 80) + '…' : plaintext;
+}
+
+function updateConvPreview(conversationId: string, plaintext: string, msgCreatedAt: string) {
+  const ts = msgCreatedAt ? Date.parse(msgCreatedAt) : Date.now();
+  const existing = lastConvPreview.get(conversationId);
+  if (existing && existing.ts > ts) return; // don't overwrite with older messages
+  lastConvPreview.set(conversationId, { ts, preview: buildConvPreview(plaintext) });
+}
+
+function cachePlaintext(messageId: string, plaintext: string, conversationId?: string, createdAt?: string) {
   if (!messageId || messageId.startsWith('queued-')) return;
   plaintextCache.set(messageId, plaintext);
+  if (conversationId && createdAt) updateConvPreview(conversationId, plaintext, createdAt);
   savePlaintextCache();
 }
 
@@ -496,6 +525,7 @@ function renderConversationsList(filter = '') {
       const other = c.members.find(m => m.user_id !== userId);
       const time = c.last_message_at ? formatTime(c.last_message_at) : '';
       const isActive = c.id === state.activeConversationId;
+      const preview = lastConvPreview.get(c.id)?.preview || 'Encrypted message';
 
       return `
         <div class="swipe-container" data-conv-id="${c.id}">
@@ -509,8 +539,8 @@ function renderConversationsList(filter = '') {
             ${renderAvatar(name, other?.avatar_url, other?.user_id, 50, 18, other?.account_tier)}
             <div class="conversation-info">
               <div class="conversation-name">${escapeHtml(name)}</div>
-              <div class="conversation-preview">
-                <span style="font-size:10px;margin-right:2px">🔒</span> Encrypted message
+              <div class="conversation-preview" title="${escapeHtml(preview)}">
+                <span style="font-size:10px;margin-right:2px">🔒</span> ${escapeHtml(preview)}
               </div>
             </div>
             <div class="conversation-meta">
@@ -1107,7 +1137,7 @@ function renderMessages(messages: Message[]) {
 
       decryptPromise
         .then((plaintext) => {
-          cachePlaintext(msg.id, plaintext);
+          cachePlaintext(msg.id, plaintext, msg.conversation_id, msg.created_at);
           const snippet = plaintext.length > 80 ? plaintext.slice(0, 80) + '…' : plaintext;
           div.setAttribute('aria-label', `${isMine ? 'You' : 'Message'} at ${formatTime(msg.created_at)}: ${snippet}`);
           applyDecryptedContent(div, plaintext, isMine, msg);
@@ -2894,8 +2924,27 @@ interface ParsedFileMessage {
 
 function tryParseFileMessage(text: string): ParsedFileMessage | null {
   try {
-    const obj = JSON.parse(text);
-    if (obj && obj.blobId && obj.filename) return obj as ParsedFileMessage;
+    const obj = JSON.parse(text) as Record<string, unknown>;
+    if (!obj) return null;
+
+    const blobId = String(obj.blobId || obj.blob_id || obj.mediaId || obj.media_id || '');
+    const filename = String(obj.filename || obj.file_name || '');
+    if (!blobId || !filename) return null;
+
+    const normalized: ParsedFileMessage = {
+      type: String(obj.type || 'file'),
+      blobId,
+      fileKey: obj.fileKey ? String(obj.fileKey) : (obj.file_key ? String(obj.file_key) : undefined),
+      fileIv: obj.fileIv ? String(obj.fileIv) : (obj.file_iv ? String(obj.file_iv) : undefined),
+      fileHash: obj.fileHash ? String(obj.fileHash) : (obj.file_hash ? String(obj.file_hash) : undefined),
+      filename,
+      mime: String(obj.mime || obj.mime_type || 'application/octet-stream'),
+      size: Number(obj.size || 0),
+      duration: obj.duration ? Number(obj.duration) : undefined,
+      caption: obj.caption ? String(obj.caption) : undefined,
+      viewOnce: Boolean(obj.viewOnce ?? obj.view_once ?? false),
+    };
+    return normalized;
   } catch { /* not a file message */ }
   return null;
 }

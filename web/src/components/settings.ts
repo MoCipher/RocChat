@@ -263,12 +263,21 @@ export function renderSettings(container: HTMLElement) {
               </div>
             </div>
           </div>
-          <div class="setting-row">
-            <div>
-              <div class="setting-label">Identity Key</div>
-              <div class="setting-desc" id="identity-key-display" style="font-family:var(--font-mono);word-break:break-all">
+          <div class="setting-row" style="flex-direction:column;align-items:flex-start;gap:8px">
+            <div style="width:100%">
+              <div class="setting-label">Identity Key (Ed25519 public key)</div>
+              <div class="setting-desc" style="margin-bottom:6px">Your cryptographic identity. Share with contacts to verify your identity out-of-band.</div>
+              <div id="identity-key-display" style="font-family:var(--font-mono);font-size:11px;word-break:break-all;color:var(--text-secondary);background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:10px 12px;cursor:pointer;user-select:all;transition:background 0.15s" title="Click to copy">
                 Loading...
               </div>
+            </div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
+              <button class="btn btn-outline" id="btn-copy-identity-key" style="font-size:var(--text-xs);padding:5px 14px">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-2px;margin-right:4px"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>Copy
+              </button>
+              <button class="btn btn-outline" id="btn-show-identity-qr" style="font-size:var(--text-xs);padding:5px 14px">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-2px;margin-right:4px"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="6" y="6" width="1" height="1"/><rect x="17" y="6" width="1" height="1"/><rect x="6" y="17" width="1" height="1"/><path d="M14 14h3v3"/><path d="M17 17v3h3"/></svg>Show QR
+              </button>
             </div>
           </div>
         </div>
@@ -1479,6 +1488,62 @@ export function renderSettings(container: HTMLElement) {
       }
     });
   }
+
+  // Identity key — click-to-copy and QR display
+  const identityKeyEl = document.getElementById('identity-key-display');
+  const copyIdentityBtn = document.getElementById('btn-copy-identity-key');
+  const showIdentityQrBtn = document.getElementById('btn-show-identity-qr');
+
+  async function copyIdentityKey() {
+    const key = identityKeyEl?.textContent?.trim();
+    if (!key || key === 'Loading...' || key === 'Not available') return;
+    try {
+      await navigator.clipboard.writeText(key);
+      showToast('Identity key copied to clipboard', 'success');
+      if (identityKeyEl) {
+        identityKeyEl.style.background = 'var(--accent-subtle, rgba(212,175,55,0.12))';
+        setTimeout(() => { if (identityKeyEl) identityKeyEl.style.background = ''; }, 1200);
+      }
+    } catch {
+      // Fallback: select text
+      const sel = window.getSelection();
+      if (sel && identityKeyEl) {
+        const range = document.createRange();
+        range.selectNodeContents(identityKeyEl);
+        sel.removeAllRanges();
+        sel.addRange(range);
+        showToast('Key selected — press Ctrl+C to copy', 'info');
+      }
+    }
+  }
+
+  identityKeyEl?.addEventListener('click', copyIdentityKey);
+  copyIdentityBtn?.addEventListener('click', copyIdentityKey);
+
+  showIdentityQrBtn?.addEventListener('click', () => {
+    const key = identityKeyEl?.textContent?.trim();
+    if (!key || key === 'Loading...' || key === 'Not available') return;
+    const username = (document.getElementById('setting-username') as HTMLElement)?.textContent?.replace('@', '') || '';
+    const qrData = JSON.stringify({ u: username, k: key, v: 1 });
+    import('../auth/qr-login.js').then(({ generateQRCodeSVG }) => {
+      const svgMarkup = generateQRCodeSVG(qrData, 240);
+      const modal = document.createElement('div');
+      modal.className = 'modal-overlay';
+      modal.innerHTML = `
+        <div class="modal" style="max-width:340px;text-align:center">
+          <h3 style="margin:0 0 8px">Your Identity Key</h3>
+          <p style="font-size:var(--text-xs);color:var(--text-tertiary);margin:0 0 16px">Share this QR code with contacts to verify your identity out-of-band</p>
+          <div style="display:inline-block;background:#fff;border-radius:12px;padding:12px">${svgMarkup}</div>
+          <p style="font-size:10px;font-family:var(--font-mono);word-break:break-all;color:var(--text-secondary);margin:12px 0 0">${escapeHtml(key.slice(0, 40))}…</p>
+          <button class="btn btn-outline" style="margin-top:16px;width:100%" id="close-identity-qr">Close</button>
+        </div>`;
+      document.body.appendChild(modal);
+      document.getElementById('close-identity-qr')?.addEventListener('click', () => modal.remove());
+      modal.addEventListener('click', (e) => { if (e.target === modal) modal.remove(); });
+    }).catch(() => {
+      showToast('QR generation unavailable', 'error');
+    });
+  });
 
   // Quiet hours event handlers
   document.getElementById('save-quiet-hours')?.addEventListener('click', async () => {

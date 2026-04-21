@@ -4,6 +4,8 @@
  * Lightweight emoji picker with categories, search, and recently used.
  */
 
+import { parseHTML } from '../utils.js';
+
 const CATEGORIES: Record<string, string[]> = {
   'Recently Used': [],
   'Smileys': [
@@ -140,7 +142,7 @@ export function initEmojiPicker(
 
     const emojis = cats[activeCategory] || [];
 
-    container.innerHTML = `
+    container.replaceChildren(parseHTML(`
       <div class="emoji-picker-search">
         <input type="text" class="emoji-search-input" placeholder="Search emoji\u2026" aria-label="Search emoji" />
       </div>
@@ -150,7 +152,7 @@ export function initEmojiPicker(
       <div class="emoji-picker-grid">
         ${emojis.map((e: string) => `<button class="emoji-item" data-emoji="${e}">${e}</button>`).join('')}
       </div>
-    `;
+    `));
 
     // Tab clicks
     container.querySelectorAll('.emoji-tab').forEach(btn => {
@@ -180,9 +182,9 @@ export function initEmojiPicker(
         const grid = container.querySelector('.emoji-picker-grid') as HTMLElement;
         if (grid) {
           // Simple filter — since we can't search by name, just re-show all (search is visual only for now)
-          grid.innerHTML = allEmojis.map(e =>
+          grid.replaceChildren(parseHTML(allEmojis.map(e =>
             `<button class="emoji-item" data-emoji="${e}">${e}</button>`
-          ).join('');
+          ).join('')));
           grid.querySelectorAll('.emoji-item').forEach(btn => {
             btn.addEventListener('click', () => {
               const emoji = (btn as HTMLElement).dataset.emoji || '';

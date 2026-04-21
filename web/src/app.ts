@@ -9,6 +9,7 @@
 
 // Self-hosted fonts (fontsource — no Google Fonts)
 import '@fontsource/montserrat/400.css';
+import { parseHTML } from './utils.js';
 import '@fontsource/montserrat/500.css';
 import '@fontsource/montserrat/600.css';
 import '@fontsource/montserrat/700.css';
@@ -35,26 +36,14 @@ import { syncChannel, setRocClientEnabled, isRocClient } from './components/roc-
 
 // ── Trusted Types policy (defense-in-depth) ──
 // CSP enforces `require-trusted-types-for 'script'`.
-// Default policy is intentionally restrictive: no dynamic script text and
-// no cross-origin script URLs.
+// All innerHTML sinks have been migrated to DOMParser/replaceChildren, so
+// createHTML is intentionally omitted — any remaining sink will throw at
+// runtime, surfacing regressions immediately.
 try {
   const tt = (window as unknown as { trustedTypes?: { createPolicy: (name: string, rules: object) => unknown; defaultPolicy?: unknown } }).trustedTypes;
   if (tt && typeof tt.createPolicy === 'function') {
     if (!tt.defaultPolicy) {
       tt.createPolicy('rocchat-default', {
-        createHTML: (s: string) => {
-          // Sanitise HTML strings passed to innerHTML/outerHTML sinks.
-          // Strips <script> tags and inline event handlers so that existing UI
-          // code (SVG icon injection, message rendering, dialogs) continues to
-          // work while script-injection attacks are blocked at the sink level.
-          // The primary defence remains the server-side and input-validation
-          // layers; this is defence-in-depth.
-          return s
-            .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '')
-            .replace(/<script\b[^>]*>/gi, '')
-            .replace(/\bon\w+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]*)/gi, '')
-            .replace(/\bjavascript\s*:/gi, 'removed:');
-        },
         createScript: () => {
           throw new TypeError('Dynamic script text is blocked by Trusted Types policy');
         },
@@ -215,24 +204,24 @@ function initAfterUnlock() {
 
 function showLanding() {
   const app = document.getElementById('app')!;
-  app.innerHTML = '';
+  app.replaceChildren();
   renderLanding(app, showQrLogin);
 }
 
 function showQrLogin() {
   const app = document.getElementById('app')!;
-  app.innerHTML = '';
+  app.replaceChildren();
   renderQrLogin(app, () => renderApp(), showLanding);
 }
 
 function renderApp() {
   const app = document.getElementById('app')!;
-  app.innerHTML = `
+  app.replaceChildren(parseHTML(`
     <div class="app-layout">
       <div id="sidebar-container"></div>
       <div id="main-content" tabindex="-1" style="display:flex;flex:1;min-width:0;outline:none"></div>
     </div>
-  `;
+  `));
 
   renderSidebar(
     document.getElementById('sidebar-container')!,
@@ -356,7 +345,7 @@ function urlBase64ToUint8Array(base64String: string): Uint8Array {
 
 async function showCanary() {
   const app = document.getElementById('app')!;
-  app.innerHTML = `
+  app.replaceChildren(parseHTML(`
     <div style="max-width:640px;margin:40px auto;padding:24px;font-family:var(--font-sans,system-ui)">
       <div style="text-align:center;margin-bottom:32px">
         <div style="font-size:48px;margin-bottom:8px">🐦</div>
@@ -369,14 +358,14 @@ async function showCanary() {
         <a href="#/" style="color:var(--roc-gold,#D4AF37);text-decoration:none" onclick="location.hash='';location.reload()">← Back to RocChat</a>
       </div>
     </div>
-  `;
+  `));
   try {
     const resp = await fetch('/api/features/canary');
     const data = await resp.json();
     const content = document.getElementById('canary-content')!;
     const statusColor = data.status === 'clear' ? '#40E0D0' : '#ef4444';
     const statusIcon = data.status === 'clear' ? '✅' : '⚠️';
-    content.innerHTML = `
+    content.replaceChildren(parseHTML(`
       <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px">
         <span style="font-size:24px">${statusIcon}</span>
         <div>
@@ -389,15 +378,15 @@ async function showCanary() {
         <span>Next update: ${new Date(data.next_update).toLocaleDateString()}</span>
         <span>Signed by: ${data.signed_by}</span>
       </div>
-    `;
+    `));
   } catch {
-    document.getElementById('canary-content')!.innerHTML = '<p style="color:#ef4444">Failed to load canary status.</p>';
+    document.getElementById('canary-content')!.replaceChildren(parseHTML('<p style="color:#ef4444">Failed to load canary status.</p>'));
   }
 }
 
 async function showTransparency() {
   const app = document.getElementById('app')!;
-  app.innerHTML = `
+  app.replaceChildren(parseHTML(`
     <div style="max-width:760px;margin:40px auto;padding:24px;font-family:var(--font-sans,system-ui)">
       <div style="text-align:center;margin-bottom:24px">
         <div style="font-size:40px;margin-bottom:8px">📜</div>
@@ -410,17 +399,17 @@ async function showTransparency() {
         <a href="#/" style="color:var(--roc-gold,#D4AF37);text-decoration:none" onclick="location.hash='';location.reload()">← Back to RocChat</a>
       </div>
     </div>
-  `;
+  `));
 
   try {
     const res = await getTransparencyReports();
     const reports = res.ok ? res.data.reports : [];
     const content = document.getElementById('transparency-content')!;
     if (!reports.length) {
-      content.innerHTML = '<div style="border:1px solid var(--border-primary,#333);border-radius:12px;padding:20px;background:var(--bg-secondary,#1a1a2e);color:var(--text-secondary,#aaa)">No transparency reports published yet.</div>';
+      content.replaceChildren(parseHTML('<div style="border:1px solid var(--border-primary,#333);border-radius:12px;padding:20px;background:var(--bg-secondary,#1a1a2e);color:var(--text-secondary,#aaa)">No transparency reports published yet.</div>'));
       return;
     }
-    content.innerHTML = reports.map((r) => `
+    content.replaceChildren(parseHTML(reports.map((r) => `
       <div style="border:1px solid var(--border-primary,#333);border-radius:12px;padding:20px;background:var(--bg-secondary,#1a1a2e)">
         <div style="display:flex;justify-content:space-between;gap:12px;align-items:center;margin-bottom:12px;flex-wrap:wrap">
           <strong style="color:var(--text-primary,#eee)">${new Date(r.period_start * 1000).toLocaleDateString()} - ${new Date(r.period_end * 1000).toLocaleDateString()}</strong>
@@ -434,15 +423,15 @@ async function showTransparency() {
         ${r.notes ? `<p style="margin:0;color:var(--text-secondary,#aaa);font-size:13px;line-height:1.5">${r.notes}</p>` : ''}
         <div style="margin-top:12px;font-size:12px;color:var(--text-tertiary,#888)">Signed by: ${r.signed_by}</div>
       </div>
-    `).join('');
+    `).join('')));
   } catch {
-    document.getElementById('transparency-content')!.innerHTML = '<div style="border:1px solid var(--border-primary,#333);border-radius:12px;padding:20px;background:var(--bg-secondary,#1a1a2e);color:#ef4444">Failed to load transparency reports.</div>';
+    document.getElementById('transparency-content')!.replaceChildren(parseHTML('<div style="border:1px solid var(--border-primary,#333);border-radius:12px;padding:20px;background:var(--bg-secondary,#1a1a2e);color:#ef4444">Failed to load transparency reports.</div>'));
   }
 }
 
 async function showSupportersWall() {
   const app = document.getElementById('app')!;
-  app.innerHTML = `
+  app.replaceChildren(parseHTML(`
     <div style="max-width:900px;margin:40px auto;padding:24px;font-family:var(--font-sans,system-ui)">
       <div style="text-align:center;margin-bottom:24px">
         <div style="font-size:40px;margin-bottom:8px">🪶</div>
@@ -456,16 +445,16 @@ async function showSupportersWall() {
         <a href="#/" style="color:var(--roc-gold,#D4AF37);text-decoration:none" onclick="location.hash='';location.reload()">← Back to RocChat</a>
       </div>
     </div>
-  `;
+  `));
   try {
     const res = await getSupportersWall();
     const supporters = res.ok ? res.data.supporters : [];
     const content = document.getElementById('supporters-content')!;
     if (!supporters.length) {
-      content.innerHTML = '<div style="border:1px solid var(--border-primary,#333);border-radius:12px;padding:20px;background:var(--bg-secondary,#1a1a2e);color:var(--text-secondary,#aaa)">No supporters listed yet.</div>';
+      content.replaceChildren(parseHTML('<div style="border:1px solid var(--border-primary,#333);border-radius:12px;padding:20px;background:var(--bg-secondary,#1a1a2e);color:var(--text-secondary,#aaa)">No supporters listed yet.</div>'));
       return;
     }
-    content.innerHTML = supporters.map((s) => {
+    content.replaceChildren(parseHTML(supporters.map((s) => {
       const tier = (s.donor_tier || 'supporter').toUpperCase();
       const recurring = s.donor_recurring ? ' · Recurring' : '';
       const since = s.donor_since ? `Since ${new Date(s.donor_since * 1000).toLocaleDateString()}` : '';
@@ -477,9 +466,9 @@ async function showSupportersWall() {
           ${since ? `<div style="margin-top:4px;font-size:12px;color:var(--text-tertiary,#888)">${since}</div>` : ''}
         </div>
       `;
-    }).join('');
+    }).join('')));
   } catch {
-    document.getElementById('supporters-content')!.innerHTML = '<div style="border:1px solid var(--border-primary,#333);border-radius:12px;padding:20px;background:var(--bg-secondary,#1a1a2e);color:#ef4444">Failed to load supporters wall.</div>';
+    document.getElementById('supporters-content')!.replaceChildren(parseHTML('<div style="border:1px solid var(--border-primary,#333);border-radius:12px;padding:20px;background:var(--bg-secondary,#1a1a2e);color:#ef4444">Failed to load supporters wall.</div>'));
   }
 }
 
@@ -490,7 +479,7 @@ function showOnboardingIfNeeded() {
 
   function renderStep(step: number) {
     if (step === 1) {
-      overlay.innerHTML = `
+      overlay.replaceChildren(parseHTML(`
         <div class="rc-dialog" style="max-width:440px">
           <div style="text-align:center;padding:var(--sp-6)">
             <div style="font-size:56px;margin-bottom:var(--sp-4)">🔒</div>
@@ -521,10 +510,10 @@ function showOnboardingIfNeeded() {
               <div style="width:8px;height:8px;border-radius:50%;background:var(--border-norm)"></div>
             </div>
           </div>
-        </div>`;
+        </div>`));
       overlay.querySelector('#onboard-next')?.addEventListener('click', () => renderStep(2));
     } else {
-      overlay.innerHTML = `
+      overlay.replaceChildren(parseHTML(`
         <div class="rc-dialog" style="max-width:440px">
           <div style="text-align:center;padding:var(--sp-6)">
             <div style="font-size:56px;margin-bottom:var(--sp-4)">📥</div>
@@ -548,7 +537,7 @@ function showOnboardingIfNeeded() {
               <div style="width:8px;height:8px;border-radius:50%;background:var(--roc-gold,#D4AF37)"></div>
             </div>
           </div>
-        </div>`;
+        </div>`));
 
       const dropzone = overlay.querySelector('#onboard-dropzone') as HTMLElement;
       const fileInput = overlay.querySelector('#onboard-file-input') as HTMLInputElement;

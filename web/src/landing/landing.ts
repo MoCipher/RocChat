@@ -5,6 +5,8 @@
  * "Use Web" option via QR code scan from mobile app.
  */
 
+import { parseHTML } from '../utils.js';
+
 const ROC_BIRD_SVG = `<svg viewBox="0 0 512 512" width="120" height="120">
   <defs>
     <linearGradient id="lbg" x1="0%" y1="0%" x2="100%" y2="100%">
@@ -56,7 +58,7 @@ const ROC_BIRD_SVG = `<svg viewBox="0 0 512 512" width="120" height="120">
 </svg>`;
 
 export function renderLanding(container: HTMLElement, onWebLogin: () => void) {
-  container.innerHTML = `
+  container.replaceChildren(parseHTML(`
     <div class="landing">
       <nav class="landing-nav">
         <div class="landing-nav-brand">
@@ -228,7 +230,7 @@ export function renderLanding(container: HTMLElement, onWebLogin: () => void) {
         </div>
       </footer>
     </div>
-  `;
+  `));
 
   // Bind web login buttons
   container.querySelector('#use-web-btn')?.addEventListener('click', onWebLogin);

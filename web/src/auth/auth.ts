@@ -5,6 +5,7 @@
  */
 
 import * as api from '../api.js';
+import { parseHTML } from '../utils.js';
 import {
   deriveAuthHash,
   deriveVaultKey,
@@ -23,7 +24,7 @@ export function renderAuth(container: HTMLElement, onSuccess: () => void) {
   let mode: 'login' | 'register' = 'login';
 
   function render() {
-    container.innerHTML = `
+    container.replaceChildren(parseHTML(`
       <div class="auth-screen">
         <div class="auth-card">
           <div class="auth-logo">
@@ -44,7 +45,7 @@ export function renderAuth(container: HTMLElement, onSuccess: () => void) {
           </div>
         </div>
       </div>
-    `;
+    `));
 
     // Bind toggle
     container.querySelector('#toggle-auth')?.addEventListener('click', (e) => {
@@ -366,7 +367,7 @@ export function renderAuth(container: HTMLElement, onSuccess: () => void) {
 
   function showRecoveryPhrase(mnemonic: string, onContinue: () => void) {
     const words = mnemonic.split(' ');
-    container.innerHTML = `
+    container.replaceChildren(parseHTML(`
       <div class="auth-screen">
         <div class="auth-card recovery-card">
           <div class="auth-logo">
@@ -387,7 +388,7 @@ export function renderAuth(container: HTMLElement, onSuccess: () => void) {
           <button class="btn-primary" id="recovery-continue" disabled>Continue</button>
         </div>
       </div>
-    `;
+    `));
     const ack = container.querySelector('#recovery-ack') as HTMLInputElement;
     const btn = container.querySelector('#recovery-continue') as HTMLButtonElement;
     ack.addEventListener('change', () => { btn.disabled = !ack.checked; });

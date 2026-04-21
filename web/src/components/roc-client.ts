@@ -20,6 +20,7 @@
  */
 
 import { req } from '../api.js';
+import { parseHTML } from '../utils.js';
 
 const STORAGE_KEY = 'rocchat_channel';
 const ICON_PATH = '/roc-client-icon.svg';
@@ -118,7 +119,7 @@ function applyBranding(channel: ReleaseChannel) {
 export function renderRocClientToggle(container: HTMLElement) {
   const wrapper = document.createElement('section');
   wrapper.className = 'roc-client-toggle';
-  wrapper.innerHTML = `
+  wrapper.replaceChildren(parseHTML(`
     <div class="roc-client-card">
       <img src="${ICON_PATH}" alt="" width="48" height="48" class="roc-client-mark" />
       <div class="roc-client-copy">
@@ -135,7 +136,7 @@ export function renderRocClientToggle(container: HTMLElement) {
         <p class="roc-client-hint" id="roc-client-toggle-hint" aria-live="polite"></p>
       </div>
     </div>
-  `;
+  `));
   container.appendChild(wrapper);
 
   const input = wrapper.querySelector<HTMLInputElement>('#roc-client-toggle-input')!;

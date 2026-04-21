@@ -15,6 +15,8 @@ type InstallPromptEvent = Event & {
   userChoice: Promise<{ outcome: 'accepted' | 'dismissed' }>;
 };
 
+import { parseHTML } from './utils.js';
+
 let deferredPrompt: InstallPromptEvent | null = null;
 
 export function initInstallPrompts(): void {
@@ -50,7 +52,7 @@ function showIosInstallBanner(): void {
   el.id = 'rc-ios-install-banner';
   el.setAttribute('role', 'region');
   el.setAttribute('aria-label', 'Install RocChat on iOS');
-  el.innerHTML = `
+  el.replaceChildren(parseHTML(`
     <div class="rc-ios-install-inner">
       <div class="rc-ios-install-text">
         <strong>Install RocChat</strong>
@@ -61,7 +63,7 @@ function showIosInstallBanner(): void {
         </span> then <em>Add to Home Screen</em></span>
       </div>
       <button type="button" class="rc-ios-install-close" aria-label="Dismiss">&times;</button>
-    </div>`;
+    </div>`));
   document.body.appendChild(el);
   el.querySelector('.rc-ios-install-close')?.addEventListener('click', () => {
     localStorage.setItem('rocchat_ios_install_dismissed', '1');

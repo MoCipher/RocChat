@@ -6,6 +6,7 @@
  */
 
 import * as api from '../api.js';
+import { parseHTML } from '../utils.js';
 import { putSecretString } from '../crypto/secure-store.js';
 
 // ── Roc Bird SVG for QR center overlay ──
@@ -276,7 +277,7 @@ export function renderQrLogin(container: HTMLElement, onSuccess: () => void, onB
   let pollTimer: ReturnType<typeof setInterval> | null = null;
   let currentToken: string | null = null;
 
-  container.innerHTML = `
+  container.replaceChildren(parseHTML(`
     <div class="qr-login-screen">
       <div class="qr-login-card">
         <button class="qr-back-btn" id="qr-back" title="Back">
@@ -322,7 +323,7 @@ export function renderQrLogin(container: HTMLElement, onSuccess: () => void, onB
         </div>
       </div>
     </div>
-  `;
+  `));
 
   container.querySelector('#qr-back')?.addEventListener('click', () => {
     cleanup();
@@ -347,7 +348,7 @@ export function renderQrLogin(container: HTMLElement, onSuccess: () => void, onB
     try {
       const res = await api.generateQrToken();
       if (!res.ok) {
-        qrContainer.innerHTML = '<p class="qr-error">Failed to generate QR code. Please refresh.</p>';
+        qrContainer.replaceChildren(parseHTML('<p class="qr-error">Failed to generate QR code. Please refresh.</p>'));
         return;
       }
 
@@ -355,13 +356,13 @@ export function renderQrLogin(container: HTMLElement, onSuccess: () => void, onB
       const qrData = `rocchat://web-login?token=${currentToken}`;
       const qrSvg = generateQRCodeSVG(qrData, 240);
 
-      qrContainer.innerHTML = `
+      qrContainer.replaceChildren(parseHTML(`
         <div class="qr-code">${qrSvg}</div>
         <div class="qr-status" id="qr-status">
           <span class="qr-status-dot"></span>
           Waiting for scan...
         </div>
-      `;
+      `));
 
       // Start polling
       pollTimer = setInterval(pollForAuth, 2000);
@@ -372,17 +373,17 @@ export function renderQrLogin(container: HTMLElement, onSuccess: () => void, onB
           clearInterval(pollTimer);
           const status = document.getElementById('qr-status');
           if (status) status.textContent = 'QR code expired.';
-          qrContainer.innerHTML += `
-            <button class="btn-primary qr-refresh-btn" id="qr-refresh">Generate New Code</button>
-          `;
-          document.getElementById('qr-refresh')?.addEventListener('click', () => {
-            startQrSession();
-          });
+          const refreshBtn = document.createElement('button');
+          refreshBtn.className = 'btn-primary qr-refresh-btn';
+          refreshBtn.id = 'qr-refresh';
+          refreshBtn.textContent = 'Generate New Code';
+          refreshBtn.addEventListener('click', () => startQrSession());
+          qrContainer.appendChild(refreshBtn);
         }
       }, 300_000);
     } catch {
       if (qrContainer) {
-        qrContainer.innerHTML = '<p class="qr-error">Connection error. Please refresh.</p>';
+        qrContainer.replaceChildren(parseHTML('<p class="qr-error">Connection error. Please refresh.</p>'));
       }
     }
   }

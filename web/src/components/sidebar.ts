@@ -5,6 +5,8 @@
  * Per spec section 9.3: "Radically Simple UI — 3 Tabs"
  */
 
+import { parseHTML } from '../utils.js';
+
 export type Tab = 'chats' | 'calls' | 'channels' | 'settings';
 
 const SIDEBAR_BIRD = `<svg viewBox="0 0 512 512" width="32" height="32">
@@ -66,7 +68,7 @@ export function renderSidebar(
   } else {
     profileContent = `<span class="sidebar-avatar-fallback">${initials}</span>`;
   }
-  container.innerHTML = `
+  container.replaceChildren(parseHTML(`
     <nav class="sidebar" role="navigation" aria-label="Main navigation" role="tablist">
       <div class="sidebar-logo" title="RocChat">
         ${SIDEBAR_BIRD}
@@ -95,7 +97,7 @@ export function renderSidebar(
         ${profileContent}
       </button>
     </nav>
-  `;
+  `));
 
   // Bind tab clicks
   container.querySelectorAll('.sidebar-btn[data-tab]').forEach((btn) => {

@@ -8,6 +8,7 @@
  */
 
 import * as api from '../api.js';
+import { parseHTML } from '../utils.js';
 
 const EMOJI_CATEGORIES: Record<string, string[]> = {
   'Smileys': ['😀','😂','🤣','😊','😍','🥰','😘','😜','🤪','😎','🥳','😇','🤩','🥺','😭','😤','🤯','🫡','🫶','❤️','🔥','✨','💯','👏','🙌','👊','✊','🤝','💪','🕊️'],
@@ -74,9 +75,9 @@ export function initGifPicker(
     const grid = container.querySelector('.gif-picker-grid') as HTMLElement;
     if (!grid) return;
     const emojis = EMOJI_CATEGORIES[activeCat] || [];
-    grid.innerHTML = emojis.map(e =>
+    grid.replaceChildren(parseHTML(emojis.map(e =>
       `<button class="gif-item emoji-item" data-emoji="${e}" title="${e}" style="font-size:28px;background:none;border:none;cursor:pointer;padding:6px;border-radius:8px;transition:transform 0.1s">${e}</button>`
-    ).join('');
+    ).join('')));
     bindEmojiClicks(grid);
   }
 
@@ -85,12 +86,12 @@ export function initGifPicker(
     if (!grid) return;
     ensureAnimStyles();
 
-    grid.innerHTML = ANIMATED_EXPRESSIONS.map(e =>
+    grid.replaceChildren(parseHTML(ANIMATED_EXPRESSIONS.map(e =>
       `<button class="gif-item animated-item" data-name="${escapeAttr(e.name)}" data-emoji="${e.emoji}" title="${escapeAttr(e.name)}" style="font-size:36px;background:none;border:none;cursor:pointer;padding:8px;border-radius:8px;display:flex;flex-direction:column;align-items:center;gap:2px">
         <span style="animation:${e.animation};display:inline-block">${e.emoji}</span>
         <span style="font-size:9px;color:var(--text-tertiary)">${escapeAttr(e.name)}</span>
       </button>`
-    ).join('');
+    ).join('')));
 
     grid.querySelectorAll('.animated-item').forEach(btn => {
       btn.addEventListener('click', () => {
@@ -104,19 +105,19 @@ export function initGifPicker(
   async function renderStickers() {
     const grid = container.querySelector('.gif-picker-grid') as HTMLElement;
     if (!grid) return;
-    grid.innerHTML = '<div style="padding:16px;text-align:center;color:var(--text-tertiary);font-size:13px">Loading stickers…</div>';
+    grid.replaceChildren(parseHTML('<div style="padding:16px;text-align:center;color:var(--text-tertiary);font-size:13px">Loading stickers…</div>'));
 
     try {
       const res = await api.getStickers();
       if (!res.ok || !res.data.stickers?.length) {
-        grid.innerHTML = '<div style="padding:16px;text-align:center;color:var(--text-tertiary);font-size:13px">No sticker packs yet.<br>Community stickers coming soon! 🪶</div>';
+        grid.replaceChildren(parseHTML('<div style="padding:16px;text-align:center;color:var(--text-tertiary);font-size:13px">No sticker packs yet.<br>Community stickers coming soon! 🪶</div>'));
         return;
       }
-      grid.innerHTML = res.data.stickers.map((s: { url: string; name: string; width: number; height: number }) =>
+      grid.replaceChildren(parseHTML(res.data.stickers.map((s: { url: string; name: string; width: number; height: number }) =>
         `<button class="gif-item sticker-item" data-url="${escapeAttr(s.url)}" data-name="${escapeAttr(s.name)}" data-w="${s.width}" data-h="${s.height}" title="${escapeAttr(s.name)}">
           <img src="${escapeAttr(s.url)}" alt="${escapeAttr(s.name)}" loading="lazy" style="max-width:80px;max-height:80px;object-fit:contain" />
         </button>`
-      ).join('');
+      ).join('')));
       grid.querySelectorAll('.sticker-item').forEach(btn => {
         btn.addEventListener('click', () => {
           const el = btn as HTMLElement;
@@ -125,12 +126,12 @@ export function initGifPicker(
         });
       });
     } catch {
-      grid.innerHTML = '<div style="padding:16px;text-align:center;color:var(--text-tertiary);font-size:13px">Could not load stickers</div>';
+      grid.replaceChildren(parseHTML('<div style="padding:16px;text-align:center;color:var(--text-tertiary);font-size:13px">Could not load stickers</div>'));
     }
   }
 
   function render() {
-    container.innerHTML = `
+    container.replaceChildren(parseHTML(`
       <div style="display:flex;border-bottom:1px solid var(--border);margin-bottom:4px">
         <button class="gif-tab" data-tab="emoji" style="flex:1;padding:6px;font-size:12px;background:none;border:none;cursor:pointer;color:var(--text-primary);border-bottom:2px solid ${activeTab === 'emoji' ? 'var(--roc-gold)' : 'transparent'}">Emoji</button>
         <button class="gif-tab" data-tab="animated" style="flex:1;padding:6px;font-size:12px;background:none;border:none;cursor:pointer;color:var(--text-primary);border-bottom:2px solid ${activeTab === 'animated' ? 'var(--roc-gold)' : 'transparent'}">Animated</button>
@@ -148,7 +149,7 @@ export function initGifPicker(
       <div style="padding:4px 8px;text-align:center">
         <span style="font-size:9px;color:var(--text-tertiary)">🪶 Roc Family — No third parties. No tracking.</span>
       </div>
-    `;
+    `));
 
     container.querySelectorAll('.gif-tab').forEach(tab => {
       tab.addEventListener('click', () => {
@@ -174,9 +175,9 @@ export function initGifPicker(
           const allEmoji = Object.values(EMOJI_CATEGORIES).flat();
           const grid = container.querySelector('.gif-picker-grid') as HTMLElement;
           if (!grid) return;
-          grid.innerHTML = allEmoji.map(e =>
+          grid.replaceChildren(parseHTML(allEmoji.map(e =>
             `<button class="gif-item emoji-item" data-emoji="${e}" title="${e}" style="font-size:28px;background:none;border:none;cursor:pointer;padding:6px;border-radius:8px">${e}</button>`
-          ).join('');
+          ).join('')));
           bindEmojiClicks(grid);
         }, 200);
       });

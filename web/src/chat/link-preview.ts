@@ -8,6 +8,7 @@
  */
 
 import * as api from '../api.js';
+import { parseHTML } from '../utils.js';
 
 const memCache = new Map<string, api.LinkPreview | null>();
 const inflight = new Map<string, Promise<api.LinkPreview | null>>();
@@ -70,7 +71,7 @@ export async function attachPreviewIfAny(bubble: HTMLElement, plaintext: string)
   const preview = await fetchPreview(url);
   if (!preview || bubble.querySelector('.link-preview')) return;
   const wrap = document.createElement('div');
-  wrap.innerHTML = renderPreviewCard(preview);
+  wrap.replaceChildren(parseHTML(renderPreviewCard(preview)));
   const card = wrap.firstElementChild;
   if (card) bubble.appendChild(card);
 }

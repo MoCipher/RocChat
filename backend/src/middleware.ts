@@ -54,6 +54,11 @@ export async function rateLimit(
   if (path.startsWith('/api/messages')) { limit = 60; window = 60; bucket = '/api/messages'; }
   else if (path === '/api/auth/login') { limit = 5; window = 300; bucket = '/api/auth/login'; }
   else if (path === '/api/auth/refresh') { limit = 30; window = 300; bucket = '/api/auth/refresh'; }
+  // Recovery vault: tight bucket. Anyone with a stolen session token still
+  // can't brute-force the BIP39 mnemonic against the encrypted blob, but we
+  // make the abuse pattern (mass downloading vaults across leaked sessions)
+  // expensive and observable.
+  else if (path === '/api/recovery/vault') { limit = 10; window = 3600; bucket = '/api/recovery/vault'; }
   else if (path.startsWith('/api/media')) { limit = 20; window = 3600; bucket = '/api/media'; }
   else if (path.startsWith('/api/contacts/search')) { limit = 10; window = 60; bucket = '/api/contacts/search'; }
   else if (path.startsWith('/api/keys')) { limit = 30; window = 60; bucket = '/api/keys'; }

@@ -39,7 +39,12 @@ struct RocChatApp: App {
     }
     
     private func requestPushNotifications() {
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .badge, .sound]) { granted, _ in
+        let center = UNUserNotificationCenter.current()
+        // Register delegate + reply category BEFORE asking for permission so
+        // that any cached notifications immediately surface the action.
+        center.delegate = appDelegate
+        registerNotificationCategories(on: center)
+        center.requestAuthorization(options: [.alert, .badge, .sound]) { granted, _ in
             if granted {
                 DispatchQueue.main.async {
                     UIApplication.shared.registerForRemoteNotifications()
@@ -47,9 +52,37 @@ struct RocChatApp: App {
             }
         }
     }
+
+    /// Inline reply + mark-as-read action shown on lock screen / banner.
+    /// Replies are best-effort: the action lands in `userNotificationCenter(_:didReceive:)`
+    /// where we POST the plaintext to `/messages` so server-side ratchet
+    /// encryption + relay happens. End-to-end encryption from the lock
+    /// screen would require a Notification Service Extension with a
+    /// shared App Group keychain — tracked separately.
+    private func registerNotificationCategories(on center: UNUserNotificationCenter) {
+        let reply = UNTextInputNotificationAction(
+            identifier: "REPLY_ACTION",
+            title: "Reply",
+            options: [],
+            textInputButtonTitle: "Send",
+            textInputPlaceholder: "Message"
+        )
+        let markRead = UNNotificationAction(
+            identifier: "MARK_READ_ACTION",
+            title: "Mark as Read",
+            options: []
+        )
+        let category = UNNotificationCategory(
+            identifier: "MESSAGE_CATEGORY",
+            actions: [reply, markRead],
+            intentIdentifiers: [],
+            options: [.customDismissAction]
+        )
+        center.setNotificationCategories([category])
+    }
 }
 
-class AppDelegate: NSObject, UIApplicationDelegate {
+class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey : Any]? = nil) -> Bool {
         // Install a lightweight crash reporter — writes uncaught NSExceptions
         // and fatal signals to a local file under Application Support so that
@@ -111,6 +144,52 @@ class AppDelegate: NSObject, UIApplicationDelegate {
                 completionHandler(.failed)
             }
         }
+    }
+
+    // MARK: - Foreground presentation + action handling
+
+    /// Show banners/sound even while the app is foregrounded so the user
+    /// notices messages from inactive conversations.
+    func userNotificationCenter(_ center: UNUserNotificationCenter,
+                                willPresent notification: UNNotification,
+                                withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+        completionHandler([.banner, .sound, .badge, .list])
+    }
+
+    /// Quick-reply / mark-as-read action dispatch. The push payload is
+    /// expected to include `conversation_id` (set by the backend).
+    func userNotificationCenter(_ center: UNUserNotificationCenter,
+                                didReceive response: UNNotificationResponse,
+                                withCompletionHandler completionHandler: @escaping () -> Void) {
+        let info = response.notification.request.content.userInfo
+        let conversationId = (info["conversation_id"] as? String) ?? (info["conversationId"] as? String) ?? ""
+
+        switch response.actionIdentifier {
+        case "REPLY_ACTION":
+            if let textResponse = response as? UNTextInputNotificationResponse,
+               !conversationId.isEmpty {
+                let body = textResponse.userText
+                Task {
+                    // Server-side ratchet send. End-to-end encrypted reply
+                    // from a Notification Service Extension is tracked
+                    // separately — requires App Group keychain sharing.
+                    _ = try? await APIClient.shared.postRaw("/messages", body: [
+                        "conversation_id": conversationId,
+                        "body": body,
+                        "client_message_id": UUID().uuidString
+                    ])
+                }
+            }
+        case "MARK_READ_ACTION":
+            if !conversationId.isEmpty {
+                Task {
+                    _ = try? await APIClient.shared.postRaw("/messages/conversations/\(conversationId)/read", body: [:])
+                }
+            }
+        default:
+            break
+        }
+        completionHandler()
     }
 }
 

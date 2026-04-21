@@ -48,13 +48,36 @@ interface WsMessage {
 }
 
 export class ChatRoom implements DurableObject {
-  private clients: Map<string, ConnectedClient> = new Map();
   private state: DurableObjectState;
   private env: Env;
 
   constructor(state: DurableObjectState, env: Env) {
     this.state = state;
     this.env = env;
+  }
+
+  // ── Hibernation API helpers ──────────────────────────────────────
+  // Each accepted WebSocket carries a serialized attachment
+  // {userId, deviceId, token, lastAuthCheck} so we can rebuild the
+  // ConnectedClient view after the DO wakes from hibernation without
+  // needing in-memory state. `state.getWebSockets()` returns *every*
+  // socket the runtime is holding for us, including ones from a
+  // previous (now-hibernated) instance.
+  private clientFor(ws: WebSocket): ConnectedClient | null {
+    const att = ws.deserializeAttachment() as null | {
+      userId: string; deviceId: string; token: string; lastAuthCheck: number;
+    };
+    if (!att) return null;
+    return { ws, ...att };
+  }
+
+  private allClients(): ConnectedClient[] {
+    const out: ConnectedClient[] = [];
+    for (const ws of this.state.getWebSockets()) {
+      const c = this.clientFor(ws);
+      if (c) out.push(c);
+    }
+    return out;
   }
 
   async fetch(request: Request): Promise<Response> {
@@ -101,14 +124,15 @@ export class ChatRoom implements DurableObject {
     const clientKey = `${userId}:${deviceId}`;
 
     // Close existing connection from same device
-    const existing = this.clients.get(clientKey);
-    if (existing) {
-      try { existing.ws.close(1000, 'Replaced by new connection'); } catch {}
+    for (const existingWs of this.state.getWebSockets(clientKey)) {
+      try { existingWs.close(1000, 'Replaced by new connection'); } catch {}
     }
 
-    this.state.acceptWebSocket(server);
-    this.clients.set(clientKey, {
-      ws: server, userId, deviceId,
+    // Tag the socket so we can find it again after hibernation, and
+    // attach metadata so handlers don't need an in-memory client map.
+    this.state.acceptWebSocket(server, [clientKey]);
+    server.serializeAttachment({
+      userId, deviceId,
       token: sessionToken,
       lastAuthCheck: Date.now(),
     });
@@ -119,32 +143,40 @@ export class ChatRoom implements DurableObject {
       userId,
     );
 
-    server.addEventListener('message', (event) => {
-      void this.handleMessage(clientKey, event.data);
-    });
-
-    server.addEventListener('close', () => {
-      this.clients.delete(clientKey);
-      this.broadcast(
-        { type: 'presence', payload: { userId, status: 'offline' } },
-        userId,
-      );
-      // Persist last_seen
-      try {
-        this.env.DB.prepare(
-          `UPDATE users SET last_seen_at = datetime('now') WHERE id = ?`
-        ).bind(userId).run();
-      } catch { /* column may not exist yet */ }
-    });
-
-    server.addEventListener('error', () => {
-      this.clients.delete(clientKey);
-    });
-
     return new Response(null, { status: 101, webSocket: client });
   }
 
-  private async handleMessage(senderKey: string, data: string | ArrayBuffer): Promise<void> {
+  // ── Hibernation handlers ─────────────────────────────────────────
+  async webSocketMessage(ws: WebSocket, data: string | ArrayBuffer): Promise<void> {
+    const c = this.clientFor(ws);
+    if (!c) return;
+    await this.handleMessage(`${c.userId}:${c.deviceId}`, data, ws);
+  }
+
+  async webSocketClose(ws: WebSocket, _code: number, _reason: string, _wasClean: boolean): Promise<void> {
+    const c = this.clientFor(ws);
+    if (!c) return;
+    this.broadcast(
+      { type: 'presence', payload: { userId: c.userId, status: 'offline' } },
+      c.userId,
+    );
+    try {
+      await this.env.DB.prepare(
+        `UPDATE users SET last_seen_at = datetime('now') WHERE id = ?`
+      ).bind(c.userId).run();
+    } catch { /* column may not exist yet */ }
+  }
+
+  async webSocketError(ws: WebSocket, _err: unknown): Promise<void> {
+    const c = this.clientFor(ws);
+    if (!c) return;
+    this.broadcast(
+      { type: 'presence', payload: { userId: c.userId, status: 'offline' } },
+      c.userId,
+    );
+  }
+
+  private async handleMessage(senderKey: string, data: string | ArrayBuffer, senderWs: WebSocket): Promise<void> {
     if (typeof data !== 'string') return;
 
     let msg: WsMessage;
@@ -154,7 +186,7 @@ export class ChatRoom implements DurableObject {
       return; // Ignore malformed
     }
 
-    const sender = this.clients.get(senderKey);
+    const sender = this.clientFor(senderWs);
     if (!sender) return;
 
     // Re-validate session every 60 seconds to catch revoked/expired tokens
@@ -162,23 +194,28 @@ export class ChatRoom implements DurableObject {
     if (Date.now() - sender.lastAuthCheck > SESSION_RECHECK_MS) {
       const sessionData = await this.env.KV.get(`session:${sender.token}`);
       if (!sessionData) {
-        try { sender.ws.close(4001, 'Session expired'); } catch {}
-        this.clients.delete(senderKey);
+        try { senderWs.close(4001, 'Session expired'); } catch {}
         return;
       }
       try {
         const sess = JSON.parse(sessionData) as { userId: string; expiresAt: number };
         if (sess.userId !== sender.userId || sess.expiresAt < Math.floor(Date.now() / 1000)) {
-          try { sender.ws.close(4001, 'Session expired'); } catch {}
-          this.clients.delete(senderKey);
+          try { senderWs.close(4001, 'Session expired'); } catch {}
           return;
         }
       } catch {
-        try { sender.ws.close(4001, 'Session invalid'); } catch {}
-        this.clients.delete(senderKey);
+        try { senderWs.close(4001, 'Session invalid'); } catch {}
         return;
       }
       sender.lastAuthCheck = Date.now();
+      // Persist refreshed timestamp so subsequent hibernation wakes
+      // remember we just re-validated.
+      senderWs.serializeAttachment({
+        userId: sender.userId,
+        deviceId: sender.deviceId,
+        token: sender.token,
+        lastAuthCheck: sender.lastAuthCheck,
+      });
     }
 
     switch (msg.type) {
@@ -295,7 +332,7 @@ export class ChatRoom implements DurableObject {
             ).bind(messageId).first<{ burn_on_read: number }>();
             if (bor) {
               await this.env.DB.prepare(`DELETE FROM messages WHERE id = ?`).bind(messageId).run();
-              this.broadcast({ type: 'message_deleted', payload: { message_id: messageId } }, sender.userId);
+              this.broadcast({ type: 'message_delete', payload: { message_id: messageId } }, sender.userId);
             }
           } catch { /* ignore */ }
         }
@@ -382,19 +419,19 @@ export class ChatRoom implements DurableObject {
 
   private broadcast(msg: WsMessage & { excludeUserId?: string }, excludeUserId?: string): void {
     const data = JSON.stringify(msg);
-    for (const [, client] of this.clients) {
+    for (const client of this.allClients()) {
       if (excludeUserId && client.userId === excludeUserId) continue;
       try {
         client.ws.send(data);
       } catch {
-        // Connection dead, will be cleaned up on close event
+        // Connection dead, runtime will deliver close event
       }
     }
   }
 
   private sendToUser(userId: string, msg: WsMessage): void {
     const data = JSON.stringify(msg);
-    for (const [, client] of this.clients) {
+    for (const client of this.allClients()) {
       if (client.userId === userId) {
         try {
           client.ws.send(data);

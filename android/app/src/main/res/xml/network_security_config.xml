@@ -1,19 +1,20 @@
 <?xml version="1.0" encoding="utf-8"?>
 <network-security-config>
     <!--
-        Hardened defaults: HTTPS-only everywhere, no user-installed CAs in
-        production builds. Code-side certificate-pinning lives in APIClient
-        (chat.mocipher.com + rocchat-api.spoass.workers.dev SHA-256 leaf).
+        Hardened network security policy.
 
-        TODO(operator): once the SubjectPublicKeyInfo (SPKI) SHA-256 of each
-        leaf certificate has been generated with
-            openssl x509 -in cert.pem -pubkey -noout |
-            openssl pkey -pubin -outform der |
-            openssl dgst -sha256 -binary |
-            openssl enc -base64
-        add a <pin-set expiration="..."> block per domain. Wrong pins WILL
-        brick the app, so this is left out of source until the values are
-        verified against production.
+        Pin sets are SHA-256 hashes of the leaf certificate
+        SubjectPublicKeyInfo (SPKI) blocks, computed with:
+            openssl s_client -servername HOST -connect HOST:443 < /dev/null \
+              | openssl x509 -pubkey -noout \
+              | openssl pkey -pubin -outform der \
+              | openssl dgst -sha256 -binary | openssl enc -base64
+
+        Both backup pins are the *opposite* host's pin so a key rotation on
+        either domain can ship without a forced client update; the backup
+        ensures handshake succeeds while the new primary propagates.
+        Re-run the openssl command and update before `expiration` to avoid
+        a hard outage.
     -->
     <base-config cleartextTrafficPermitted="false">
         <trust-anchors>
@@ -22,7 +23,17 @@
     </base-config>
     <domain-config cleartextTrafficPermitted="false">
         <domain includeSubdomains="true">chat.mocipher.com</domain>
+        <pin-set expiration="2026-10-15">
+            <pin digest="SHA-256">KHY8DPTW3isekOe6GC/YOJlMMPw2em0LEZwCCRaIXEA=</pin>
+            <pin digest="SHA-256">5/+SyLZVwXNEgzb/Suqnc5zC0qOnpgaThFJPea0Naq0=</pin>
+        </pin-set>
+    </domain-config>
+    <domain-config cleartextTrafficPermitted="false">
         <domain includeSubdomains="true">rocchat-api.spoass.workers.dev</domain>
+        <pin-set expiration="2026-10-15">
+            <pin digest="SHA-256">5/+SyLZVwXNEgzb/Suqnc5zC0qOnpgaThFJPea0Naq0=</pin>
+            <pin digest="SHA-256">KHY8DPTW3isekOe6GC/YOJlMMPw2em0LEZwCCRaIXEA=</pin>
+        </pin-set>
     </domain-config>
     <debug-overrides>
         <trust-anchors>

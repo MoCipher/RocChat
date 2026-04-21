@@ -582,6 +582,9 @@ async function openConversation(conversationId: string) {
         <button class="icon-btn" title="Disappearing messages" id="btn-disappear" aria-label="Disappearing messages">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
         </button>
+        <button class="icon-btn" title="Notifications" id="btn-notif-mode" aria-label="Notifications for this conversation">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>
+        </button>
         <button class="icon-btn" title="Chat theme" id="btn-chat-theme" aria-label="Chat theme">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="13.5" cy="6.5" r="0.5" fill="currentColor"/><circle cx="17.5" cy="10.5" r="0.5" fill="currentColor"/><circle cx="8.5" cy="7.5" r="0.5" fill="currentColor"/><circle cx="6.5" cy="12" r="0.5" fill="currentColor"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z"/></svg>
         </button>
@@ -729,6 +732,11 @@ async function openConversation(conversationId: string) {
   // Bind disappearing messages timer
   chatView.querySelector('#btn-disappear')?.addEventListener('click', () => {
     showDisappearingMenu(conversationId);
+  });
+
+  // Bind per-conversation notification mode picker
+  chatView.querySelector('#btn-notif-mode')?.addEventListener('click', (e) => {
+    showNotificationModeMenu(conversationId, e.currentTarget as HTMLElement);
   });
 
   // Bind per-conversation theme picker
@@ -1148,6 +1156,54 @@ async function sendMessageHandler() {
   sendBtn.disabled = true;
   void deleteSecret(`rocchat_draft_${state.activeConversationId}`);
   localStorage.removeItem(`rocchat_draft_${state.activeConversationId}`); // clean legacy
+
+  // Nudge for push notification permission after the user's 3rd message.
+  // Asking on first load is hostile; asking after 3 sends means they have
+  // committed to the app and getting notified for replies is genuinely
+  // useful. Stops nagging after a permanent decision.
+  try {
+    const COUNT_KEY = 'rocchat_send_count';
+    const NUDGE_KEY = 'rocchat_push_nudge_v1';
+    const sent = parseInt(localStorage.getItem(COUNT_KEY) || '0', 10) + 1;
+    localStorage.setItem(COUNT_KEY, String(sent));
+    if (
+      sent >= 3 &&
+      !localStorage.getItem(NUDGE_KEY) &&
+      'Notification' in window &&
+      Notification.permission === 'default'
+    ) {
+      localStorage.setItem(NUDGE_KEY, '1');
+      // Defer so the message UI updates first, then show a non-blocking toast
+      // with an action that triggers the system permission prompt.
+      setTimeout(() => {
+        const t = document.createElement('div');
+        t.className = 'push-nudge-toast';
+        t.setAttribute('role', 'dialog');
+        t.setAttribute('aria-label', 'Enable push notifications');
+        t.innerHTML = `
+          <span style="flex:1">🔔 Get notified when someone replies?</span>
+          <button class="btn-secondary push-nudge-yes" style="font-size:12px;padding:4px 10px">Enable</button>
+          <button class="btn-secondary push-nudge-no"  style="font-size:12px;padding:4px 10px">Not now</button>
+        `;
+        Object.assign(t.style, {
+          position: 'fixed', bottom: '20px', left: '50%', transform: 'translateX(-50%)',
+          background: 'var(--bg-elevated)', color: 'var(--text-primary)',
+          border: '1px solid var(--roc-gold,#D4AF37)', borderRadius: '12px',
+          padding: '10px 14px', display: 'flex', gap: '10px', alignItems: 'center',
+          boxShadow: '0 4px 18px rgba(0,0,0,0.25)', zIndex: '60', maxWidth: '92vw',
+        } as Partial<CSSStyleDeclaration>);
+        document.body.appendChild(t);
+        const close = () => t.remove();
+        t.querySelector('.push-nudge-no')?.addEventListener('click', close);
+        t.querySelector('.push-nudge-yes')?.addEventListener('click', async () => {
+          close();
+          const enable = (window as unknown as { __rocchatEnablePush?: () => Promise<void> }).__rocchatEnablePush;
+          if (enable) await enable();
+        });
+        setTimeout(close, 12000);
+      }, 600);
+    }
+  } catch { /* localStorage unavailable */ }
 
   const conv = state.conversations.find((c) => c.id === state.activeConversationId);
   const userId = localStorage.getItem('rocchat_user_id') || '';
@@ -2250,6 +2306,73 @@ function applyConversationTheme(theme: string | null) {
   if (!theme || theme === 'default') return;
   const t = CHAT_THEMES.find(ct => ct.key === theme);
   if (t) Object.entries(t.vars).forEach(([k, v]) => root.style.setProperty(k, v));
+}
+
+/**
+ * Per-conversation notification override picker.
+ * Backend route: POST /api/messages/conversations/:id/notification-mode
+ * Modes (matches migration 0010): normal | quiet | focus | emergency | silent | scheduled
+ */
+function showNotificationModeMenu(conversationId: string, anchor: HTMLElement) {
+  document.querySelector('.notif-mode-menu')?.remove();
+  const conv = state.conversations.find(c => c.id === conversationId) as any;
+  const current = (conv?.notification_mode as string) || 'normal';
+
+  const modes: { value: string; label: string; hint: string; glyph: string }[] = [
+    { value: 'normal',    label: 'Normal',          hint: 'Push + sound + badge',                   glyph: '🔔' },
+    { value: 'quiet',     label: 'Quiet',           hint: 'Badge only, no sound or push',           glyph: '🔕' },
+    { value: 'focus',     label: 'Focus',           hint: 'Push only when @mentioned',              glyph: '🎯' },
+    { value: 'emergency', label: 'Emergency only',  hint: 'Push only for urgent / panic messages',  glyph: '🚨' },
+    { value: 'silent',    label: 'Muted',           hint: 'Nothing — not even a badge',             glyph: '🤫' },
+    { value: 'scheduled', label: 'Quiet hours',     hint: 'Mute 22:00 → 07:00 local',               glyph: '🌙' },
+  ];
+
+  const menu = document.createElement('div');
+  menu.className = 'notif-mode-menu msg-context-menu';
+  menu.setAttribute('role', 'menu');
+  menu.style.cssText = 'min-width:260px';
+  menu.innerHTML = `
+    <div style="padding:8px 12px;font-size:11px;letter-spacing:0.08em;color:var(--text-tertiary);text-transform:uppercase">Notifications</div>
+    ${modes.map(m => `
+      <button class="ctx-menu-item notif-mode-item" data-mode="${m.value}" role="menuitemradio" aria-checked="${current === m.value}" style="display:flex;align-items:flex-start;gap:10px;width:100%;text-align:left;padding:10px 12px;background:none;border:none;color:var(--text-primary);cursor:pointer">
+        <span style="font-size:18px;line-height:1.1">${m.glyph}</span>
+        <span style="display:flex;flex-direction:column;gap:2px;flex:1">
+          <span style="font-weight:600;font-size:13px${current === m.value ? ';color:var(--roc-gold)' : ''}">${m.label}${current === m.value ? ' ✓' : ''}</span>
+          <span style="font-size:11px;color:var(--text-tertiary)">${m.hint}</span>
+        </span>
+      </button>
+    `).join('')}
+  `;
+
+  // Position below the anchor button.
+  const rect = anchor.getBoundingClientRect();
+  menu.style.position = 'fixed';
+  menu.style.top = `${rect.bottom + 6}px`;
+  menu.style.right = `${Math.max(8, window.innerWidth - rect.right)}px`;
+  menu.style.zIndex = '60';
+  document.body.appendChild(menu);
+
+  const dismiss = (ev: Event) => {
+    if (!menu.contains(ev.target as Node)) {
+      menu.remove();
+      document.removeEventListener('click', dismiss, true);
+    }
+  };
+  setTimeout(() => document.addEventListener('click', dismiss, true), 0);
+
+  menu.querySelectorAll('.notif-mode-item').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const mode = (btn as HTMLElement).dataset.mode || 'normal';
+      menu.remove();
+      try {
+        await api.setNotificationMode(conversationId, mode);
+        if (conv) (conv as any).notification_mode = mode;
+        showToast(`Notifications: ${modes.find(m => m.value === mode)?.label}`, 'info');
+      } catch {
+        showToast('Could not update notifications', 'error');
+      }
+    });
+  });
 }
 
 function showConversationThemePicker(conversationId: string) {
@@ -3582,25 +3705,80 @@ async function reactToMsg(msgId: string, conversationId: string, emoji: string) 
 function updateReactionUI(msgId: string, userId: string, reaction: string | null) {
   const row = document.getElementById(`reactions-${msgId}`);
   if (!row) return;
-  // Simple aggregated display
-  const existing = row.querySelector(`[data-reaction-user="${userId}"]`) as HTMLElement;
-  if (existing) {
-    if (!reaction) { existing.remove(); return; }
-    existing.textContent = reaction;
-  } else if (reaction) {
-    const badge = document.createElement('span');
-    badge.className = 'reaction-badge';
-    badge.dataset.reactionUser = userId;
-    badge.textContent = reaction;
-    badge.addEventListener('click', async () => {
-      // Toggle off own reaction
-      if (userId === localStorage.getItem('rocchat_user_id')) {
+  const myId = localStorage.getItem('rocchat_user_id') || '';
+
+  // Reactions are E2EE — the inbound `reaction` string is the *ciphertext*
+  // for everyone except the local user (whose optimistic UI passes the
+  // plaintext emoji directly). We therefore aggregate by ciphertext for
+  // remote users and by plaintext for the local user. This avoids the
+  // earlier behaviour of rendering the base64 ciphertext directly to the
+  // bubble. A future commit will pre-decrypt remote reactions via the
+  // ratchet session for the conversation; until then we render a generic
+  // emoji glyph for remote reactions whose plaintext we cannot recover.
+  const isLocal = userId === myId;
+  const display = isLocal ? reaction : (reaction ? '✨' : null);
+  const groupKey = isLocal ? (reaction || '') : `remote:${reaction?.slice(0, 16) || ''}`;
+
+  // Remove this user's previous reaction (toggle / replace semantics).
+  const previous = row.querySelector(`[data-reaction-user="${userId}"]`);
+  if (previous) {
+    const prevGroup = previous.getAttribute('data-reaction-group') || '';
+    const prevChip = row.querySelector(`[data-reaction-chip="${prevGroup}"]`) as HTMLElement | null;
+    if (prevChip) {
+      const count = parseInt(prevChip.getAttribute('data-count') || '1', 10) - 1;
+      if (count <= 0) prevChip.remove();
+      else {
+        prevChip.setAttribute('data-count', String(count));
+        const numEl = prevChip.querySelector('.reaction-count');
+        if (numEl) numEl.textContent = String(count);
+      }
+    }
+    previous.remove();
+  }
+  if (!reaction) return;
+
+  // Track membership (one tag per user).
+  const memberTag = document.createElement('span');
+  memberTag.style.display = 'none';
+  memberTag.dataset.reactionUser = userId;
+  memberTag.dataset.reactionGroup = groupKey;
+  row.appendChild(memberTag);
+
+  // Aggregate chip per (group + emoji).
+  let chip = row.querySelector(`[data-reaction-chip="${groupKey}"]`) as HTMLButtonElement | null;
+  if (!chip) {
+    chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = 'reaction-chip';
+    chip.setAttribute('data-reaction-chip', groupKey);
+    chip.setAttribute('data-count', '0');
+    chip.setAttribute('aria-label', isLocal ? `Your reaction ${display}` : 'Reaction');
+    chip.innerHTML = `<span class="reaction-glyph">${display}</span><span class="reaction-count">0</span>`;
+    chip.addEventListener('click', async () => {
+      // Tapping your own chip removes it; tapping someone else's adds the
+      // same emoji from you (mirrors Slack/Telegram/iMessage behaviour).
+      if (isLocal) {
         await api.removeReaction(msgId);
-        badge.remove();
+        updateReactionUI(msgId, myId, null);
+      } else if (display) {
+        // Best-effort: react with sparkle glyph until per-conv ratchet
+        // decrypt is wired up. Local user gets immediate optimistic chip.
+        const conv = state.conversations.find(c => c.id === (window as any).__activeConvId);
+        if (!conv) return;
+        try {
+          const recipientId = (conv as any).members?.find((m: any) => m.user_id !== myId)?.user_id || '';
+          const enc = await encryptMessage(conv.id, recipientId, '✨');
+          await api.addReaction(msgId, enc.ciphertext);
+          updateReactionUI(msgId, myId, '✨');
+        } catch { /* ignore */ }
       }
     });
-    row.appendChild(badge);
+    row.appendChild(chip);
   }
+  const next = parseInt(chip.getAttribute('data-count') || '0', 10) + 1;
+  chip.setAttribute('data-count', String(next));
+  const numEl = chip.querySelector('.reaction-count');
+  if (numEl) numEl.textContent = String(next);
 }
 
 function startEditMessage(msgId: string, conversationId: string) {

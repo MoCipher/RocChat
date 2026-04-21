@@ -121,15 +121,11 @@ export async function sendPushNotification(
 
   if (!devices.results?.length) return;
 
+  const title = 'RocChat';
+  const body = `New message from ${senderName}`;
   const promises = devices.results.map(async (device) => {
     try {
-      if (device.push_platform === 'apns') {
-        await sendAPNs(env, device.push_token, senderName);
-      } else if (device.push_platform === 'ntfy') {
-        await sendNtfy(device.push_token, senderName);
-      } else if (device.push_platform === 'web') {
-        await sendWebPush(env, device.push_token, senderName);
-      }
+      await dispatchPush(env, device, title, body);
     } catch (err) {
       console.error(`Push failed for ${device.push_platform}:`, err);
     }
@@ -138,10 +134,50 @@ export async function sendPushNotification(
   await Promise.allSettled(promises);
 }
 
+/**
+ * Send a high-priority security alert (bypasses quiet hours) to all devices
+ * of `userId` except `excludeDeviceId`.
+ */
+export async function sendSecurityAlert(
+  env: Env,
+  userId: string,
+  title: string,
+  body: string,
+  excludeDeviceId?: string,
+): Promise<void> {
+  const query = excludeDeviceId
+    ? 'SELECT push_token, push_platform FROM devices WHERE user_id = ? AND id != ? AND push_token IS NOT NULL'
+    : 'SELECT push_token, push_platform FROM devices WHERE user_id = ? AND push_token IS NOT NULL';
+  const stmt = excludeDeviceId
+    ? env.DB.prepare(query).bind(userId, excludeDeviceId)
+    : env.DB.prepare(query).bind(userId);
+  const devices = await stmt.all<{ push_token: string; push_platform: string }>();
+  if (!devices.results?.length) return;
+  await Promise.allSettled(
+    devices.results.map((device) => dispatchPush(env, device, title, body).catch(() => {})),
+  );
+}
+
+async function dispatchPush(
+  env: Env,
+  device: { push_token: string; push_platform: string },
+  title: string,
+  body: string,
+): Promise<void> {
+  if (device.push_platform === 'apns') {
+    await sendAPNs(env, device.push_token, title, body);
+  } else if (device.push_platform === 'ntfy') {
+    await sendNtfy(device.push_token, title, body);
+  } else if (device.push_platform === 'web') {
+    await sendWebPush(env, device.push_token, title, body);
+  }
+}
+
 async function sendAPNs(
   env: Env,
   deviceToken: string,
-  senderName: string,
+  title: string,
+  body: string,
 ): Promise<void> {
   const apnsKey = env.APNS_KEY;
   const apnsKeyId = env.APNS_KEY_ID;
@@ -156,8 +192,8 @@ async function sendAPNs(
   const payload = {
     aps: {
       alert: {
-        title: 'RocChat',
-        body: `New message from ${senderName}`,
+        title,
+        body,
       },
       badge: 1,
       sound: 'default',
@@ -192,18 +228,19 @@ async function sendAPNs(
  */
 async function sendNtfy(
   topic: string,
-  senderName: string,
+  title: string,
+  body: string,
   ntfyUrl?: string,
 ): Promise<void> {
   const base = ntfyUrl || 'https://ntfy.roc.family';
   const resp = await fetch(`${base}/${topic}`, {
     method: 'POST',
     headers: {
-      'Title': 'RocChat',
+      'Title': title,
       'Priority': 'high',
       'Tags': 'locked_with_key',
     },
-    body: `New message from ${senderName}`,
+    body,
   });
 
   if (!resp.ok) {
@@ -215,7 +252,8 @@ async function sendNtfy(
 async function sendWebPush(
   env: Env,
   subscriptionJson: string,
-  senderName: string,
+  title: string,
+  notifBody: string,
 ): Promise<void> {
   // Web Push via VAPID (RFC 8292)
   // subscription is stored as JSON: { endpoint, keys: { p256dh, auth } }
@@ -235,8 +273,8 @@ async function sendWebPush(
   }
 
   const payload = JSON.stringify({
-    title: 'RocChat',
-    body: `New message from ${senderName}`,
+    title,
+    body: notifBody,
     icon: '/icon-192.png',
     badge: '/icon-192.png',
     tag: 'rocchat-message',

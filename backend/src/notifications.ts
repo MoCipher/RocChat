@@ -5,6 +5,7 @@
 
 import type { Env } from './index.js';
 import { logEvent } from './middleware.js';
+import { sendSecurityAlert } from './push.js';
 
 /**
  * Send a push alert to every device belonging to `userId` EXCEPT `newDeviceId`.
@@ -19,39 +20,12 @@ export async function sendLoginNotification(
   ip?: string,
 ): Promise<void> {
   try {
-    const devices = await env.DB.prepare(
-      `SELECT id, push_token, push_platform
-       FROM devices
-       WHERE user_id = ? AND id != ? AND push_token IS NOT NULL`,
-    ).bind(userId, newDeviceId).all<{ id: string; push_token: string; push_platform: string }>();
-
-    if (!devices.results?.length) return;
-
-    logEvent('info', 'login_notification', { userId, newDeviceId, platform, ip: ip ?? 'unknown', notifyCount: devices.results.length });
+    logEvent('info', 'login_notification', { userId, newDeviceId, platform, ip: ip ?? 'unknown' });
 
     const title = 'New login detected';
     const body = `A new login from ${platform} (${deviceName}) was detected. If this was not you, revoke the session in Settings.`;
 
-    await Promise.allSettled(
-      devices.results.map(async (device) => {
-        try {
-          const payload = JSON.stringify({ title, body, type: 'security_alert', data: { kind: 'new_login', platform, device_name: deviceName } });
-          // Use the same VAPID sender used elsewhere; re-use env-level push infra.
-          // We call the /api/push/send internal logic rather than re-implementing web-push here.
-          const kvKey = `push_direct:${device.id}:${Date.now()}`;
-          await env.KV.put(kvKey, payload, { expirationTtl: 300 });
-          // Actual delivery is handled by the push worker polling this KV key,
-          // OR we can write directly to the push_queue:
-          await env.KV.put(`push_queue:${device.push_platform}:${Date.now()}_${device.id}`, JSON.stringify({
-            token: device.push_token,
-            platform: device.push_platform,
-            title,
-            body,
-            data: { kind: 'new_login', platform, device_name: deviceName },
-          }), { expirationTtl: 3600 });
-        } catch { /* per-device failure is non-fatal */ }
-      }),
-    );
+    await sendSecurityAlert(env, userId, title, body, newDeviceId);
   } catch (err) {
     logEvent('error', 'login_notification_failed', { userId, err: String(err) });
   }

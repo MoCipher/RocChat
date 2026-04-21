@@ -303,6 +303,9 @@ export function renderSettings(container: HTMLElement) {
               <div class="setting-desc">Receive message alerts even when RocChat is closed</div>
             </div>
             <button class="btn btn-outline" id="btn-enable-push" style="font-size:var(--text-xs);padding:6px 16px">Enable</button>
+          </div>
+          <div id="push-status" style="font-size:var(--text-xs);color:var(--text-tertiary);margin-top:var(--sp-1)"></div>
+        </div>
 
         <div class="settings-section">
           <h3>Active Sessions</h3>
@@ -310,9 +313,6 @@ export function renderSettings(container: HTMLElement) {
           <div id="active-sessions-list" style="display:flex;flex-direction:column;gap:8px">
             <div style="color:var(--text-tertiary);font-size:var(--text-sm)">Loading…</div>
           </div>
-        </div>
-          </div>
-          <div id="push-status" style="font-size:var(--text-xs);color:var(--text-tertiary);margin-top:var(--sp-1)"></div>
         </div>
 
         <div class="settings-section">
@@ -1545,6 +1545,7 @@ export function renderSettings(container: HTMLElement) {
         const isThis = d.id === currentDeviceId;
         const lastActive = new Date(d.last_active * 1000).toLocaleDateString();
         const row = document.createElement('div');
+        row.setAttribute('data-device-row', d.id);
         row.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:10px 12px;background:var(--bg-card);border-radius:10px;border:1px solid var(--border-weak)';
         row.innerHTML = `
           <div>

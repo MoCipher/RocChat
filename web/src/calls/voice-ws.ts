@@ -88,11 +88,19 @@ export class VoiceWS {
   private processor: ScriptProcessorNode | null = null;
   private muted = false;
 
-  // Playback queue — schedule each incoming buffer back-to-back so audio
-  // stays continuous even when frames arrive jittery.
+  // Playback queue — jitter buffer holds frames before scheduling so
+  // late arrivals don't cause gaps. Target: 3 frames (~60 ms pre-roll).
   private playbackCtx: AudioContext | null = null;
   private nextPlaybackTime = 0;
   private seqOut = 0;
+  private jitterBuffer: Int16Array[] = [];
+  private jitterReady = false;
+  private readonly JITTER_DEPTH = 3; // frames to accumulate before drain
+  private incomingFrames = 0;
+  private lateResyncs = 0;
+  private droppedBufferedFrames = 0;
+  private lastArrivalAtMs = 0;
+  private jitterMsEma = 0;
 
   constructor(cfg: VoiceWSConfig) {
     this.ws = cfg.ws;
@@ -188,9 +196,36 @@ export class VoiceWS {
     }
     this.playbackCtx = null;
     this.nextPlaybackTime = 0;
+    this.jitterBuffer = [];
+    this.jitterReady = false;
+    this.incomingFrames = 0;
+    this.lateResyncs = 0;
+    this.droppedBufferedFrames = 0;
+    this.lastArrivalAtMs = 0;
+    this.jitterMsEma = 0;
   }
 
   setMuted(muted: boolean): void { this.muted = muted; }
+
+  getDiagnostics(): {
+    targetDepth: number;
+    currentDepth: number;
+    jitterReady: boolean;
+    jitterMsEma: number;
+    incomingFrames: number;
+    lateResyncs: number;
+    droppedBufferedFrames: number;
+  } {
+    return {
+      targetDepth: this.JITTER_DEPTH,
+      currentDepth: this.jitterBuffer.length,
+      jitterReady: this.jitterReady,
+      jitterMsEma: Number(this.jitterMsEma.toFixed(1)),
+      incomingFrames: this.incomingFrames,
+      lateResyncs: this.lateResyncs,
+      droppedBufferedFrames: this.droppedBufferedFrames,
+    };
+  }
 
   /** Play an incoming `call_audio` payload. Tolerates μ-law (0x01) or raw PCM16 (0x00 / legacy). */
   handleIncomingFrame(frameB64: string): void {
@@ -211,18 +246,46 @@ export class VoiceWS {
     }
     if (pcm.length === 0) return;
 
-    const buf = this.playbackCtx.createBuffer(1, pcm.length, 16000);
-    const channel = buf.getChannelData(0);
-    for (let i = 0; i < pcm.length; i++) channel[i] = pcm[i] / 0x8000;
+    this.incomingFrames += 1;
+    const nowArrival = performance.now();
+    if (this.lastArrivalAtMs > 0) {
+      const delta = nowArrival - this.lastArrivalAtMs;
+      const sample = Math.abs(delta - 20); // expected ~20ms packet cadence
+      this.jitterMsEma = this.jitterMsEma * 0.85 + sample * 0.15;
+    }
+    this.lastArrivalAtMs = nowArrival;
 
-    const node = this.playbackCtx.createBufferSource();
-    node.buffer = buf;
-    node.connect(this.playbackCtx.destination);
+    // Jitter buffer: accumulate JITTER_DEPTH frames then schedule continuously
+    this.jitterBuffer.push(pcm);
+    if (!this.jitterReady && this.jitterBuffer.length >= this.JITTER_DEPTH) {
+      this.jitterReady = true;
+      this.nextPlaybackTime = this.playbackCtx.currentTime + 0.005; // small head start
+    }
+    if (!this.jitterReady) return;
 
-    const now = this.playbackCtx.currentTime;
-    if (this.nextPlaybackTime < now) this.nextPlaybackTime = now;
-    node.start(this.nextPlaybackTime);
-    this.nextPlaybackTime += buf.duration;
+    // Drain entire buffer
+    while (this.jitterBuffer.length > 0) {
+      const frame = this.jitterBuffer.shift()!;
+      const buf = this.playbackCtx.createBuffer(1, frame.length, 16000);
+      const channel = buf.getChannelData(0);
+      for (let i = 0; i < frame.length; i++) channel[i] = frame[i] / 0x8000;
+
+      const node = this.playbackCtx.createBufferSource();
+      node.buffer = buf;
+      node.connect(this.playbackCtx.destination);
+
+      const now = this.playbackCtx.currentTime;
+      if (this.nextPlaybackTime < now) {
+        // Fell behind — re-sync and discard extra buffered frames to catch up
+        this.nextPlaybackTime = now + 0.005;
+        this.lateResyncs += 1;
+        this.droppedBufferedFrames += this.jitterBuffer.length;
+        this.jitterBuffer = [];
+        this.jitterReady = false;
+      }
+      node.start(this.nextPlaybackTime);
+      this.nextPlaybackTime += buf.duration;
+    }
   }
 
   private sendFrame(pcm: Int16Array): void {

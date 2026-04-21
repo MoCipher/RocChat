@@ -34,21 +34,53 @@ import { installCommandPaletteHotkey, registerPaletteCommand } from './component
 import { syncChannel, setRocClientEnabled, isRocClient } from './components/roc-client.js';
 
 // ── Trusted Types policy (defense-in-depth) ──
-// We do not enforce via CSP yet (legacy innerHTML callsites exist), but
-// declaring the policy lets us migrate sinks one by one.
+// CSP enforces `require-trusted-types-for 'script'`.
+// Default policy is intentionally restrictive: no dynamic script text and
+// no cross-origin script URLs.
 try {
   const tt = (window as unknown as { trustedTypes?: { createPolicy: (name: string, rules: object) => unknown; defaultPolicy?: unknown } }).trustedTypes;
   if (tt && typeof tt.createPolicy === 'function') {
-    // Default policy: pass-through but logged so migration callers can find it.
     if (!tt.defaultPolicy) {
       tt.createPolicy('rocchat-default', {
-        createHTML: (s: string) => s,
-        createScript: (s: string) => s,
-        createScriptURL: (s: string) => s,
+        createHTML: (s: string) => {
+          // Sanitise HTML strings passed to innerHTML/outerHTML sinks.
+          // Strips <script> tags and inline event handlers so that existing UI
+          // code (SVG icon injection, message rendering, dialogs) continues to
+          // work while script-injection attacks are blocked at the sink level.
+          // The primary defence remains the server-side and input-validation
+          // layers; this is defence-in-depth.
+          return s
+            .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '')
+            .replace(/<script\b[^>]*>/gi, '')
+            .replace(/\bon\w+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]*)/gi, '')
+            .replace(/\bjavascript\s*:/gi, 'removed:');
+        },
+        createScript: () => {
+          throw new TypeError('Dynamic script text is blocked by Trusted Types policy');
+        },
+        createScriptURL: (s: string) => {
+          const url = new URL(s, window.location.origin);
+          if ((url.protocol !== 'https:' && url.protocol !== 'http:') || url.origin !== window.location.origin) {
+            throw new TypeError('Cross-origin script URL blocked by Trusted Types policy');
+          }
+          return url.toString();
+        },
       });
     }
   }
 } catch { /* trustedTypes unavailable */ }
+
+// SW queue replay requests auth at replay time; never persist bearer tokens in IDB.
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.addEventListener('message', (event: MessageEvent<{ type?: string }>) => {
+    if (event.data?.type !== 'rocchat:get-auth-token') return;
+    const port = event.ports?.[0];
+    if (!port) return;
+    try {
+      port.postMessage({ token: getToken() ?? null });
+    } catch { /* ignore */ }
+  });
+}
 
 let currentTab: Tab = 'chats';
 

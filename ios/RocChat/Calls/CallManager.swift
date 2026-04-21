@@ -61,6 +61,12 @@ class CallManager: ObservableObject {
     @Published var callDuration: Int = 0
     @Published var callHistory: [CallRecord] = []
 
+    /// Diagnostics metrics (updated by adaptVideoQuality)
+    @Published var diagFps: Double = 8
+    @Published var diagQuality: CGFloat = 0.55
+    @Published var diagAudioJitterMs: Double = 0
+    @Published var diagAudioLateFrames: Int = 0
+
     /// Latest decoded JPEG frame from the remote peer (for SwiftUI rendering).
     @Published var remoteVideoFrame: UIImage? = nil
 
@@ -91,17 +97,24 @@ class CallManager: ObservableObject {
     private var audioEngine: AVAudioEngine?
     private var playerNode: AVAudioPlayerNode?
     private var audioSeq: UInt64 = 0
+    private var lastInboundAudioAtMs: Double? = nil
     private let audioSampleRate: Double = 16000
     private let audioFormat = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: 16000, channels: 1, interleaved: true)!
 
-    // Video-over-WebSocket: AVCaptureSession → JPEG @ 8 fps, 320×240,
+    // Video-over-WebSocket: AVCaptureSession → JPEG @ adaptive fps, 320×240,
     // base64'd into call_video frames. Matches web's VideoWS wire format.
     private var videoCapture: AVCaptureSession?
     private var videoOutput: AVCaptureVideoDataOutput?
     private let videoQueue = DispatchQueue(label: "rocchat.video.capture", qos: .userInteractive)
     private var videoSeq: UInt64 = 0
     private var lastVideoSendAt: TimeInterval = 0
-    private let videoTargetFps: Double = 8
+    private var videoTargetFps: Double = 8
+    private var videoJpegQuality: CGFloat = 0.55
+
+    // RTT measurement for adaptive quality
+    private var pingTs: TimeInterval? = nil
+    @Published var estimatedRttMs: Double = 150
+    private var pingTimer: Timer? = nil
 
     // Independent STUN servers — no Google, no surveillance
     private let iceServers = [
@@ -189,7 +202,12 @@ class CallManager: ObservableObject {
             "targetUserId": remoteUserId
         ])
         startAudioStreaming()
-        if callType == .video { startVideoStreaming() }
+        if callType == .video {
+            startVideoStreaming()
+            pingTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
+                Task { @MainActor in self?.sendVideoPing() }
+            }
+        }
     }
 
     func declineCall() {
@@ -205,7 +223,12 @@ class CallManager: ObservableObject {
         startTime = Date()
         startDurationTimer()
         startAudioStreaming()
-        if callType == .video { startVideoStreaming() }
+        if callType == .video {
+            startVideoStreaming()
+            pingTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
+                Task { @MainActor in self?.sendVideoPing() }
+            }
+        }
     }
 
     func handleIceCandidate(payload: [String: Any]) {
@@ -262,6 +285,9 @@ class CallManager: ObservableObject {
         // Clean up
         durationTimer?.invalidate()
         durationTimer = nil
+        pingTimer?.invalidate()
+        pingTimer = nil
+        pingTs = nil
         stopAudioStreaming()
         stopVideoStreaming()
         stopP2P()
@@ -387,6 +413,10 @@ class CallManager: ObservableObject {
         guard callType == .voice || callType == .video else { return }
         guard audioEngine == nil else { return }
 
+        diagAudioJitterMs = 0
+        diagAudioLateFrames = 0
+        lastInboundAudioAtMs = nil
+
         let engine = AVAudioEngine()
         let player = AVAudioPlayerNode()
         engine.attach(player)
@@ -448,6 +478,7 @@ class CallManager: ObservableObject {
         audioEngine = nil
         playerNode = nil
         audioSeq = 0
+        lastInboundAudioAtMs = nil
         // Best-effort: release the shared audio session so Bluetooth / Now
         // Playing / Silent switch return to their prior state.
         try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
@@ -491,6 +522,17 @@ class CallManager: ObservableObject {
         return payload // legacy: raw PCM16, no tag
     }
 
+    private func trackInboundAudioTiming(expectedFrameMs: Double = 20) {
+        let nowMs = CACurrentMediaTime() * 1000
+        if let last = lastInboundAudioAtMs {
+            let delta = nowMs - last
+            let jitterSample = abs(delta - expectedFrameMs)
+            diagAudioJitterMs = diagAudioJitterMs * 0.85 + jitterSample * 0.15
+            if delta > 60 { diagAudioLateFrames += 1 }
+        }
+        lastInboundAudioAtMs = nowMs
+    }
+
     func handleCallAudio(payload: [String: Any]) {
         guard callStatus == .connected,
               let frameB64 = payload["frame"] as? String,
@@ -498,6 +540,7 @@ class CallManager: ObservableObject {
               incomingCallId == callId,
               let raw = Data(base64Encoded: frameB64),
               let player = playerNode else { return }
+          trackInboundAudioTiming()
         let data = decodeInboundAudio(raw)
         let frameCount = AVAudioFrameCount(data.count / MemoryLayout<Int16>.size)
         guard frameCount > 0,
@@ -567,7 +610,7 @@ class CallManager: ObservableObject {
             if now - self.lastVideoSendAt < 1.0 / self.videoTargetFps { return }
             self.lastVideoSendAt = now
             guard let pb = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
-            guard let jpeg = Self.jpegFromPixelBuffer(pb, maxWidth: 320, maxHeight: 240, quality: 0.55) else { return }
+            guard let jpeg = Self.jpegFromPixelBuffer(pb, maxWidth: 320, maxHeight: 240, quality: self.videoJpegQuality) else { return }
             self.sendVideoFrame(jpeg: jpeg)
         }
     }
@@ -602,6 +645,29 @@ class CallManager: ObservableObject {
         ws.send(.string(str)) { _ in }
     }
 
+    func sendVideoPing() {
+        guard let callId = callId, let ws = ws else { return }
+        let ts = CACurrentMediaTime()
+        pingTs = ts
+        let tsStr = String(format: "%.3f", ts)
+        let payload: [String: Any] = ["callId": callId, "targetUserId": remoteUserId, "seq": 0, "frame": "roc-ping:\(tsStr)"]
+        guard let data = try? JSONSerialization.data(withJSONObject: ["type": "call_video", "payload": payload]),
+              let str = String(data: data, encoding: .utf8) else { return }
+        ws.send(.string(str)) { _ in }
+    }
+
+    private func adaptVideoQuality() {
+        if estimatedRttMs < 80 {
+            videoTargetFps = 12; videoJpegQuality = 0.65
+        } else if estimatedRttMs < 200 {
+            videoTargetFps = 8; videoJpegQuality = 0.55
+        } else {
+            videoTargetFps = 4; videoJpegQuality = 0.30
+        }
+        diagFps = videoTargetFps
+        diagQuality = videoJpegQuality
+    }
+
     /// Inbound `call_video` frame from web or another native peer. Tag 0x01
     /// is the only format currently emitted; we decode the JPEG and publish
     /// it for the SwiftUI layer to render.
@@ -609,9 +675,23 @@ class CallManager: ObservableObject {
         guard callStatus == .connected,
               let frameB64 = payload["frame"] as? String,
               let incomingCallId = payload["callId"] as? String,
-              incomingCallId == callId,
-              var raw = Data(base64Encoded: frameB64),
-              !raw.isEmpty else { return }
+              incomingCallId == callId else { return }
+        // Handle ping/pong for RTT measurement
+        if frameB64.hasPrefix("roc-ping:") {
+            let tsStr = String(frameB64.dropFirst(9))
+            guard let callId = callId, let ws = ws else { return }
+            let pong: [String: Any] = ["callId": callId, "targetUserId": remoteUserId, "seq": 0, "frame": "roc-pong:\(tsStr)"]
+            if let data = try? JSONSerialization.data(withJSONObject: ["type": "call_video", "payload": pong]),
+               let str = String(data: data, encoding: .utf8) { ws.send(.string(str)) { _ in } }
+            return
+        }
+        if frameB64.hasPrefix("roc-pong:"), let sentAt = pingTs {
+            estimatedRttMs = (CACurrentMediaTime() - sentAt) * 1000
+            pingTs = nil
+            adaptVideoQuality()
+            return
+        }
+        guard var raw = Data(base64Encoded: frameB64), !raw.isEmpty else { return }
         let tag = raw.removeFirst()
         guard tag == 0x01 else { return }
         if let img = UIImage(data: raw) {
@@ -868,6 +948,7 @@ extension CallManager: P2PTransportDelegate {
         Task { @MainActor [weak self] in
             guard let self = self, self.callStatus == .connected,
                   let player = self.playerNode else { return }
+            self.trackInboundAudioTiming()
             let data = self.decodeInboundAudio(pcm)
             let frameCount = AVAudioFrameCount(data.count / MemoryLayout<Int16>.size)
             guard frameCount > 0,

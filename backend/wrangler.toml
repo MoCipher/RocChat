@@ -25,8 +25,12 @@ name = "CHAT_ROOM"
 class_name = "ChatRoom"
 
 # ── Cron Triggers (scheduled worker) ──
+# Account cron quota is fully used by other production workers.
+# RocChat maintenance is invoked via GitHub Actions hitting:
+#   POST /api/internal/maintenance/run
+# with secret header: x-scheduler-secret
 # [triggers]
-# crons = ["*/5 * * * *"]  # Every 5 minutes: send scheduled msgs, purge expired, retention cleanup
+# crons = ["*/5 * * * *"]
 
 [[migrations]]
 tag = "v1"
@@ -35,5 +39,6 @@ new_sqlite_classes = ["ChatRoom"]
 # ── Environment Variables ──
 [vars]
 POW_DIFFICULTY = "18"  # Proof-of-work difficulty (no Turnstile/CAPTCHA dependency)
+# Set via secret in prod: `wrangler secret put SCHEDULER_SECRET`
 
 # ── Scheduled Workers (cron) ── (see [triggers] above)

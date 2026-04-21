@@ -10,6 +10,7 @@ import SwiftUI
 
 struct CallOverlay: View {
     @ObservedObject var callManager = CallManager.shared
+    @State private var showDiagnostics = false
 
     var body: some View {
         if callManager.callStatus != .idle {
@@ -21,14 +22,35 @@ struct CallOverlay: View {
 
                     // Remote video preview (1:1 JPEG-over-WS from web/native).
                     if callManager.callType == .video,
-                       callManager.callStatus == .connected,
-                       let img = callManager.remoteVideoFrame {
-                        Image(uiImage: img)
-                            .resizable()
-                            .aspectRatio(contentMode: .fit)
-                            .frame(maxWidth: 320, maxHeight: 240)
-                            .background(Color.black)
-                            .cornerRadius(12)
+                       callManager.callStatus == .connected {
+                        if let img = callManager.remoteVideoFrame {
+                            Image(uiImage: img)
+                                .resizable()
+                                .aspectRatio(contentMode: .fit)
+                                .frame(maxWidth: 320, maxHeight: 240)
+                                .background(Color.black)
+                                .cornerRadius(12)
+                        } else {
+                            // No video received yet — show avatar placeholder
+                            ZStack {
+                                RoundedRectangle(cornerRadius: 12)
+                                    .fill(Color(white: 0.08))
+                                    .frame(maxWidth: 320, maxHeight: 240)
+                                VStack(spacing: 8) {
+                                    ZStack {
+                                        Circle()
+                                            .fill(Color.rocGold.opacity(0.8))
+                                            .frame(width: 72, height: 72)
+                                        Text(initials(callManager.remoteName))
+                                            .font(.system(size: 26, weight: .bold))
+                                            .foregroundColor(.black)
+                                    }
+                                    Text("No video")
+                                        .font(.caption)
+                                        .foregroundColor(.white.opacity(0.5))
+                                }
+                            }
+                        }
                     }
 
                     // Avatar
@@ -158,6 +180,23 @@ struct CallOverlay: View {
                         .foregroundColor(.white)
                 }
             }
+
+            // Diagnostics
+            if callManager.callStatus == .connected {
+                Button(action: { showDiagnostics.toggle() }) {
+                    ZStack {
+                        Circle()
+                            .fill(showDiagnostics ? Color.white.opacity(0.3) : Color.white.opacity(0.1))
+                            .frame(width: 52, height: 52)
+                        Image(systemName: "waveform.path.ecg")
+                            .font(.title3)
+                            .foregroundColor(.white)
+                    }
+                }
+                .sheet(isPresented: $showDiagnostics) {
+                    CallDiagnosticsView()
+                }
+            }
         }
     }
 
@@ -254,6 +293,58 @@ struct CallsHistoryView: View {
 
     private func initials(_ name: String) -> String {
         name.split(separator: " ").compactMap { $0.first.map(String.init) }.prefix(2).joined().uppercased()
+    }
+
+    private func formatDuration(_ seconds: Int) -> String {
+        String(format: "%02d:%02d", seconds / 60, seconds % 60)
+    }
+}
+
+// MARK: - Call Diagnostics Sheet
+
+struct CallDiagnosticsView: View {
+    @ObservedObject var callManager = CallManager.shared
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section("Connection") {
+                    diagRow(label: "Call Type", value: callManager.callType.rawValue.capitalized)
+                    diagRow(label: "Duration", value: formatDuration(callManager.callDuration))
+                    diagRow(label: "Estimated RTT", value: String(format: "%.0f ms", callManager.estimatedRttMs))
+                }
+                if callManager.callType == .video {
+                    Section("Video") {
+                        diagRow(label: "Target FPS", value: String(format: "%.0f fps", callManager.diagFps))
+                        diagRow(label: "JPEG Quality", value: String(format: "%.0f%%", callManager.diagQuality * 100))
+                    }
+                }
+                Section("Voice") {
+                    diagRow(label: "Jitter (EMA)", value: String(format: "%.1f ms", callManager.diagAudioJitterMs))
+                    diagRow(label: "Late frames", value: String(callManager.diagAudioLateFrames))
+                }
+                Section("Transport") {
+                    diagRow(label: "Media relay", value: "WebSocket (RocChat relay)")
+                    diagRow(label: "Encryption", value: "AES-256-GCM")
+                }
+            }
+            .navigationTitle("Call Diagnostics")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+    }
+
+    private func diagRow(label: String, value: String) -> some View {
+        HStack {
+            Text(label).foregroundColor(.secondary)
+            Spacer()
+            Text(value).font(.custom("JetBrains Mono", size: 13))
+        }
     }
 
     private func formatDuration(_ seconds: Int) -> String {

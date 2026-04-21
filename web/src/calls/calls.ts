@@ -378,6 +378,28 @@ function paintRemoteFrame(img: HTMLImageElement) {
   const ctx = canvas.getContext('2d');
   if (!ctx) return;
   ctx.drawImage(img, 0, 0);
+  // Track last frame time and hide placeholder
+  (canvas as any)._lastFrameAt = Date.now();
+  const placeholder = document.getElementById('remote-video-placeholder');
+  if (placeholder) placeholder.style.display = 'none';
+  canvas.style.display = 'block';
+}
+
+// Check every 3s; if no frame in 10s while connected show avatar placeholder
+function startVideoFallbackWatcher() {
+  const interval = setInterval(() => {
+    if (callState.status !== 'connected' || callState.callType !== 'video') {
+      clearInterval(interval);
+      return;
+    }
+    const canvas = document.getElementById('remote-video-canvas') as HTMLCanvasElement | null;
+    if (!canvas) { clearInterval(interval); return; }
+    const lastFrame: number = (canvas as any)._lastFrameAt ?? 0;
+    const stale = Date.now() - lastFrame > 10_000;
+    const placeholder = document.getElementById('remote-video-placeholder');
+    if (placeholder) placeholder.style.display = stale ? 'flex' : 'none';
+    if (stale) canvas.style.display = 'none';
+  }, 3_000);
 }
 
 function showSafetyWordIfReady() {
@@ -415,6 +437,7 @@ async function createPC() {
     if (pc.connectionState === 'connected') {
       callState.status = 'connected'; callState.startTime = Date.now();
       updateOverlay(); startTimer();
+      if (callState.callType === 'video') startVideoFallbackWatcher();
       // Derive and display safety word
       const myId = localStorage.getItem('rocchat_user_id') || '';
       if (myId && callState.remoteUserId) {
@@ -443,6 +466,7 @@ async function acceptCall() {
     callState.startTime = Date.now();
     updateOverlay();
     startTimer();
+    if (callState.callType === 'video') startVideoFallbackWatcher();
     await startVoiceWS();
     await startVideoWSIfNeeded();
     showSafetyWordIfReady();
@@ -569,6 +593,10 @@ function overlayHTML(): string {
   return `
     <div class="call-card ${isV ? 'call-card-video' : ''}">
       ${isV ? `<canvas id="remote-video-canvas" width="320" height="240" style="width:100%;height:100%;object-fit:contain;border-radius:var(--radius-lg);background:#000"></canvas>
+        <div id="remote-video-placeholder" style="display:none;position:absolute;top:0;left:0;width:100%;height:100%;align-items:center;justify-content:center;flex-direction:column;background:#111;border-radius:var(--radius-lg)">
+          <div style="width:72px;height:72px;border-radius:50%;background:var(--roc-gold,#D4AF37);display:flex;align-items:center;justify-content:center;font-size:28px;font-weight:700;color:#000">${ini}</div>
+          <p style="color:var(--text-tertiary);font-size:var(--text-sm);margin-top:var(--sp-3)">No video</p>
+        </div>
         <video id="local-video" autoplay playsinline muted style="position:absolute;top:var(--sp-4);right:var(--sp-4);width:120px;height:90px;object-fit:cover;border-radius:var(--radius-md);border:2px solid var(--gold);z-index:2"></video>`
         : `<div class="call-avatar">${ini}</div>`}
       <audio id="remote-audio" autoplay></audio>
@@ -579,6 +607,7 @@ function overlayHTML(): string {
       <div class="call-controls" style="${isV ? 'position:absolute;bottom:var(--sp-6);left:0;right:0;' : ''}display:flex;gap:var(--sp-4);justify-content:center">
         <button class="call-control-btn ${callState.muted ? 'active' : ''}" id="call-mute"><i data-lucide="${callState.muted ? 'mic-off' : 'mic'}" style="width:24px;height:24px"></i></button>
         ${isV ? `<button class="call-control-btn ${callState.cameraOff ? 'active' : ''}" id="call-camera"><i data-lucide="${callState.cameraOff ? 'video-off' : 'video'}" style="width:24px;height:24px"></i></button>` : ''}
+        ${conn ? `<button class="call-control-btn" id="call-diag" title="Diagnostics"><i data-lucide="activity" style="width:24px;height:24px"></i></button>` : ''}
         <button class="call-btn call-btn-decline" id="call-hangup"><i data-lucide="phone-off" style="width:24px;height:24px"></i></button>
       </div>
       <p style="font-family:var(--font-mono);font-size:var(--text-xs);color:var(--turquoise);margin-top:var(--sp-3);text-align:center;${isV ? 'position:absolute;bottom:4px;left:0;right:0' : ''}">🔒 DTLS-SRTP encrypted${conn ? ' · <span id="call-safety-word" title="Both callers should see the same code">verifying…</span>' : ''}</p>
@@ -591,6 +620,60 @@ function bindEvents() {
   document.getElementById('call-hangup')?.addEventListener('click', () => endCall('hangup'));
   document.getElementById('call-mute')?.addEventListener('click', toggleMute);
   document.getElementById('call-camera')?.addEventListener('click', toggleCamera);
+  document.getElementById('call-diag')?.addEventListener('click', toggleDiagnosticsPanel);
+}
+
+// ── Call Diagnostics Panel ──
+
+let diagInterval: ReturnType<typeof setInterval> | null = null;
+
+function toggleDiagnosticsPanel(): void {
+  let panel = document.getElementById('call-diag-panel');
+  if (panel) { panel.remove(); if (diagInterval) { clearInterval(diagInterval); diagInterval = null; } return; }
+
+  const overlay = document.getElementById('call-overlay');
+  if (!overlay) return;
+
+  panel = document.createElement('div');
+  panel.id = 'call-diag-panel';
+  panel.style.cssText = 'position:absolute;top:10px;left:10px;background:rgba(0,0,0,0.75);border:1px solid rgba(255,255,255,0.12);border-radius:8px;padding:12px 16px;font-family:var(--font-mono,monospace);font-size:11px;color:#fff;z-index:100;min-width:200px;pointer-events:none';
+  const title = document.createElement('div');
+  title.style.cssText = 'font-weight:700;margin-bottom:6px;color:var(--roc-gold,#D4AF37)';
+  title.textContent = 'Diagnostics';
+  const body = document.createElement('div');
+  body.id = 'diag-body';
+  panel.appendChild(title);
+  panel.appendChild(body);
+  overlay.appendChild(panel);
+
+  const renderRow = (root: HTMLElement, label: string, value: string): void => {
+    const row = document.createElement('div');
+    row.textContent = `${label}: ${value}`;
+    root.appendChild(row);
+  };
+
+  function refreshDiag() {
+    const bodyEl = document.getElementById('diag-body');
+    if (!bodyEl) return;
+    const vws: any = (callState as any).videoWS;
+    const voiceDiag = callState.voiceWS?.getDiagnostics?.();
+    const rtt = vws ? (vws.rttMs ?? '–') : '–';
+    const fps = vws ? (vws.currentFps ?? '–') : '–';
+    const qual = vws ? Math.round((vws.currentQuality ?? 0) * 100) + '%' : '–';
+    const elapsed = callState.startTime ? fmtDur(Math.floor((Date.now() - callState.startTime) / 1000)) : '–';
+    bodyEl.replaceChildren();
+    renderRow(bodyEl, 'Duration', elapsed);
+    renderRow(bodyEl, 'RTT', typeof rtt === 'number' ? `${rtt} ms` : String(rtt));
+    renderRow(bodyEl, 'Video FPS', String(fps));
+    renderRow(bodyEl, 'JPEG quality', String(qual));
+    renderRow(bodyEl, 'Voice jitter (EMA)', voiceDiag ? `${voiceDiag.jitterMsEma} ms` : '–');
+    renderRow(bodyEl, 'Voice jitter depth', voiceDiag ? `${voiceDiag.currentDepth}/${voiceDiag.targetDepth}` : '–');
+    renderRow(bodyEl, 'Voice late resyncs', voiceDiag ? String(voiceDiag.lateResyncs) : '–');
+    renderRow(bodyEl, 'Call type', callState.callType);
+    renderRow(bodyEl, 'Transport', 'WS relay');
+  }
+  refreshDiag();
+  diagInterval = setInterval(refreshDiag, 2_000);
 }
 
 function startTimer() {

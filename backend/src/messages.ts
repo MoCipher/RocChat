@@ -321,6 +321,8 @@ async function sendMessage(request: Request, env: Env, session: Session): Promis
 
   const expiresIn = (raw.expires_in ?? raw.expiresIn) as number | undefined;
   const messageType = (raw.message_type ?? raw.messageType ?? 'text') as string;
+  const messageNonceRaw = (raw.message_nonce ?? raw.messageNonce) as string | undefined;
+  const messageNonce = typeof messageNonceRaw === 'string' ? messageNonceRaw.trim() : undefined;
   const replyTo = (raw.reply_to ?? raw.replyTo) as string | undefined;
   const priority = (['normal', 'high', 'urgent'].includes(raw.priority as string) ? raw.priority : 'normal') as string;
 
@@ -340,6 +342,9 @@ async function sendMessage(request: Request, env: Env, session: Session): Promis
   }
   if (messageType && messageType.length > 32) {
     return errorResponse('Invalid message type', 400);
+  }
+  if (messageNonce && (messageNonce.length < 8 || messageNonce.length > 128 || !/^[A-Za-z0-9._:-]+$/.test(messageNonce))) {
+    return errorResponse('Invalid message nonce', 400);
   }
 
   // Verify membership
@@ -377,21 +382,71 @@ async function sendMessage(request: Request, env: Env, session: Session): Promis
     return errorResponse('Storage quota exceeded — delete old messages first', 413);
   }
 
-  await env.DB.prepare(
-    `INSERT INTO messages (id, conversation_id, sender_id, encrypted, server_timestamp, expires_at, reply_to, priority)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-  )
-    .bind(
-      messageId,
-      conversationId,
-      session.userId,
-      JSON.stringify({ ...encrypted, message_type: messageType }),
-      now,
-      expiresAt,
-      replyTo || null,
-      priority,
+  // Idempotency: if the same sender retries a previously-sent encrypted
+  // payload with the same message_nonce, return the existing message id.
+  if (messageNonce) {
+    const existing = await env.DB.prepare(
+      `SELECT id, server_timestamp
+       FROM messages
+       WHERE conversation_id = ?
+         AND sender_id = ?
+         AND json_valid(encrypted) = 1
+         AND json_extract(encrypted, '$.message_nonce') = ?
+       LIMIT 1`,
     )
-    .run();
+      .bind(conversationId, session.userId, messageNonce)
+      .first<{ id: string; server_timestamp: number }>();
+
+    if (existing) {
+      return jsonResponse({
+        message_id: existing.id,
+        duplicate: true,
+        server_timestamp: existing.server_timestamp,
+      }, 200);
+    }
+  }
+
+  try {
+    await env.DB.prepare(
+      `INSERT INTO messages (id, conversation_id, sender_id, encrypted, server_timestamp, expires_at, reply_to, priority)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+      .bind(
+        messageId,
+        conversationId,
+        session.userId,
+        JSON.stringify({ ...encrypted, message_type: messageType, ...(messageNonce ? { message_nonce: messageNonce } : {}) }),
+        now,
+        expiresAt,
+        replyTo || null,
+        priority,
+      )
+      .run();
+  } catch (err) {
+    // Concurrent retries can race between the pre-check above and INSERT.
+    // If the uniqueness index fires, look up and return the existing row.
+    if (messageNonce) {
+      const existing = await env.DB.prepare(
+        `SELECT id, server_timestamp
+         FROM messages
+         WHERE conversation_id = ?
+           AND sender_id = ?
+           AND json_valid(encrypted) = 1
+           AND json_extract(encrypted, '$.message_nonce') = ?
+         LIMIT 1`,
+      )
+        .bind(conversationId, session.userId, messageNonce)
+        .first<{ id: string; server_timestamp: number }>();
+      if (existing) {
+        return jsonResponse({
+          message_id: existing.id,
+          duplicate: true,
+          server_timestamp: existing.server_timestamp,
+        }, 200);
+      }
+    }
+    throw err;
+  }
 
   // Notify connected WebSocket clients via Durable Object
   const roomId = env.CHAT_ROOM.idFromName(conversationId);
@@ -575,6 +630,11 @@ async function listConversations(env: Env, session: Session, includeArchived: bo
              JOIN users u2 ON u2.id = cm2.user_id
              WHERE cm2.conversation_id = c.id) as members,
             (SELECT MAX(m.server_timestamp) FROM messages m WHERE m.conversation_id = c.id) as last_message_at
+            ,(SELECT json_extract(m.encrypted, '$.message_type')
+              FROM messages m
+              WHERE m.conversation_id = c.id
+              ORDER BY m.server_timestamp DESC
+              LIMIT 1) as last_message_type
      FROM conversations c
      JOIN conversation_members cm ON cm.conversation_id = c.id AND cm.user_id = ?
      WHERE 1=1 ${archivedFilter}
@@ -596,6 +656,7 @@ async function listConversations(env: Env, session: Session, includeArchived: bo
     voice_expiry: row.voice_expiry || null,
     call_history_expiry: row.call_history_expiry || null,
     burn_on_read: !!(row.burn_on_read),
+    last_message_type: (row.last_message_type as string) || 'text',
     last_message_at: row.last_message_at
       ? new Date((row.last_message_at as number) * 1000).toISOString()
       : null,

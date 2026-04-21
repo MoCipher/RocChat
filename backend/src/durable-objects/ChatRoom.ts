@@ -51,6 +51,13 @@ interface WsMessage {
 export class ChatRoom implements DurableObject {
   private state: DurableObjectState;
   private env: Env;
+  private mediaRateWindow = new Map<string, { t: number[]; bytes: number }>();
+
+  private static readonly AUDIO_MAX_FRAME_B64 = 16 * 1024;
+  private static readonly VIDEO_MAX_FRAME_B64 = 96 * 1024;
+  private static readonly AUDIO_MAX_FPS = 75;
+  private static readonly VIDEO_MAX_FPS = 16;
+  private static readonly MAX_BYTES_PER_SEC = 512 * 1024;
 
   constructor(state: DurableObjectState, env: Env) {
     this.state = state;
@@ -157,6 +164,7 @@ export class ChatRoom implements DurableObject {
   async webSocketClose(ws: WebSocket, _code: number, _reason: string, _wasClean: boolean): Promise<void> {
     const c = this.clientFor(ws);
     if (!c) return;
+    this.mediaRateWindow.delete(c.userId);
     this.broadcast(
       { type: 'presence', payload: { userId: c.userId, status: 'offline' } },
       c.userId,
@@ -171,6 +179,7 @@ export class ChatRoom implements DurableObject {
   async webSocketError(ws: WebSocket, _err: unknown): Promise<void> {
     const c = this.clientFor(ws);
     if (!c) return;
+    this.mediaRateWindow.delete(c.userId);
     this.broadcast(
       { type: 'presence', payload: { userId: c.userId, status: 'offline' } },
       c.userId,
@@ -259,7 +268,12 @@ export class ChatRoom implements DurableObject {
         // Relay encrypted audio frames — zero-knowledge, server only forwards
         // Payload: { callId, targetUserId, seq, frame (base64 opus/pcm) }
         const targetUserId = msg.payload.targetUserId as string | undefined;
-        if (!targetUserId) break;
+        const frame = msg.payload.frame as string | undefined;
+        if (!targetUserId || !frame) break;
+        if (!this.allowMediaFrame(sender.userId, 'audio', frame.length)) {
+          try { senderWs.close(4008, 'audio rate limited'); } catch {}
+          break;
+        }
         this.sendToUser(targetUserId, {
           type: 'call_audio',
           payload: { ...msg.payload, fromUserId: sender.userId },
@@ -271,7 +285,12 @@ export class ChatRoom implements DurableObject {
         // Relay encrypted video frames — same envelope as call_audio.
         // Payload: { callId, targetUserId, seq, frame (base64 JPEG, tag 0x01) }
         const targetUserId = msg.payload.targetUserId as string | undefined;
-        if (!targetUserId) break;
+        const frame = msg.payload.frame as string | undefined;
+        if (!targetUserId || !frame) break;
+        if (!this.allowMediaFrame(sender.userId, 'video', frame.length)) {
+          try { senderWs.close(4008, 'video rate limited'); } catch {}
+          break;
+        }
         this.sendToUser(targetUserId, {
           type: 'call_video',
           payload: { ...msg.payload, fromUserId: sender.userId },
@@ -451,5 +470,25 @@ export class ChatRoom implements DurableObject {
         } catch {}
       }
     }
+  }
+
+  private allowMediaFrame(userId: string, kind: 'audio' | 'video', b64Len: number): boolean {
+    const now = Date.now();
+    const win = this.mediaRateWindow.get(userId) ?? { t: [], bytes: 0 };
+    // Sliding window of 1 second.
+    while (win.t.length && now - win.t[0] > 1000) win.t.shift();
+    // Approx decode size from base64 chars (3/4 ratio).
+    const frameBytes = Math.floor((b64Len * 3) / 4);
+    // Coarse decay for byte accumulator.
+    if (win.t.length === 0) win.bytes = 0;
+    const maxFrame = kind === 'audio' ? ChatRoom.AUDIO_MAX_FRAME_B64 : ChatRoom.VIDEO_MAX_FRAME_B64;
+    const maxFps = kind === 'audio' ? ChatRoom.AUDIO_MAX_FPS : ChatRoom.VIDEO_MAX_FPS;
+    if (b64Len > maxFrame) return false;
+    if (win.t.length >= maxFps) return false;
+    if (win.bytes + frameBytes > ChatRoom.MAX_BYTES_PER_SEC) return false;
+    win.t.push(now);
+    win.bytes += frameBytes;
+    this.mediaRateWindow.set(userId, win);
+    return true;
   }
 }

@@ -294,6 +294,47 @@ private fun FallbackAvatar(initials: String, size: Int) {
     }
 }
 
+private fun sniffMime(bytes: ByteArray, filename: String): String {
+    val h = bytes.take(12)
+    fun startsWith(vararg b: Int) = h.size >= b.size && b.indices.all { h[it] == b[it].toByte() }
+    if (startsWith(0xFF, 0xD8, 0xFF))                            return "image/jpeg"
+    if (startsWith(0x89, 0x50, 0x4E, 0x47))                     return "image/png"
+    if (startsWith(0x47, 0x49, 0x46))                            return "image/gif"
+    if (startsWith(0x52, 0x49, 0x46, 0x46) && bytes.size >= 12 &&
+        bytes.slice(8..11) == listOf(0x57, 0x45, 0x42, 0x50).map { it.toByte() }) return "image/webp"
+    if (bytes.size >= 8 && bytes.slice(4..7) == listOf(0x66, 0x74, 0x79, 0x70).map { it.toByte() }) return "video/mp4"
+    if (startsWith(0x1A, 0x45, 0xDF, 0xA3))                     return "video/webm"
+    if (startsWith(0xFF, 0xFB) || startsWith(0xFF, 0xF3) || startsWith(0x49, 0x44, 0x33)) return "audio/mpeg"
+    if (startsWith(0x52, 0x49, 0x46, 0x46) && bytes.size >= 12 &&
+        bytes.slice(8..11) == listOf(0x57, 0x41, 0x56, 0x45).map { it.toByte() }) return "audio/wav"
+    if (startsWith(0x4F, 0x67, 0x67, 0x53))                     return "audio/ogg"
+    val ext = filename.substringAfterLast('.', "").lowercase()
+    return when (ext) {
+        "jpg", "jpeg" -> "image/jpeg"
+        "png"  -> "image/png"
+        "gif"  -> "image/gif"
+        "webp" -> "image/webp"
+        "mp4"  -> "video/mp4"
+        "mov"  -> "video/quicktime"
+        "webm" -> "video/webm"
+        "mp3"  -> "audio/mpeg"
+        "ogg"  -> "audio/ogg"
+        "wav"  -> "audio/wav"
+        "m4a"  -> "audio/mp4"
+        "pdf"  -> "application/pdf"
+        else   -> "application/octet-stream"
+    }
+}
+
+private fun mediaTypePreview(type: String?): String = when (type) {
+    "image"      -> "📷 Photo"
+    "video"      -> "🎥 Video"
+    "voice_note" -> "🎤 Voice message"
+    "file"       -> "📎 File"
+    "call_offer", "call_answer", "call_end" -> "📞 Call activity"
+    else         -> "Encrypted message"
+}
+
 // ── Chats Tab: Conversation List ──
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
@@ -509,7 +550,7 @@ fun ChatsTab(onOpenConversation: (String, String, String) -> Unit) {
                                 supportingContent = {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
                                         Text("🔒 ", fontSize = 10.sp)
-                                        Text("Encrypted message", color = RocColors.TextSecondary, fontSize = 14.sp, maxLines = 1)
+                                        Text(mediaTypePreview(conv.lastMessageType), color = RocColors.TextSecondary, fontSize = 14.sp, maxLines = 1)
                                     }
                                 },
                                 leadingContent = {
@@ -2346,6 +2387,7 @@ private fun MessageBubble(
                                 val blobId = fileMsg?.optString("blobId") ?: return@clickable
                                 val fKey = fileMsg.optString("fileKey", "")
                                 val fIv = fileMsg.optString("fileIv", "")
+                                val fHash = fileMsg.optString("fileHash", "")
                                 if (fKey.isEmpty() || fIv.isEmpty()) return@clickable
                                 scope.launch {
                                     try {
@@ -2357,6 +2399,12 @@ private fun MessageBubble(
                                             javax.crypto.spec.SecretKeySpec(keyBytes, "AES"),
                                             javax.crypto.spec.GCMParameterSpec(128, ivBytes))
                                         val plainBytes = cipher.doFinal(encBytes)
+                                        // Integrity check
+                                        if (fHash.isNotEmpty()) {
+                                            val digest = java.security.MessageDigest.getInstance("SHA-256")
+                                            val computed = android.util.Base64.encodeToString(digest.digest(plainBytes), android.util.Base64.NO_WRAP)
+                                            if (computed != fHash) throw SecurityException("Media hash mismatch")
+                                        }
                                         val bmp = android.graphics.BitmapFactory.decodeByteArray(plainBytes, 0, plainBytes.size)
                                         if (bmp != null) {
                                             revealedBitmap = bmp
@@ -4791,6 +4839,7 @@ private suspend fun uploadAndSendMediaNote(
     transcript: String? = null,
     onDone: (APIClient.ChatMessage) -> Unit,
 ) {
+    val detectedMime = if (mime == "application/octet-stream" || mime.isEmpty()) sniffMime(plainBytes, filename) else mime
     val fileKey = ByteArray(32).also { java.security.SecureRandom().nextBytes(it) }
     val fileIv = ByteArray(12).also { java.security.SecureRandom().nextBytes(it) }
     val digest = java.security.MessageDigest.getInstance("SHA-256")
@@ -4802,7 +4851,7 @@ private suspend fun uploadAndSendMediaNote(
     cipher.init(javax.crypto.Cipher.ENCRYPT_MODE, keySpec, gcmSpec)
     val encrypted = cipher.doFinal(plainBytes)
 
-    val mediaId = APIClient.uploadMedia(conversationId, encrypted, filename, mime)
+    val mediaId = APIClient.uploadMedia(conversationId, encrypted, filename, detectedMime)
 
     val msg = org.json.JSONObject().apply {
         put("type", kind)
@@ -4811,7 +4860,7 @@ private suspend fun uploadAndSendMediaNote(
         put("fileIv", android.util.Base64.encodeToString(fileIv, android.util.Base64.NO_WRAP))
         put("fileHash", android.util.Base64.encodeToString(fileHash, android.util.Base64.NO_WRAP))
         put("filename", filename)
-        put("mime", mime)
+        put("mime", detectedMime)
         put("size", plainBytes.size)
         put("duration", duration)
         if (!transcript.isNullOrEmpty()) put("transcript", transcript)

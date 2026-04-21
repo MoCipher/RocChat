@@ -156,6 +156,7 @@ object APIClient {
         val name: String?,
         val members: List<ConversationMember>,
         val lastMessageAt: String?,
+        val lastMessageType: String?,
         val muted: Boolean,
         val archived: Boolean,
     )
@@ -182,6 +183,7 @@ object APIClient {
                     )
                 },
                 lastMessageAt = c.optString("last_message_at", null),
+                lastMessageType = c.optString("last_message_type", null).ifEmpty { null },
                 muted = c.optBoolean("muted", false),
                 archived = archived,
             )

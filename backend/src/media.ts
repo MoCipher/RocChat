@@ -16,6 +16,8 @@ const ALLOWED_TYPES = new Set([
   'application/x-encrypted',
 ]);
 
+const ALLOWED_ENCRYPTED_MIME = /^(image\/[a-z0-9.+-]+|video\/[a-z0-9.+-]+|audio\/[a-z0-9.+-]+|application\/(pdf|zip|json|octet-stream)|text\/plain)$/i;
+
 export async function handleMedia(
   request: Request,
   env: Env,
@@ -77,6 +79,12 @@ async function uploadMedia(request: Request, env: Env, session: Session): Promis
   }
   if (encryptedFileName.length > 4096 || encryptedMimeType.length > 512) {
     return errorResponse('Metadata headers too long', 400);
+  }
+  if (!encryptedFileName.trim()) {
+    return errorResponse('Missing encrypted filename metadata', 400);
+  }
+  if (!encryptedMimeType.trim() || !ALLOWED_ENCRYPTED_MIME.test(encryptedMimeType)) {
+    return errorResponse('Unsupported encrypted mime metadata', 415);
   }
 
   if (!conversationId) {

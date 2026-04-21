@@ -182,6 +182,7 @@ export function sendMessage(body: {
   iv: string;
   tag?: string;
   ratchet_header: string;
+  message_nonce?: string;
   message_type?: string;
   expires_in?: number;
   reply_to?: string;
@@ -536,6 +537,7 @@ export interface Conversation {
   archived?: boolean;
   pinned?: boolean;
   chat_theme?: string | null;
+  last_message_type?: string;
   last_message_at: string;
 }
 

@@ -6,6 +6,7 @@ import PhotosUI
 import UniformTypeIdentifiers
 import Speech
 import CommonCrypto
+import LocalAuthentication
 
 // MARK: - Profile & Group Meta Encryption
 // Key: SHA-256(identityKey + ":profile:encrypt") → AES-GCM-256
@@ -51,6 +52,7 @@ struct ChatConversation: Identifiable {
     var avatarURL: String?
     let members: [ConversationMember]
     var lastMessageAt: String?
+    var lastMessageType: String?
     var muted: Bool
     var archived: Bool
 
@@ -351,7 +353,7 @@ struct ChatsView: View {
                                 .lineLimit(1)
                             HStack(spacing: 3) {
                                 Text("🔒").font(.system(size: 9))
-                                Text("Encrypted message")
+                                Text(mediaTypePreview(conv.lastMessageType))
                                     .font(.subheadline)
                                     .foregroundColor(.adaptiveTextSec)
                                     .lineLimit(1)
@@ -464,12 +466,24 @@ struct ChatsView: View {
                     avatarURL: dict["avatar_url"] as? String,
                     members: members,
                     lastMessageAt: dict["last_message_at"] as? String,
+                    lastMessageType: dict["last_message_type"] as? String,
                     muted: muted,
                     archived: archived
                 )
             }
         } catch {}
         isLoading = false
+    }
+
+    private func mediaTypePreview(_ type: String?) -> String {
+        switch type {
+        case "image":       return "📷 Photo"
+        case "video":       return "🎥 Video"
+        case "voice_note":  return "🎤 Voice message"
+        case "file":        return "📎 File"
+        case "call_offer", "call_answer", "call_end": return "📞 Call activity"
+        default:            return "Encrypted message"
+        }
     }
 
     private func conversationName(_ conv: ChatConversation) -> String {
@@ -762,7 +776,7 @@ struct NewChatView: View {
                 let conv = ChatConversation(
                     id: convId, type: "direct", name: nil, avatarURL: nil,
                     members: [.init(userId: user.id, username: user.username, displayName: user.displayName, avatarUrl: nil)],
-                    lastMessageAt: nil, muted: false, archived: false
+                    lastMessageAt: nil, lastMessageType: nil, muted: false, archived: false
                 )
                 onSelect(conv)
             }
@@ -779,7 +793,7 @@ struct NewChatView: View {
                 let members = selectedMembers.map { ChatConversation.ConversationMember(userId: $0.id, username: $0.username, displayName: $0.displayName, avatarUrl: nil) }
                 let conv = ChatConversation(
                     id: convId, type: "group", name: groupName, avatarURL: nil,
-                    members: members, lastMessageAt: nil, muted: false, archived: false
+                    members: members, lastMessageAt: nil, lastMessageType: nil, muted: false, archived: false
                 )
                 onSelect(conv)
             }
@@ -2745,6 +2759,7 @@ struct MessageBubbleView: View {
               let fileIvB64 = fileMsg["fileIv"] as? String,
               let fileKeyData = Data(base64Encoded: fileKeyB64),
               let fileIvData = Data(base64Encoded: fileIvB64) else { return }
+        let expectedHash: Data? = (fileMsg["fileHash"] as? String).flatMap { Data(base64Encoded: $0) }
 
         viewOnceRevealed = true
         Task {
@@ -2754,6 +2769,11 @@ struct MessageBubbleView: View {
                 let nonce = try AES.GCM.Nonce(data: fileIvData)
                 let sealedBox = try AES.GCM.SealedBox(nonce: nonce, ciphertext: data.dropLast(16), tag: data.suffix(16))
                 let plainData = try AES.GCM.open(sealedBox, using: key)
+                // Verify hash integrity
+                if let expected = expectedHash {
+                    let computed = Data(SHA256.hash(data: plainData))
+                    guard computed == expected else { throw MediaManager.MediaError.hashMismatch }
+                }
                 if let img = UIImage(data: plainData) {
                     viewOnceImage = img
                     showViewOnceModal = true
@@ -2860,6 +2880,9 @@ struct SettingsView: View {
     @State private var defaultDisappearTimer = 0
     @State private var showRecoveryPhrase = false
     @State private var recoveryPhrase = ""
+    @State private var showBiometricImportPrompt = false
+    @State private var biometricImportB64 = ""
+    @State private var biometricExportStatus = ""
 
     // Decoy conversations
     @State private var showDecoyManager = false
@@ -3462,6 +3485,16 @@ struct SettingsView: View {
                                 .foregroundColor(.textSecondary)
                                 .textSelection(.enabled)
                         }
+                        Button {
+                            biometricExportIdentityKey()
+                        } label: {
+                            Label("Export Identity Key (Biometric)", systemImage: "faceid")
+                        }
+                        Button {
+                            showBiometricImportPrompt = true
+                        } label: {
+                            Label("Import Identity Key (Biometric)", systemImage: "arrow.down.doc.fill")
+                        }
                     }
                     Button {
                         showRecoveryPhrase = true
@@ -3680,6 +3713,18 @@ struct SettingsView: View {
                 guard let text = try? String(contentsOf: url, encoding: .utf8) else { return }
                 Task { await processImport(source: importSource, text: text) }
             }
+        }
+        .alert("Import Identity Key", isPresented: $showBiometricImportPrompt) {
+            TextField("Paste base64 key bundle", text: $biometricImportB64)
+            Button("Import") { biometricImportIdentityKey(b64: biometricImportB64) }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Paste the exported identity key bundle, then authenticate with biometrics.")
+        }
+        .alert("Identity Key", isPresented: .constant(!biometricExportStatus.isEmpty)) {
+            Button("OK") { biometricExportStatus = "" }
+        } message: {
+            Text(biometricExportStatus)
         }
         .alert("Edit Display Name", isPresented: $isEditingName) {
             TextField("Display name", text: $editNameText)
@@ -4196,6 +4241,84 @@ struct SettingsView: View {
     private func storeSecureData(_ data: Data, forKey key: String) {
         SecureStorage.shared.setData(data, forKey: key)
         UserDefaults.standard.removeObject(forKey: key)
+    }
+
+    // MARK: - Biometric Identity Key Export / Import
+
+    private func biometricExportIdentityKey() {
+        let context = LAContext()
+        var error: NSError?
+        guard context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: &error) else {
+            biometricExportStatus = "Biometrics not available"
+            return
+        }
+        context.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics,
+                                localizedReason: "Authenticate to export your identity key") { success, _ in
+            DispatchQueue.main.async {
+                guard success else { self.biometricExportStatus = "Authentication failed"; return }
+                guard let privKey = self.secureData(forKey: "identity_key_private"),
+                      let pubKey = self.secureData(forKey: "identity_key_public") else {
+                    self.biometricExportStatus = "Identity key not found"
+                    return
+                }
+                let dhPriv = self.secureData(forKey: "rocchat_identity_dh_priv")
+                let dhPub = self.secureData(forKey: "rocchat_identity_dh_pub")
+                // Pack both keys as JSON, base64-encode for sharing
+                let bundle: [String: String] = [
+                    "identity_key_private": privKey.base64EncodedString(),
+                    "identity_key_public": pubKey.base64EncodedString(),
+                    "rocchat_identity_dh_priv": dhPriv?.base64EncodedString() ?? "",
+                    "rocchat_identity_dh_pub": dhPub?.base64EncodedString() ?? "",
+                ]
+                if let json = try? JSONSerialization.data(withJSONObject: bundle) {
+                    let b64 = json.base64EncodedString()
+                    let av = UIActivityViewController(activityItems: [b64], applicationActivities: nil)
+                    if let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+                       let root = scene.windows.first?.rootViewController {
+                        root.present(av, animated: true)
+                    }
+                    self.biometricExportStatus = "Key exported"
+                }
+            }
+        }
+    }
+
+    private func biometricImportIdentityKey(b64: String) {
+        let context = LAContext()
+        var error: NSError?
+        guard context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: &error) else {
+            biometricExportStatus = "Biometrics not available"
+            return
+        }
+        context.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics,
+                                localizedReason: "Authenticate to import your identity key") { success, _ in
+            DispatchQueue.main.async {
+                guard success else { self.biometricExportStatus = "Authentication failed"; return }
+                guard let jsonData = Data(base64Encoded: b64),
+                      let bundle = try? JSONSerialization.jsonObject(with: jsonData) as? [String: String] else {
+                    self.biometricExportStatus = "Invalid key bundle"
+                    return
+                }
+                if let privB64 = bundle["identity_key_private"], let priv = Data(base64Encoded: privB64) {
+                    self.storeSecureData(priv, forKey: "identity_key_private")
+                }
+                if let pubB64 = bundle["identity_key_public"], let pub = Data(base64Encoded: pubB64) {
+                    self.storeSecureData(pub, forKey: "identity_key_public")
+                    self.identityKeyFingerprint = pub.map { String(format: "%02x", $0) }.joined(separator: " ").uppercased()
+                }
+                if let dhPrivB64 = bundle["rocchat_identity_dh_priv"],
+                   !dhPrivB64.isEmpty,
+                   let dhPriv = Data(base64Encoded: dhPrivB64) {
+                    self.storeSecureData(dhPriv, forKey: "rocchat_identity_dh_priv")
+                }
+                if let dhPubB64 = bundle["rocchat_identity_dh_pub"],
+                   !dhPubB64.isEmpty,
+                   let dhPub = Data(base64Encoded: dhPubB64) {
+                    self.storeSecureData(dhPub, forKey: "rocchat_identity_dh_pub")
+                }
+                self.biometricExportStatus = "Key imported successfully"
+            }
+        }
     }
 
     private func storeSecureString(_ value: String, forKey key: String) {
@@ -5379,7 +5502,7 @@ struct ForwardMessageSheet: View {
                             return ChatConversation(
                                 id: id, type: (dict["type"] as? String) ?? "direct", name: name, avatarURL: avatar,
                                 members: members.map { ChatConversation.ConversationMember(userId: $0.0, username: $0.1, displayName: $0.2, avatarUrl: nil) },
-                                lastMessageAt: dict["last_message_at"] as? String, muted: false, archived: false
+                                lastMessageAt: dict["last_message_at"] as? String, lastMessageType: dict["last_message_type"] as? String, muted: false, archived: false
                             )
                         }
                     }

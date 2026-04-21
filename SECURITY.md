@@ -67,8 +67,8 @@ RocChat is designed under the following assumptions:
 - TLS pinning on iOS (`PinnedSessionDelegate`) and Android (network security
   config + code-side fingerprint check).
 - Web headers: HSTS preload, COOP, COEP-ready, strict CSP, full
-  Permissions-Policy denylist, `Trusted Types` policy declared (enforcement
-  is staged via `Content-Security-Policy-Report-Only`).
+  Permissions-Policy denylist, and enforced `Trusted Types`
+  (`require-trusted-types-for 'script'`) with a restrictive default policy.
 - CORS: explicit allowlist (`chat.mocipher.com`, `rocchat-8x7.pages.dev`,
   `localhost:5173`); unknown Origins receive **no** `Access-Control-Allow-Origin`.
 - Origin-bound CSRF: state-changing routes require an allowed `Origin` header.

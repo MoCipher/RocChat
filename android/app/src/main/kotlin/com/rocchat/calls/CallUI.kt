@@ -72,17 +72,49 @@ fun CallOverlay() {
 
         // Remote video frame (JPEG-over-WS from web/iOS peer).
         val remoteBmp = CallManager.remoteVideoBitmap
-        if (CallManager.callType == "video" && status == "connected" && remoteBmp != null) {
-            androidx.compose.foundation.Image(
-                bitmap = remoteBmp.asImageBitmap(),
-                contentDescription = "Remote video",
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(16.dp)
-                    .size(width = 160.dp, height = 120.dp)
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(Color.Black)
-            )
+        if (CallManager.callType == "video" && status == "connected") {
+            if (remoteBmp != null) {
+                androidx.compose.foundation.Image(
+                    bitmap = remoteBmp.asImageBitmap(),
+                    contentDescription = "Remote video",
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(16.dp)
+                        .size(width = 160.dp, height = 120.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(Color.Black)
+                )
+            } else {
+                // No video received yet — show avatar placeholder
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(16.dp)
+                        .size(width = 160.dp, height = 120.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(Color(0xFF111111)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+                        Box(
+                            modifier = Modifier
+                                .size(56.dp)
+                                .clip(CircleShape)
+                                .background(RocColors.RocGold),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = CallManager.remoteName.split(" ").mapNotNull { it.firstOrNull()?.toString() }.take(2).joinToString("").uppercase(),
+                                color = Color.Black,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 20.sp
+                            )
+                        }
+                        Spacer(Modifier.height(6.dp))
+                        Text("No video", color = Color.White.copy(alpha = 0.5f), fontSize = 11.sp)
+                    }
+                }
+            }
         }
 
         Column(
@@ -161,6 +193,8 @@ private fun IncomingControls() {
 
 @Composable
 private fun ActiveControls() {
+    var showDiag by remember { mutableStateOf(false) }
+
     Row(horizontalArrangement = Arrangement.spacedBy(20.dp), verticalAlignment = Alignment.CenterVertically) {
         // Mute
         IconButton(
@@ -202,6 +236,23 @@ private fun ActiveControls() {
         ) {
             Icon(Icons.Default.CallEnd, contentDescription = "End", tint = Color.White, modifier = Modifier.size(28.dp))
         }
+
+        // Diagnostics
+        if (CallManager.callStatus == "connected") {
+            IconButton(
+                onClick = { showDiag = true },
+                modifier = Modifier
+                    .size(52.dp)
+                    .clip(CircleShape)
+                    .background(Color.White.copy(0.1f))
+            ) {
+                Icon(Icons.Default.Info, contentDescription = "Diagnostics", tint = Color.White, modifier = Modifier.size(24.dp))
+            }
+        }
+    }
+
+    if (showDiag) {
+        CallDiagnosticsSheet(onDismiss = { showDiag = false })
     }
 }
 
@@ -272,4 +323,36 @@ private fun initials(name: String): String {
 
 private fun formatDuration(seconds: Int): String {
     return "%02d:%02d".format(seconds / 60, seconds % 60)
+}
+
+// MARK: - Call Diagnostics Sheet
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun CallDiagnosticsSheet(onDismiss: () -> Unit) {
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+            Text("Call Diagnostics", fontWeight = FontWeight.Bold, fontSize = 18.sp, modifier = Modifier.padding(bottom = 12.dp))
+            DiagRow("Call Type", CallManager.callType.replaceFirstChar { it.uppercase() })
+            DiagRow("Duration", formatDuration(CallManager.callDuration))
+            DiagRow("Estimated RTT", "%.0f ms".format(CallManager.diagRttMs))
+            if (CallManager.callType == "video") {
+                DiagRow("Target FPS", "${CallManager.diagFps} fps")
+                DiagRow("JPEG Quality", "${CallManager.diagQuality}%")
+            }
+            DiagRow("Voice Jitter (EMA)", "%.1f ms".format(CallManager.diagAudioJitterMs))
+            DiagRow("Voice Late Frames", CallManager.diagAudioLateFrames.toString())
+            DiagRow("Transport", "WebSocket (RocChat relay)")
+            DiagRow("Encryption", "AES-256-GCM")
+            Spacer(Modifier.height(32.dp))
+        }
+    }
+}
+
+@Composable
+private fun DiagRow(label: String, value: String) {
+    Row(modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
+        Text(label, color = Color.Gray, modifier = Modifier.weight(1f))
+        Text(value, fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace, fontSize = 13.sp)
+    }
 }

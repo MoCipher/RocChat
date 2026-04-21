@@ -799,6 +799,13 @@ a:hover { text-decoration: underline; }
   scroll-behavior: smooth;
 }
 
+.messages-area.drag-upload-active,
+.composer.drag-upload-active {
+  outline: 2px dashed var(--roc-gold, #D4AF37);
+  outline-offset: -2px;
+  background: rgba(212, 175, 55, 0.06);
+}
+
 .encryption-banner {
   text-align: center;
   padding: var(--sp-3);

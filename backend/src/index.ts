@@ -33,6 +33,7 @@ export interface Env {
   TURN_SECRET?: string;
   TURN_SERVER?: string;
   POW_DIFFICULTY?: string;
+  SCHEDULER_SECRET?: string;
   NTFY_URL?: string;
   CRYPTO_WALLET_ADDRESS?: string;
   CRYPTO_USDC_RATE?: string;
@@ -95,6 +96,28 @@ export default {
         } catch {
           return withCors(jsonResponse({ status: 'degraded', service: 'rocchat-api' }, 503));
         }
+      }
+
+      // External scheduler hook (for accounts that are out of cron slots).
+      if (path === '/api/internal/maintenance/run' && request.method === 'POST') {
+        const configuredSecret = env.SCHEDULER_SECRET;
+        if (!configuredSecret) {
+          logEvent('warn', 'maintenance_secret_missing', {});
+          return withCors(errorResponse('Maintenance scheduler is not configured', 503));
+        }
+        const presentedSecret = request.headers.get('x-scheduler-secret') || '';
+        if (!constantTimeEqual(presentedSecret, configuredSecret)) {
+          logEvent('warn', 'maintenance_forbidden', {
+            ip: request.headers.get('CF-Connecting-IP') || null,
+          });
+          return withCors(errorResponse('Forbidden', 403));
+        }
+        const summary = await runMaintenanceTasks(env);
+        return withCors(jsonResponse({
+          ok: true,
+          ran_at: new Date().toISOString(),
+          summary,
+        }));
       }
 
       if (path === '/api/client-errors' && request.method === 'POST') {
@@ -768,51 +791,91 @@ export default {
   },
 
   // Scheduled worker for cleanup
-  async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
-    // Delete expired disappearing messages
-    await env.DB.prepare('DELETE FROM messages WHERE expires_at IS NOT NULL AND expires_at < unixepoch()').run();
-
-    // Clean used one-time pre-keys (keep table lean)
-    await env.DB.prepare('DELETE FROM one_time_pre_keys WHERE used = 1').run();
-
-    // Clean old rate limit entries (older than 1 hour)
-    await env.DB.prepare('DELETE FROM rate_log WHERE ts < unixepoch() - 3600').run();
-
-    // Send scheduled messages that are due
-    const due = await env.DB.prepare(
-      'SELECT id, conversation_id, sender_id, encrypted FROM scheduled_messages WHERE sent = 0 AND scheduled_at <= unixepoch() LIMIT 50'
-    ).all();
-    for (const msg of due.results) {
-      const msgId = crypto.randomUUID();
-      await env.DB.prepare(
-        'INSERT INTO messages (id, conversation_id, sender_id, encrypted, server_timestamp) VALUES (?, ?, ?, ?, unixepoch())'
-      ).bind(msgId, msg.conversation_id, msg.sender_id, msg.encrypted).run();
-      await env.DB.prepare('UPDATE scheduled_messages SET sent = 1 WHERE id = ?').bind(msg.id).run();
-    }
-
-    // Auto-delete messages per retention policies
-    const policies = await env.DB.prepare(
-      'SELECT org_id, max_age_days FROM retention_policies WHERE auto_delete = 1'
-    ).all();
-    for (const p of policies.results) {
-      const maxAge = p.max_age_days as number;
-      const orgId = p.org_id as string;
-      // Get org member IDs
-      const members = await env.DB.prepare(
-        'SELECT user_id FROM organization_members WHERE org_id = ?'
-      ).bind(orgId).all();
-      const memberIds = members.results.map((m: Record<string, unknown>) => m.user_id as string);
-      if (memberIds.length === 0) continue;
-      const ph = memberIds.map(() => '?').join(',');
-      await env.DB.prepare(`
-        DELETE FROM messages WHERE sender_id IN (${ph})
-        AND server_timestamp < unixepoch() - ?
-      `).bind(...memberIds, maxAge * 86400).run();
-    }
+  async scheduled(_event: ScheduledEvent, env: Env, _ctx: ExecutionContext) {
+    await runMaintenanceTasks(env);
   },
 };
 
 // ── Helpers ──
+
+interface MaintenanceSummary {
+  expired_messages_deleted: number;
+  used_prekeys_deleted: number;
+  stale_rate_log_deleted: number;
+  scheduled_messages_sent: number;
+  retention_orgs_processed: number;
+  retention_messages_deleted: number;
+}
+
+async function runMaintenanceTasks(env: Env): Promise<MaintenanceSummary> {
+  const expiredRes = await env.DB.prepare('DELETE FROM messages WHERE expires_at IS NOT NULL AND expires_at < unixepoch()').run();
+
+  const preKeysRes = await env.DB.prepare('DELETE FROM one_time_pre_keys WHERE used = 1').run();
+
+  const rateLogRes = await env.DB.prepare('DELETE FROM rate_log WHERE ts < unixepoch() - 3600').run();
+
+  // Send scheduled messages that are due.
+  const due = await env.DB.prepare(
+    'SELECT id, conversation_id, sender_id, encrypted FROM scheduled_messages WHERE sent = 0 AND scheduled_at <= unixepoch() LIMIT 50'
+  ).all();
+  const dueMessages = due.results as Array<{
+    id: string;
+    conversation_id: string;
+    sender_id: string;
+    encrypted: string;
+  }>;
+  let scheduledMessagesSent = 0;
+  for (const msg of dueMessages) {
+    const msgId = crypto.randomUUID();
+    await env.DB.prepare(
+      'INSERT INTO messages (id, conversation_id, sender_id, encrypted, server_timestamp) VALUES (?, ?, ?, ?, unixepoch())'
+    ).bind(msgId, msg.conversation_id, msg.sender_id, msg.encrypted).run();
+    const markSentRes = await env.DB.prepare('UPDATE scheduled_messages SET sent = 1 WHERE id = ?').bind(msg.id).run();
+    scheduledMessagesSent += Number(markSentRes.meta?.changes || 0);
+  }
+
+  // Auto-delete messages per retention policies.
+  const policies = await env.DB.prepare(
+    'SELECT org_id, max_age_days FROM retention_policies WHERE auto_delete = 1'
+  ).all();
+  const retentionPolicies = policies.results as Array<{ org_id: string; max_age_days: number }>;
+  let retentionMessagesDeleted = 0;
+  let retentionOrgsProcessed = 0;
+  for (const p of retentionPolicies) {
+    const maxAge = Number(p.max_age_days || 0);
+    const orgId = p.org_id;
+    const members = await env.DB.prepare(
+      'SELECT user_id FROM organization_members WHERE org_id = ?'
+    ).bind(orgId).all();
+    const memberIds = (members.results as Array<{ user_id: string }>).map((m) => m.user_id);
+    if (memberIds.length === 0 || maxAge <= 0) continue;
+    retentionOrgsProcessed += 1;
+    const ph = memberIds.map(() => '?').join(',');
+    const delRes = await env.DB.prepare(`
+      DELETE FROM messages WHERE sender_id IN (${ph})
+      AND server_timestamp < unixepoch() - ?
+    `).bind(...memberIds, maxAge * 86400).run();
+    retentionMessagesDeleted += Number(delRes.meta?.changes || 0);
+  }
+
+  return {
+    expired_messages_deleted: Number(expiredRes.meta?.changes || 0),
+    used_prekeys_deleted: Number(preKeysRes.meta?.changes || 0),
+    stale_rate_log_deleted: Number(rateLogRes.meta?.changes || 0),
+    scheduled_messages_sent: scheduledMessagesSent,
+    retention_orgs_processed: retentionOrgsProcessed,
+    retention_messages_deleted: retentionMessagesDeleted,
+  };
+}
+
+function constantTimeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let mismatch = 0;
+  for (let i = 0; i < a.length; i += 1) {
+    mismatch |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  }
+  return mismatch === 0;
+}
 
 function corsHeaders(request?: Request): HeadersInit {
   const origin = request?.headers.get('Origin') || '';

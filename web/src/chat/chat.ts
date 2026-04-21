@@ -160,6 +160,20 @@ function updateConvPreview(conversationId: string, plaintext: string, msgCreated
   lastConvPreview.set(conversationId, { ts, preview: buildConvPreview(plaintext) });
 }
 
+function previewFromMessageType(messageType?: string): string {
+  switch (messageType) {
+    case 'image': return '📷 Photo';
+    case 'video':
+    case 'video_note': return '🎥 Video';
+    case 'voice_note': return '🎤 Voice message';
+    case 'file': return '📎 File';
+    case 'call_offer':
+    case 'call_answer':
+    case 'call_end': return '📞 Call activity';
+    default: return 'Encrypted message';
+  }
+}
+
 function cachePlaintext(messageId: string, plaintext: string, conversationId?: string, createdAt?: string) {
   if (!messageId || messageId.startsWith('queued-')) return;
   plaintextCache.set(messageId, plaintext);
@@ -211,6 +225,10 @@ const wsReconnectAttempts = new Map<string, number>();
 const MQ_DB_NAME = 'rocchat_mq';
 const MQ_STORE = 'queue';
 
+function notifyQueueUpdated(): void {
+  window.dispatchEvent(new CustomEvent('rocchat:queue-updated'));
+}
+
 function openMqDb(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     const req = indexedDB.open(MQ_DB_NAME, 1);
@@ -233,7 +251,16 @@ async function loadMessageQueue(): Promise<void> {
     await new Promise<void>((resolve, reject) => {
       req.onsuccess = () => {
         messageQueue.length = 0;
-        for (const item of req.result) messageQueue.push(item);
+        for (const item of req.result as Array<Partial<QueuedMessage>>) {
+          if (!item.payload || !item.localId || !item.conversationId) continue;
+          // Strip any legacy persisted auth token fields from older builds.
+          messageQueue.push({
+            payload: item.payload,
+            localId: item.localId,
+            conversationId: item.conversationId,
+          });
+        }
+        notifyQueueUpdated();
         resolve();
       };
       req.onerror = () => reject(req.error);
@@ -246,6 +273,7 @@ async function persistQueueItem(item: QueuedMessage): Promise<void> {
     const db = await openMqDb();
     const tx = db.transaction(MQ_STORE, 'readwrite');
     tx.objectStore(MQ_STORE).put(item);
+    notifyQueueUpdated();
   } catch { /* best effort */ }
 }
 
@@ -254,6 +282,7 @@ async function removeQueueItem(localId: string): Promise<void> {
     const db = await openMqDb();
     const tx = db.transaction(MQ_STORE, 'readwrite');
     tx.objectStore(MQ_STORE).delete(localId);
+    notifyQueueUpdated();
   } catch { /* best effort */ }
 }
 
@@ -268,6 +297,7 @@ async function flushMessageQueue() {
       // Remove from queue on success
       const idx = messageQueue.indexOf(item);
       if (idx !== -1) messageQueue.splice(idx, 1);
+      notifyQueueUpdated();
       await removeQueueItem(item.localId);
       // Update local message status
       const msgs = state.messages.get(item.conversationId);
@@ -525,7 +555,7 @@ function renderConversationsList(filter = '') {
       const other = c.members.find(m => m.user_id !== userId);
       const time = c.last_message_at ? formatTime(c.last_message_at) : '';
       const isActive = c.id === state.activeConversationId;
-      const preview = lastConvPreview.get(c.id)?.preview || 'Encrypted message';
+      const preview = lastConvPreview.get(c.id)?.preview || previewFromMessageType(c.last_message_type);
 
       return `
         <div class="swipe-container" data-conv-id="${c.id}">
@@ -684,6 +714,7 @@ async function openConversation(conversationId: string) {
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg>
       </button>
     </div>
+    <div id="composer-queue-status" style="display:none;padding:6px 14px;border-top:1px solid var(--border-weak);font-size:12px;color:var(--text-secondary)"></div>
     <div class="emoji-picker" id="emoji-picker" style="display:none"></div>
     <div class="gif-picker" id="gif-picker" style="display:none"></div>
   `;
@@ -759,6 +790,31 @@ async function openConversation(conversationId: string) {
 
   sendBtn?.addEventListener('click', sendMessageHandler);
 
+  const queueStatusEl = chatView.querySelector('#composer-queue-status') as HTMLElement | null;
+  const renderQueueStatus = () => {
+    if (!queueStatusEl) return;
+    const queuedForConv = messageQueue.filter(q => q.conversationId === conversationId).length;
+    if (queuedForConv === 0) {
+      queueStatusEl.style.display = 'none';
+      queueStatusEl.innerHTML = '';
+      return;
+    }
+    queueStatusEl.style.display = 'block';
+    const offline = !navigator.onLine;
+    queueStatusEl.innerHTML = `${offline ? '🕐 Offline queue' : '🔄 Pending send'}: ${queuedForConv} message${queuedForConv === 1 ? '' : 's'} ${offline ? '(will auto-send when online)' : ''} <button id="retry-queued-now" class="btn btn-outline" style="margin-left:8px;font-size:11px;padding:3px 8px">Retry now</button>`;
+    queueStatusEl.querySelector('#retry-queued-now')?.addEventListener('click', () => {
+      void flushMessageQueue().then(() => {
+        renderQueueStatus();
+        const msgs = state.messages.get(conversationId);
+        if (msgs) renderMessages(msgs);
+      });
+    });
+  };
+  renderQueueStatus();
+  window.addEventListener('online', renderQueueStatus);
+  window.addEventListener('offline', renderQueueStatus);
+  window.addEventListener('rocchat:queue-updated', renderQueueStatus as EventListener);
+
   // Bind disappearing messages timer
   chatView.querySelector('#btn-disappear')?.addEventListener('click', () => {
     showDisappearingMenu(conversationId);
@@ -811,6 +867,26 @@ async function openConversation(conversationId: string) {
   chatView.querySelector('.composer .icon-btn[title="Attach file"]')?.addEventListener('click', () => {
     if (state.activeConversationId) showFileUpload(state.activeConversationId);
   });
+
+  // Drag/drop upload on message area and composer.
+  const dropZones = [
+    chatView.querySelector('#messages-area') as HTMLElement | null,
+    chatView.querySelector('.composer') as HTMLElement | null,
+  ].filter(Boolean) as HTMLElement[];
+  for (const zone of dropZones) {
+    zone.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      zone.classList.add('drag-upload-active');
+    });
+    zone.addEventListener('dragleave', () => zone.classList.remove('drag-upload-active'));
+    zone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      zone.classList.remove('drag-upload-active');
+      const file = e.dataTransfer?.files?.[0];
+      if (!file || !state.activeConversationId) return;
+      showFileUpload(state.activeConversationId, file);
+    });
+  }
 
   // Bind vault button
   chatView.querySelector('#vault-btn')?.addEventListener('click', () => {
@@ -1239,6 +1315,7 @@ async function sendMessageHandler() {
   const userId = localStorage.getItem('rocchat_user_id') || '';
   const recipientUserId = conv?.members.find((m) => m.user_id !== userId)?.user_id;
   const localId = `queued-${Date.now()}`;
+  const messageNonce = crypto.randomUUID();
 
   try {
     const expiresIn = consumeOneShotExpiry() ?? (disappearTimers.get(state.activeConversationId) || undefined);
@@ -1260,6 +1337,7 @@ async function sendMessageHandler() {
         iv: encrypted.iv,
         tag: encrypted.tag,
         ratchet_header: JSON.stringify(headerObj),
+        message_nonce: messageNonce,
         message_type: 'text',
         expires_in: expiresIn,
         reply_to: replyTo,
@@ -1273,6 +1351,7 @@ async function sendMessageHandler() {
         ciphertext: groupEnc.ciphertext,
         iv: groupEnc.iv,
         ratchet_header: groupEnc.ratchet_header,
+        message_nonce: messageNonce,
         message_type: 'text',
         expires_in: expiresIn,
         reply_to: replyTo,
@@ -1285,6 +1364,7 @@ async function sendMessageHandler() {
         ciphertext: text,
         iv: '',
         ratchet_header: '',
+        message_nonce: messageNonce,
         expires_in: expiresIn,
         reply_to: replyTo,
         priority: msgPriority !== 'normal' ? msgPriority : undefined,
@@ -1313,8 +1393,13 @@ async function sendMessageHandler() {
       const mid = (res as { ok: boolean; data?: { message_id?: string } }).data?.message_id;
       if (mid) cachePlaintext(mid, text);
     } catch {
-      const queueItem: QueuedMessage = { payload, localId, conversationId: state.activeConversationId };
+      const queueItem: QueuedMessage = {
+        payload,
+        localId,
+        conversationId: state.activeConversationId,
+      };
       messageQueue.push(queueItem);
+      notifyQueueUpdated();
       persistQueueItem(queueItem);
       // Register background sync so SW retries when connectivity returns
       navigator.serviceWorker?.ready?.then(reg => (reg as any).sync?.register?.('message-queue')).catch(() => {});
@@ -3121,15 +3206,65 @@ async function decryptAndDisplayMedia(
   }
 }
 
+function sniffMimeFromBytes(fileName: string, bytes: Uint8Array, fallback: string): string {
+  // JPEG
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return 'image/jpeg';
+  // PNG
+  if (bytes.length >= 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) return 'image/png';
+  // GIF
+  if (bytes.length >= 6) {
+    const sig = String.fromCharCode(...bytes.slice(0, 6));
+    if (sig === 'GIF87a' || sig === 'GIF89a') return 'image/gif';
+  }
+  // WebP (RIFF....WEBP)
+  if (bytes.length >= 12 &&
+      String.fromCharCode(...bytes.slice(0, 4)) === 'RIFF' &&
+      String.fromCharCode(...bytes.slice(8, 12)) === 'WEBP') return 'image/webp';
+  // MP4 / MOV family (ftyp)
+  if (bytes.length >= 12 && String.fromCharCode(...bytes.slice(4, 8)) === 'ftyp') {
+    const brand = String.fromCharCode(...bytes.slice(8, 12)).toLowerCase();
+    if (brand.includes('mp4')) return 'video/mp4';
+    if (brand.includes('qt')) return 'video/quicktime';
+  }
+  // WebM / Matroska
+  if (bytes.length >= 4 && bytes[0] === 0x1a && bytes[1] === 0x45 && bytes[2] === 0xdf && bytes[3] === 0xa3) {
+    if (fileName.toLowerCase().endsWith('.webm')) return 'video/webm';
+    return fallback || 'video/webm';
+  }
+  // MP3 ID3
+  if (bytes.length >= 3 && bytes[0] === 0x49 && bytes[1] === 0x44 && bytes[2] === 0x33) return 'audio/mpeg';
+  // WAV (RIFF....WAVE)
+  if (bytes.length >= 12 &&
+      String.fromCharCode(...bytes.slice(0, 4)) === 'RIFF' &&
+      String.fromCharCode(...bytes.slice(8, 12)) === 'WAVE') return 'audio/wav';
+
+  // Extension fallback if magic bytes unknown.
+  const lower = fileName.toLowerCase();
+  if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg';
+  if (lower.endsWith('.png')) return 'image/png';
+  if (lower.endsWith('.gif')) return 'image/gif';
+  if (lower.endsWith('.webp')) return 'image/webp';
+  if (lower.endsWith('.mp4')) return 'video/mp4';
+  if (lower.endsWith('.mov')) return 'video/quicktime';
+  if (lower.endsWith('.webm')) return 'video/webm';
+  if (lower.endsWith('.mp3')) return 'audio/mpeg';
+  if (lower.endsWith('.wav')) return 'audio/wav';
+  if (lower.endsWith('.m4a')) return 'audio/mp4';
+  if (lower.endsWith('.pdf')) return 'application/pdf';
+  if (lower.endsWith('.txt')) return 'text/plain';
+  if (lower.endsWith('.zip')) return 'application/zip';
+  return fallback || 'application/octet-stream';
+}
+
 // ── File upload ──
 
-function showFileUpload(conversationId: string) {
+function showFileUpload(conversationId: string, initialFile?: File) {
   const input = document.createElement('input');
   input.type = 'file';
   input.accept = 'image/*,video/*,audio/*,.pdf,.doc,.docx,.txt,.zip';
   input.style.display = 'none';
   input.addEventListener('change', async () => {
-    const file = input.files?.[0];
+    const file = initialFile || input.files?.[0];
     if (!file) return;
     input.remove();
 
@@ -3171,24 +3306,44 @@ function showFileUpload(conversationId: string) {
     const userId = localStorage.getItem('rocchat_user_id') || '';
     const progressDiv = document.createElement('div');
     progressDiv.className = 'message-row mine';
+    const optimisticId = `upload-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     progressDiv.innerHTML = `
-      <div class="message-bubble">
+      <div class="message-bubble" data-upload-id="${optimisticId}">
         <div class="message-text" style="color:var(--text-tertiary)">
-          📎 Encrypting ${escapeHtml(file.name)}...
+          📎 Preparing ${escapeHtml(file.name)}...
+        </div>
+        <div style="height:4px;background:var(--bg-secondary);border-radius:999px;margin-top:8px;overflow:hidden">
+          <div class="upload-progress" style="height:100%;width:8%;background:var(--accent);transition:width .2s ease"></div>
+        </div>
+        <div style="display:flex;gap:6px;justify-content:flex-end;margin-top:8px">
+          <button class="btn btn-outline upload-cancel" style="font-size:11px;padding:4px 10px">Cancel</button>
         </div>
       </div>
     `;
     area?.appendChild(progressDiv);
     area && (area.scrollTop = area.scrollHeight);
+    const progressBar = progressDiv.querySelector('.upload-progress') as HTMLElement | null;
+    const statusEl = progressDiv.querySelector('.message-text') as HTMLElement | null;
+    const cancelBtn = progressDiv.querySelector('.upload-cancel') as HTMLButtonElement | null;
+    const abort = new AbortController();
+    let cancelled = false;
+    cancelBtn?.addEventListener('click', () => {
+      cancelled = true;
+      abort.abort();
+      progressDiv.remove();
+    });
 
     try {
       // Read file bytes
       const plainBytes = new Uint8Array(await file.arrayBuffer());
+      const sniffedMime = sniffMimeFromBytes(file.name, plainBytes, file.type || 'application/octet-stream');
+      if (progressBar) progressBar.style.width = '22%';
 
       // Generate random file key (256-bit) and compute hash
       const fileKey = randomBytes(32);
       const fileIv = randomBytes(12);
       const fileHash = await cryptoSha256(plainBytes);
+      if (progressBar) progressBar.style.width = '34%';
 
       // Encrypt file with AES-256-GCM
       const cryptoKey = await crypto.subtle.importKey('raw', fileKey.buffer as ArrayBuffer, 'AES-GCM', false, ['encrypt']);
@@ -3197,21 +3352,24 @@ function showFileUpload(conversationId: string) {
         cryptoKey,
         plainBytes,
       );
+      if (progressBar) progressBar.style.width = '56%';
 
-      progressDiv.querySelector('.message-text')!.textContent = `📎 Uploading ${file.name}...`;
+      if (statusEl) statusEl.textContent = `📎 Uploading ${file.name}...`;
 
       const token = api.getToken();
       const res = await fetch('/api/media/upload', {
         method: 'POST',
+        signal: abort.signal,
         headers: {
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
           'Content-Type': 'application/octet-stream',
           'x-conversation-id': conversationId,
           'x-encrypted-filename': file.name,
-          'x-encrypted-mimetype': file.type,
+          'x-encrypted-mimetype': sniffedMime,
         },
         body: new Uint8Array(encrypted),
       });
+      if (progressBar) progressBar.style.width = '78%';
 
       if (res.ok) {
         const data = await res.json() as { mediaId: string };
@@ -3219,9 +3377,9 @@ function showFileUpload(conversationId: string) {
         const conv = state.conversations.find((c) => c.id === conversationId);
         const recipientUserId = conv?.members.find((m) => m.user_id !== userId)?.user_id;
 
-        const msgType = file.type.startsWith('image/') ? 'image'
-          : file.type.startsWith('video/') ? 'video'
-          : file.type.startsWith('audio/') ? 'voice_note'
+        const msgType = sniffedMime.startsWith('image/') ? 'image'
+          : sniffedMime.startsWith('video/') ? 'video'
+          : sniffedMime.startsWith('audio/') ? 'voice_note'
           : 'file';
 
         const fileMsgObj: Record<string, unknown> = {
@@ -3231,7 +3389,7 @@ function showFileUpload(conversationId: string) {
           fileIv: toBase64(fileIv),
           fileHash: toBase64(fileHash),
           filename: file.name,
-          mime: file.type,
+          mime: sniffedMime,
           size: file.size,
         };
         if (viewOnce) fileMsgObj.viewOnce = true;
@@ -3258,16 +3416,41 @@ function showFileUpload(conversationId: string) {
           });
         }
 
-        progressDiv.querySelector('.message-text')!.textContent = `📎 ${file.name}`;
+        if (progressBar) progressBar.style.width = '100%';
+        if (statusEl) statusEl.textContent = `📎 ${file.name}`;
+        cancelBtn?.remove();
       } else {
-        progressDiv.querySelector('.message-text')!.textContent = '⚠️ Upload failed';
+        const errText = `⚠️ Upload failed (${res.status})`;
+        if (statusEl) statusEl.textContent = errText;
+        if (!cancelled) {
+          const retry = document.createElement('button');
+          retry.className = 'btn btn-outline upload-retry';
+          retry.textContent = 'Retry';
+          retry.style.cssText = 'font-size:11px;padding:4px 10px';
+          retry.addEventListener('click', () => {
+            progressDiv.remove();
+            showFileUpload(conversationId, file);
+          });
+          cancelBtn?.replaceWith(retry);
+        }
       }
     } catch {
-      progressDiv.querySelector('.message-text')!.textContent = '⚠️ Upload failed';
+      if (cancelled) return;
+      if (statusEl) statusEl.textContent = '⚠️ Upload failed';
+      const retry = document.createElement('button');
+      retry.className = 'btn btn-outline upload-retry';
+      retry.textContent = 'Retry';
+      retry.style.cssText = 'font-size:11px;padding:4px 10px';
+      retry.addEventListener('click', () => {
+        progressDiv.remove();
+        showFileUpload(conversationId, file);
+      });
+      cancelBtn?.replaceWith(retry);
     }
   });
   document.body.appendChild(input);
-  input.click();
+  if (!initialFile) input.click();
+  else input.dispatchEvent(new Event('change'));
 }
 
 // ── In-chat message search ──

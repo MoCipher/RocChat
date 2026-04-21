@@ -16,6 +16,7 @@ import android.media.ImageReader
 import android.media.MediaRecorder
 import android.os.Handler
 import android.os.HandlerThread
+import android.os.SystemClock
 import android.util.Base64
 import android.view.Surface
 import android.view.SurfaceHolder
@@ -30,6 +31,7 @@ import kotlinx.coroutines.*
 import org.json.JSONObject
 import java.text.SimpleDateFormat
 import java.util.*
+import kotlin.math.abs
 
 /**
  * RocChat Android — Call Manager
@@ -86,6 +88,7 @@ object CallManager {
     private var audioTrack: AudioTrack? = null
     private var audioJob: Job? = null
     private var audioSeq: Long = 0L
+    private var lastInboundAudioAtMs: Long? = null
     private val sampleRate = 16000
     private val chunkFrames = 320 // 20 ms @ 16 kHz
 
@@ -99,7 +102,21 @@ object CallManager {
     private var videoJob: Job? = null
     private var videoSeq: Long = 0L
     private var lastVideoSendMs: Long = 0L
-    private val videoTargetFps: Long = 8
+    private var videoTargetFps: Long = 8
+    private var videoJpegQuality: Int = 55
+        set(value) { field = value; diagQuality = value }
+
+    // Diagnostics (publicly observable for CallDiagnosticsSheet)
+    var diagRttMs by mutableStateOf(150.0)
+    var diagFps by mutableStateOf(8L)
+    var diagQuality by mutableStateOf(55)
+    var diagAudioJitterMs by mutableStateOf(0.0)
+    var diagAudioLateFrames by mutableIntStateOf(0)
+
+    // RTT / adaptive quality
+    private var pingTs: Long? = null
+    private var estimatedRttMs: Double = 150.0
+    private var pingJob: Job? = null
 
     fun startCall(
         conversationId: String, remoteUserId: String, remoteName: String,
@@ -169,6 +186,9 @@ object CallManager {
         if (callType == "video") {
             val ctx = appContext ?: return
             startVideoCapture(ctx)
+            pingJob = CoroutineScope(Dispatchers.Main).launch {
+                while (true) { kotlinx.coroutines.delay(5_000); sendVideoPing() }
+            }
         }
     }
 
@@ -185,6 +205,9 @@ object CallManager {
         if (callType == "video") {
             val ctx = appContext ?: return
             startVideoCapture(ctx)
+            pingJob = CoroutineScope(Dispatchers.Main).launch {
+                while (true) { kotlinx.coroutines.delay(5_000); sendVideoPing() }
+            }
         }
     }
 
@@ -244,7 +267,7 @@ object CallManager {
                 }
                 if (isCameraOff) return@setOnImageAvailableListener
                 lastVideoSendMs = now
-                val jpeg = yuv420ToJpeg(image, quality = 55) ?: return@setOnImageAvailableListener
+                val jpeg = yuv420ToJpeg(image, quality = videoJpegQuality) ?: return@setOnImageAvailableListener
                 sendVideoFrame(jpeg)
             } catch (_: Exception) {
                 // ignore malformed frames
@@ -338,6 +361,25 @@ object CallManager {
         ws?.send(msg.toString())
     }
 
+    private fun sendVideoPing() {
+        val cid = callId ?: return
+        val ts = System.currentTimeMillis()
+        pingTs = ts
+        val payload = JSONObject().put("callId", cid).put("targetUserId", remoteUserId).put("seq", 0).put("frame", "roc-ping:$ts")
+        ws?.send(JSONObject().put("type", "call_video").put("payload", payload).toString())
+    }
+
+    private fun adaptVideoQuality() {
+        when {
+            estimatedRttMs < 80  -> { videoTargetFps = 12; videoJpegQuality = 65 }
+            estimatedRttMs < 200 -> { videoTargetFps = 8;  videoJpegQuality = 55 }
+            else                 -> { videoTargetFps = 4;  videoJpegQuality = 30 }
+        }
+        diagRttMs = estimatedRttMs
+        diagFps = videoTargetFps
+        // diagQuality is updated via the videoJpegQuality setter
+    }
+
     /**
      * Inbound `call_video` frame from web or iOS. Tag 0x01 (JPEG) is the
      * only supported format — decode and publish for Compose to render.
@@ -348,6 +390,23 @@ object CallManager {
         if (incomingId != callId) return
         val b64 = payload.optString("frame")
         if (b64.isEmpty()) return
+        // Ping/pong handling
+        if (b64.startsWith("roc-ping:")) {
+            val ts = b64.removePrefix("roc-ping:")
+            val cid = callId ?: return
+            val pong = JSONObject().put("callId", cid).put("targetUserId", remoteUserId).put("seq", 0).put("frame", "roc-pong:$ts")
+            ws?.send(JSONObject().put("type", "call_video").put("payload", pong).toString())
+            return
+        }
+        if (b64.startsWith("roc-pong:")) {
+            val sent = pingTs
+            if (sent != null) {
+                estimatedRttMs = (System.currentTimeMillis() - sent).toDouble()
+                pingTs = null
+                adaptVideoQuality()
+            }
+            return
+        }
         try {
             val raw = Base64.decode(b64, Base64.NO_WRAP)
             if (raw.isEmpty() || raw[0] != 0x01.toByte()) return
@@ -385,6 +444,8 @@ object CallManager {
 
         durationJob?.cancel()
         timeoutJob?.cancel()
+        pingJob?.cancel(); pingJob = null
+        pingTs = null
         stopAudioStreaming()
         stopVideoCapture()
         stopP2P()
@@ -482,6 +543,9 @@ object CallManager {
     @Suppress("MissingPermission")
     private fun startAudioStreaming() {
         if (audioJob != null) return
+        diagAudioJitterMs = 0.0
+        diagAudioLateFrames = 0
+        lastInboundAudioAtMs = null
         val minRecordBuf = AudioRecord.getMinBufferSize(
             sampleRate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT
         ).coerceAtLeast(chunkFrames * 2 * 4)
@@ -545,6 +609,7 @@ object CallManager {
         try { audioTrack?.release() } catch (_: Exception) {}
         audioTrack = null
         audioSeq = 0L
+        lastInboundAudioAtMs = null
     }
 
     private fun sendAudioFrame(bytes: ByteArray) {
@@ -581,6 +646,18 @@ object CallManager {
         }
     }
 
+    private fun trackInboundAudioTiming(expectedFrameMs: Double = 20.0) {
+        val now = SystemClock.elapsedRealtime()
+        val last = lastInboundAudioAtMs
+        if (last != null) {
+            val delta = (now - last).toDouble()
+            val sample = abs(delta - expectedFrameMs)
+            diagAudioJitterMs = diagAudioJitterMs * 0.85 + sample * 0.15
+            if (delta > 60.0) diagAudioLateFrames += 1
+        }
+        lastInboundAudioAtMs = now
+    }
+
     fun handleCallAudio(payload: JSONObject) {
         if (callStatus != "connected") return
         val incomingId = payload.optString("callId")
@@ -589,6 +666,7 @@ object CallManager {
         if (b64.isEmpty()) return
         val track = audioTrack ?: return
         try {
+            trackInboundAudioTiming()
             val raw = Base64.decode(b64, Base64.NO_WRAP)
             val bytes = decodeInboundAudio(raw)
             val shorts = ShortArray(bytes.size / 2)
@@ -634,6 +712,7 @@ object CallManager {
     private fun playIncomingPcm(pcm: ByteArray) {
         val track = audioTrack ?: return
         try {
+            trackInboundAudioTiming()
             val bytes = decodeInboundAudio(pcm)
             val shorts = ShortArray(bytes.size / 2)
             for (i in shorts.indices) {

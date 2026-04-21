@@ -183,6 +183,29 @@ self.addEventListener('fetch', (event) => {
   );
 });
 
+async function requestAuthTokenFromClients() {
+  const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+  for (const client of windows) {
+    const token = await new Promise((resolve) => {
+      const channel = new MessageChannel();
+      const timer = setTimeout(() => resolve(null), 1500);
+      channel.port1.onmessage = (event) => {
+        clearTimeout(timer);
+        const t = event.data && typeof event.data.token === 'string' ? event.data.token : null;
+        resolve(t);
+      };
+      try {
+        client.postMessage({ type: 'rocchat:get-auth-token' }, [channel.port2]);
+      } catch {
+        clearTimeout(timer);
+        resolve(null);
+      }
+    });
+    if (token) return token;
+  }
+  return null;
+}
+
 // Background Sync — retry queued messages when connectivity returns
 self.addEventListener('sync', (event) => {
   if (event.tag === 'message-queue') {
@@ -190,27 +213,40 @@ self.addEventListener('sync', (event) => {
       (async () => {
         try {
           const db = await new Promise((resolve, reject) => {
-            const req = indexedDB.open('rocchat-outbox', 1);
-            req.onupgradeneeded = () => req.result.createObjectStore('pending', { keyPath: 'id' });
+            const req = indexedDB.open('rocchat_mq', 1);
+            req.onupgradeneeded = () => {
+              const d = req.result;
+              if (!d.objectStoreNames.contains('queue')) {
+                d.createObjectStore('queue', { keyPath: 'localId' });
+              }
+            };
             req.onsuccess = () => resolve(req.result);
             req.onerror = () => reject(req.error);
           });
-          const tx = db.transaction('pending', 'readonly');
-          const store = tx.objectStore('pending');
+          const tx = db.transaction('queue', 'readonly');
+          const store = tx.objectStore('queue');
           const items = await new Promise((resolve, reject) => {
             const req = store.getAll();
             req.onsuccess = () => resolve(req.result);
             req.onerror = () => reject(req.error);
           });
+          const authToken = await requestAuthTokenFromClients();
+          if (!authToken) {
+            db.close();
+            return;
+          }
           for (const item of items) {
-            const res = await fetch(item.url, {
+            const res = await fetch('/api/messages/send', {
               method: 'POST',
-              headers: item.headers,
-              body: item.body,
+              headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${authToken}`,
+              },
+              body: JSON.stringify(item.payload),
             });
             if (res.ok) {
-              const dtx = db.transaction('pending', 'readwrite');
-              dtx.objectStore('pending').delete(item.id);
+              const dtx = db.transaction('queue', 'readwrite');
+              dtx.objectStore('queue').delete(item.localId);
               await new Promise((r) => { dtx.oncomplete = r; });
             }
           }

@@ -12,7 +12,7 @@ import { renderRocClientToggle } from './roc-client.js';
 
 const APP_LOCK_KEY = 'rocchat_app_lock_v1';
 const APP_LOCK_LEGACY_KEY = 'rocchat_app_lock_pin';
-const APP_LOCK_ITERATIONS = 250_000;
+const APP_LOCK_ITERATIONS = 600_000;
 
 async function deriveAppLockVerifier(pin: string, salt: Uint8Array): Promise<string> {
   const baseKey = await crypto.subtle.importKey('raw', new TextEncoder().encode(pin), 'PBKDF2', false, ['deriveBits']);
@@ -1552,10 +1552,38 @@ export function renderSettings(container: HTMLElement) {
             <div style="font-size:var(--text-sm);font-weight:600;color:var(--text-primary)">${d.device_name}${isThis ? ' <span style="color:var(--turquoise,#40E0D0);font-size:11px">(this device)</span>' : ''}</div>
             <div style="font-size:11px;color:var(--text-tertiary)">${d.platform} · Last active ${lastActive}</div>
           </div>
-          ${!isThis ? `<button class="btn btn-outline revoke-device-btn" data-id="${d.id}" style="font-size:11px;padding:4px 10px;color:var(--danger);border-color:var(--danger)">Revoke</button>` : ''}
+          ${!isThis ? `
+            <div style="display:flex;gap:6px">
+              <button class="btn btn-outline rename-device-btn" data-id="${d.id}" data-name="${d.device_name}" style="font-size:11px;padding:4px 10px">Rename</button>
+              <button class="btn btn-outline revoke-device-btn" data-id="${d.id}" style="font-size:11px;padding:4px 10px;color:var(--danger);border-color:var(--danger)">Revoke</button>
+            </div>
+          ` : ''}
         `;
         listEl.appendChild(row);
       }
+      listEl.querySelectorAll<HTMLButtonElement>('.rename-device-btn').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          const deviceId = btn.dataset.id!;
+          const currentName = btn.dataset.name || '';
+          const newName = prompt('Enter a new name for this device:', currentName);
+          if (!newName || !newName.trim() || newName.trim() === currentName) return;
+          const t = (await import('../api.js')).getToken();
+          if (!t) return;
+          const r = await fetch(`/api/devices/${deviceId}`, {
+            method: 'PUT',
+            headers: { Authorization: `Bearer ${t}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ device_name: newName.trim() }),
+          });
+          if (r.ok) {
+            const nameEl = btn.closest('div[data-device-row]')?.querySelector<HTMLElement>('div > div:first-child');
+            if (nameEl) nameEl.textContent = newName.trim();
+            btn.dataset.name = newName.trim();
+            showToast('Device renamed', 'success');
+          } else {
+            showToast('Could not rename device', 'error');
+          }
+        });
+      });
       listEl.querySelectorAll<HTMLButtonElement>('.revoke-device-btn').forEach((btn) => {
         btn.addEventListener('click', async () => {
           if (!confirm('Revoke this session? The device will be logged out.')) return;

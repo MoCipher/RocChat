@@ -15,6 +15,7 @@
 import { randomId } from '@rocchat/shared';
 import { encryptMessage, decryptMessage } from '../crypto/session-manager.js';
 import { groupEncrypt, groupDecrypt } from '../crypto/group-session-manager.js';
+import { getSecretString, putSecretString } from '../crypto/secure-store.js';
 import { VoiceWS } from './voice-ws.js';
 import { VideoWS } from './video-ws.js';
 
@@ -164,22 +165,33 @@ interface CallRecord {
   direction: 'incoming' | 'outgoing'; status: 'completed' | 'missed'; duration: number; timestamp: string;
 }
 
-function getCallHistory(): CallRecord[] {
-  try { return JSON.parse(localStorage.getItem('rocchat_call_history') || '[]'); }
-  catch { return []; }
+async function getCallHistory(): Promise<CallRecord[]> {
+  try {
+    const raw = await getSecretString('rocchat_call_history');
+    if (raw) return JSON.parse(raw) as CallRecord[];
+    // Migrate from plaintext localStorage on first async read
+    const legacy = localStorage.getItem('rocchat_call_history');
+    if (legacy) {
+      const parsed = JSON.parse(legacy) as CallRecord[];
+      await putSecretString('rocchat_call_history', JSON.stringify(parsed));
+      localStorage.removeItem('rocchat_call_history');
+      return parsed;
+    }
+    return [];
+  } catch { return []; }
 }
 
-function addCallRecord(record: CallRecord) {
-  const history = getCallHistory();
+async function addCallRecord(record: CallRecord): Promise<void> {
+  const history = await getCallHistory();
   history.unshift(record);
   if (history.length > 100) history.length = 100;
-  localStorage.setItem('rocchat_call_history', JSON.stringify(history));
+  await putSecretString('rocchat_call_history', JSON.stringify(history));
 }
 
 // ── Render ──
 
-export function renderCalls(container: HTMLElement) {
-  const history = getCallHistory();
+export async function renderCalls(container: HTMLElement) {
+  const history = await getCallHistory();
   container.replaceChildren(parseHTML(`
     <div class="panel-list">
       <div class="panel-header"><h2>Calls</h2></div>
@@ -505,7 +517,7 @@ function endCall(reason = 'hangup', notify = true) {
     });
   }
   if (callState.callId) {
-    addCallRecord({
+    void addCallRecord({
       id: callState.callId, remoteName: callState.remoteName, remoteUserId: callState.remoteUserId || '',
       callType: callState.callType, direction: callState.status === 'incoming' ? 'incoming' : 'outgoing',
       status: callState.startTime ? 'completed' : 'missed',

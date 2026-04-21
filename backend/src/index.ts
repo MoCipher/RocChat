@@ -259,13 +259,13 @@ export default {
         return withCors(errorResponse('Unauthorized', 401));
       }
 
-      // Issue short-lived WebSocket ticket (30s TTL)
+      // Issue short-lived WebSocket ticket (90s TTL — generous for slow connections)
       if (path === '/api/ws/ticket' && request.method === 'POST') {
         const ticket = crypto.randomUUID();
         await env.KV.put(`ws-ticket:${ticket}`, JSON.stringify({
           userId: session.userId,
           deviceId: session.deviceId,
-        }), { expirationTtl: 30 });
+        }), { expirationTtl: 90 });
         return withCors(jsonResponse({ ticket }));
       }
 
@@ -559,6 +559,18 @@ export default {
         await env.DB.prepare('DELETE FROM devices WHERE id = ? AND user_id = ?')
           .bind(deviceId, session.userId)
           .run();
+        return withCors(jsonResponse({ ok: true }));
+      }
+
+      if (path.startsWith('/api/devices/') && request.method === 'PUT') {
+        const deviceId = path.split('/api/devices/')[1];
+        const body = await request.json() as { device_name?: string };
+        const deviceName = (body.device_name ?? '').trim().slice(0, 64);
+        if (!deviceName) return withCors(errorResponse('device_name is required', 400));
+        const result = await env.DB.prepare(
+          'UPDATE devices SET device_name = ? WHERE id = ? AND user_id = ?'
+        ).bind(deviceName, deviceId, session.userId).run();
+        if (!result.meta.changes) return withCors(errorResponse('Device not found', 404));
         return withCors(jsonResponse({ ok: true }));
       }
 

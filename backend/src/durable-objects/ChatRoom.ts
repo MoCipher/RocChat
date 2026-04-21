@@ -52,6 +52,8 @@ export class ChatRoom implements DurableObject {
   private state: DurableObjectState;
   private env: Env;
   private mediaRateWindow = new Map<string, { t: number[]; bytes: number }>();
+  // Per-user non-media message rate window: max 30 messages/second
+  private msgRateWindow = new Map<string, number[]>();
 
   private static readonly AUDIO_MAX_FRAME_B64 = 16 * 1024;
   private static readonly VIDEO_MAX_FRAME_B64 = 96 * 1024;
@@ -226,6 +228,13 @@ export class ChatRoom implements DurableObject {
         token: sender.token,
         lastAuthCheck: sender.lastAuthCheck,
       });
+    }
+
+    // Rate-limit non-media relay messages (30/s per user) to prevent spam/amplification.
+    // Media frames (audio/video) have their own per-frame budget in allowMediaFrame().
+    const isMediaMessage = msg.type === 'call_audio' || msg.type === 'call_video';
+    if (!isMediaMessage && !this.allowMessage(sender.userId)) {
+      return; // drop silently — don't close, just throttle
     }
 
     switch (msg.type) {
@@ -489,6 +498,23 @@ export class ChatRoom implements DurableObject {
     win.t.push(now);
     win.bytes += frameBytes;
     this.mediaRateWindow.set(userId, win);
+    return true;
+  }
+
+  /** Rate-limit non-media WS messages: max 30 per second per user. */
+  private allowMessage(userId: string): boolean {
+    const now = Date.now();
+    const timestamps = this.msgRateWindow.get(userId) ?? [];
+    // Evict timestamps older than 1 second
+    let start = 0;
+    while (start < timestamps.length && now - timestamps[start] > 1000) start++;
+    const recent = start > 0 ? timestamps.slice(start) : timestamps;
+    if (recent.length >= 30) {
+      this.msgRateWindow.set(userId, recent);
+      return false;
+    }
+    recent.push(now);
+    this.msgRateWindow.set(userId, recent);
     return true;
   }
 }

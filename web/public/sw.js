@@ -18,7 +18,8 @@ async function trimCache(cacheName) {
     const cache = await caches.open(cacheName);
     const keys = await cache.keys();
     if (keys.length <= RUNTIME_ENTRY_BUDGET) return;
-    // Drop the oldest entries first.
+    // Drop the oldest entries first, but never evict shell assets.
+    const protectedPaths = new Set(SHELL_ASSETS);
     const stamped = await Promise.all(keys.map(async (req) => {
       const res = await cache.match(req);
       const dateHeader = res?.headers.get('date');
@@ -26,9 +27,10 @@ async function trimCache(cacheName) {
       return { req, ts };
     }));
     stamped.sort((a, b) => a.ts - b.ts);
+    const evictable = stamped.filter(e => !protectedPaths.has(new URL(e.req.url).pathname));
     const overflow = stamped.length - RUNTIME_ENTRY_BUDGET;
-    for (let i = 0; i < overflow; i++) {
-      await cache.delete(stamped[i].req);
+    for (let i = 0; i < Math.min(overflow, evictable.length); i++) {
+      await cache.delete(evictable[i].req);
     }
   } catch { /* best effort */ }
 }

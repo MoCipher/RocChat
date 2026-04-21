@@ -411,6 +411,10 @@ export function deleteDevice(deviceId: string) {
   return req(`/devices/${deviceId}`, { method: 'DELETE' });
 }
 
+export function renameDevice(deviceId: string, deviceName: string) {
+  return req(`/devices/${deviceId}`, { method: 'PUT', body: JSON.stringify({ device_name: deviceName }) });
+}
+
 export function initiateDeviceVerification() {
   return req<{ code: string; expires_in: number }>('/devices/verify/initiate', { method: 'POST' });
 }

@@ -1,4 +1,4 @@
-const CACHE_NAME = 'rocchat-v8';
+const CACHE_NAME = 'rocchat-v9';
 const SHELL_ASSETS = [
   '/',
   '/index.html',
@@ -40,11 +40,13 @@ async function estimateAndTrim(cacheName) {
   try {
     const { usage = 0, quota = 0 } = await navigator.storage.estimate();
     if (quota > 0 && usage / quota > 0.6) {
-      // Approaching browser quota — prune aggressively.
+      // Approaching browser quota — prune aggressively, but never evict shell assets.
       const cache = await caches.open(cacheName);
       const keys = await cache.keys();
-      for (let i = 0; i < Math.ceil(keys.length / 4); i++) {
-        await cache.delete(keys[i]);
+      const protectedPaths = new Set(SHELL_ASSETS);
+      const evictableKeys = keys.filter(req => !protectedPaths.has(new URL(req.url).pathname));
+      for (let i = 0; i < Math.ceil(evictableKeys.length / 4); i++) {
+        await cache.delete(evictableKeys[i]);
       }
       return;
     }

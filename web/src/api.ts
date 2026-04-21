@@ -90,7 +90,13 @@ export async function req<T = unknown>(
 
   let res: Response;
   try {
-    res = await fetch(`${BASE}${path}`, { ...opts, headers });
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 30_000);
+    try {
+      res = await fetch(`${BASE}${path}`, { ...opts, headers, signal: controller.signal });
+    } finally {
+      clearTimeout(timeoutId);
+    }
   } catch {
     return { ok: false, status: 0, code: 'NETWORK', data: { error: 'network' } as unknown as T };
   }

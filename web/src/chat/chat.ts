@@ -1246,7 +1246,11 @@ async function sendMessageHandler() {
   const text = input.value.trim();
   if (!text) return;
 
-  // Capture and clear reply-to
+  // Prevent huge payloads from reaching the server
+  if (text.length > 64 * 1024) {
+    showToast('Message is too long (max 64 KB)', 'error');
+    return;
+  }
   const replyTo = input.dataset.replyTo || undefined;
   delete input.dataset.replyTo;
   document.getElementById('reply-banner')?.remove();

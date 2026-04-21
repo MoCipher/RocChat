@@ -167,6 +167,7 @@ export class ChatRoom implements DurableObject {
     const c = this.clientFor(ws);
     if (!c) return;
     this.mediaRateWindow.delete(c.userId);
+    this.msgRateWindow.delete(c.userId);
     this.broadcast(
       { type: 'presence', payload: { userId: c.userId, status: 'offline' } },
       c.userId,
@@ -182,6 +183,7 @@ export class ChatRoom implements DurableObject {
     const c = this.clientFor(ws);
     if (!c) return;
     this.mediaRateWindow.delete(c.userId);
+    this.msgRateWindow.delete(c.userId);
     this.broadcast(
       { type: 'presence', payload: { userId: c.userId, status: 'offline' } },
       c.userId,

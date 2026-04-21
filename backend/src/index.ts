@@ -76,6 +76,15 @@ export default {
         const loginIp = request.headers.get('CF-Connecting-IP') || 'unknown';
         const loginRl = await rateLimit(env, `ip:${loginIp}`, '/api/auth/login');
         if (!loginRl.ok) return withCors(new Response(JSON.stringify({ error: 'Too many login attempts', code: 'RATE_LIMITED', retry_after: loginRl.retryAfter ?? 60 }), { status: 429, headers: { 'Content-Type': 'application/json', 'Retry-After': String(loginRl.retryAfter ?? 60) } }));
+        // Also rate-limit per username to prevent cross-IP targeted brute-force
+        try {
+          const bodyClone = await request.clone().json() as { username?: string };
+          if (bodyClone.username) {
+            const userKey = `login:user:${String(bodyClone.username).toLowerCase().slice(0, 64)}`;
+            const userRl = await rateLimit(env, userKey, '/api/auth/login/user');
+            if (!userRl.ok) return withCors(new Response(JSON.stringify({ error: 'Too many login attempts for this account', code: 'RATE_LIMITED', retry_after: userRl.retryAfter ?? 300 }), { status: 429, headers: { 'Content-Type': 'application/json', 'Retry-After': String(userRl.retryAfter ?? 300) } }));
+          }
+        } catch { /* body parse failed — let handleAuth report the error */ }
         return withCors(await handleAuth(request, env, 'login'));
       }
       if (path === '/api/auth/refresh' && request.method === 'POST') {

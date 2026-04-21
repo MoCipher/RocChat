@@ -755,7 +755,7 @@ extension CallManager: P2PTransportDelegate {
                     channel.update(from: src, count: Int(frameCount))
                 }
             }
-            Task { try? player.scheduleBuffer(buffer) }
+            player.scheduleBuffer(buffer, completionHandler: nil)
         }
     }
 }

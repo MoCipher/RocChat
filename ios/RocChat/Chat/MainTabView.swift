@@ -2890,6 +2890,69 @@ struct SettingsView: View {
     @State private var editNicknameContactId = ""
     @State private var editNicknameText = ""
 
+    @ViewBuilder
+    private var keywordAlertsView: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label("Keyword Alerts", systemImage: "bell.badge.fill")
+                .font(.subheadline.weight(.semibold))
+                .foregroundColor(.rocGold)
+            Text("Get notified even during Quiet Hours when a message contains these keywords.")
+                .font(.caption)
+                .foregroundColor(.textSecondary)
+
+            if !alertKeywords.isEmpty {
+                FlowLayout(spacing: 6) {
+                    ForEach(alertKeywords, id: \.self) { kw in
+                        keywordChip(kw)
+                    }
+                }
+            }
+
+            HStack {
+                TextField("Add keyword...", text: $newKeyword)
+                    .textFieldStyle(RoundedBorderTextFieldStyle())
+                    .font(.caption)
+                    .autocapitalization(.none)
+                    .onSubmit { addKeyword() }
+                Button {
+                    addKeyword()
+                } label: {
+                    Image(systemName: "plus.circle.fill")
+                        .foregroundColor(.rocGold)
+                }
+                .disabled(newKeyword.trimmingCharacters(in: .whitespaces).isEmpty || alertKeywords.count >= 20)
+            }
+
+            if alertKeywords.count >= 20 {
+                Text("Maximum 20 keywords")
+                    .font(.caption2)
+                    .foregroundColor(.danger)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func keywordChip(_ kw: String) -> some View {
+        HStack(spacing: 4) {
+            Text(kw)
+                .font(.caption)
+                .foregroundColor(.textPrimary)
+            Button {
+                alertKeywords.removeAll { $0 == kw }
+                saveKeywords()
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.caption2)
+                    .foregroundColor(.danger)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 4)
+        .background(Color.bgCard)
+        .cornerRadius(20)
+        .overlay(RoundedRectangle(cornerRadius: 20).stroke(Color.shadowBronze.opacity(0.3), lineWidth: 1))
+    }
+
     var body: some View {
         NavigationStack {
             List {
@@ -3367,60 +3430,7 @@ struct SettingsView: View {
                     }
 
                     // Keyword Alerts
-                    VStack(alignment: .leading, spacing: 8) {
-                        Label("Keyword Alerts", systemImage: "bell.badge.fill")
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundColor(.rocGold)
-                        Text("Get notified even during Quiet Hours when a message contains these keywords.")
-                            .font(.caption)
-                            .foregroundColor(.textSecondary)
-                        
-                        if !alertKeywords.isEmpty {
-                            FlowLayout(spacing: 6) {
-                                ForEach(alertKeywords, id: \.self) { kw in
-                                    HStack(spacing: 4) {
-                                        Text(kw)
-                                            .font(.caption)
-                                            .foregroundColor(.textPrimary)
-                                        Button {
-                                            alertKeywords.removeAll { $0 == kw }
-                                            saveKeywords()
-                                        } label: {
-                                            Image(systemName: "xmark.circle.fill")
-                                                .font(.caption2)
-                                                .foregroundColor(.danger)
-                                        }
-                                    }
-                                    .padding(.horizontal, 10)
-                                    .padding(.vertical, 4)
-                                    .background(Color.bgCard)
-                                    .cornerRadius(20)
-                                    .overlay(RoundedRectangle(cornerRadius: 20).stroke(Color.borderNorm, lineWidth: 1))
-                                }
-                            }
-                        }
-                        
-                        HStack {
-                            TextField("Add keyword...", text: $newKeyword)
-                                .textFieldStyle(RoundedBorderTextFieldStyle())
-                                .font(.caption)
-                                .autocapitalization(.none)
-                                .onSubmit { addKeyword() }
-                            Button {
-                                addKeyword()
-                            } label: {
-                                Image(systemName: "plus.circle.fill")
-                                    .foregroundColor(.rocGold)
-                            }
-                            .disabled(newKeyword.trimmingCharacters(in: .whitespaces).isEmpty || alertKeywords.count >= 20)
-                        }
-                        
-                        if alertKeywords.count >= 20 {
-                            Text("Maximum 20 keywords")
-                                .font(.caption2)
-                                .foregroundColor(.danger)
-                        }
-                    }
+                    keywordAlertsView
                 }
                 .tint(.rocGold)
 

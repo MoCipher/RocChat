@@ -25,8 +25,13 @@ private final class PinnedSessionDelegate: NSObject, URLSessionDelegate {
         }
 
         var trustError: CFError?
-        guard SecTrustEvaluateWithError(trust, &trustError),
-              let certificate = SecTrustGetCertificateAtIndex(trust, 0) else {
+        guard SecTrustEvaluateWithError(trust, &trustError) else {
+            completionHandler(.cancelAuthenticationChallenge, nil)
+            return
+        }
+        // SecTrustGetCertificateAtIndex was deprecated in iOS 15; use the chain copy instead.
+        guard let chain = SecTrustCopyCertificateChain(trust) as? [SecCertificate],
+              let certificate = chain.first else {
             completionHandler(.cancelAuthenticationChallenge, nil)
             return
         }

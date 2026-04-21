@@ -2406,6 +2406,10 @@ struct ConversationView: View {
                             DispatchQueue.main.async {
                                 CallManager.shared.handleCallAudio(payload: payload)
                             }
+                        } else if type == "call_video" {
+                            DispatchQueue.main.async {
+                                CallManager.shared.handleCallVideo(payload: payload)
+                            }
                         } else if type == "call_p2p_candidate" {
                             DispatchQueue.main.async {
                                 CallManager.shared.handleP2PCandidate(payload: payload)

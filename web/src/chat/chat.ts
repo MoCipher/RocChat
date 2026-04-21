@@ -1571,6 +1571,20 @@ async function connectWebSocket(conversationId: string) {
             break;
           }
 
+          case 'call_audio': {
+            import('../calls/calls.js').then((mod) => {
+              mod.handleCallAudio(data.payload);
+            });
+            break;
+          }
+
+          case 'call_video': {
+            import('../calls/calls.js').then((mod) => {
+              mod.handleCallVideo(data.payload);
+            });
+            break;
+          }
+
           // Group call signaling
           case 'group_call_start': {
             import('../calls/calls.js').then((mod) => {

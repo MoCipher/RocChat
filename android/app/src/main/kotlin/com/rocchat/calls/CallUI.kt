@@ -5,6 +5,7 @@ import android.view.ViewGroup
 import android.hardware.camera2.CameraManager
 import android.content.Context
 import androidx.compose.foundation.background
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -18,6 +19,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -65,6 +67,21 @@ fun CallOverlay() {
                     }
                 },
                 modifier = Modifier.fillMaxSize()
+            )
+        }
+
+        // Remote video frame (JPEG-over-WS from web/iOS peer).
+        val remoteBmp = CallManager.remoteVideoBitmap
+        if (CallManager.callType == "video" && status == "connected" && remoteBmp != null) {
+            androidx.compose.foundation.Image(
+                bitmap = remoteBmp.asImageBitmap(),
+                contentDescription = "Remote video",
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(16.dp)
+                    .size(width = 160.dp, height = 120.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(Color.Black)
             )
         }
 

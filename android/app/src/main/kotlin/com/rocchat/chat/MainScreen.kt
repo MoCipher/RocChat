@@ -1117,6 +1117,7 @@ fun ConversationScreen(conversationId: String, conversationName: String, recipie
                             "call_ice" -> CallManager.handleIceCandidate(data.getJSONObject("payload"))
                             "call_end" -> CallManager.handleCallEnd(data.getJSONObject("payload"))
                             "call_audio" -> CallManager.handleCallAudio(data.getJSONObject("payload"))
+                            "call_video" -> CallManager.handleCallVideo(data.getJSONObject("payload"))
                             "call_p2p_candidate" -> CallManager.handleP2PCandidate(data.getJSONObject("payload"))
                         }
                     } catch (_: Exception) {}

@@ -1,7 +1,11 @@
 package com.rocchat.calls
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.ImageFormat
+import android.graphics.Rect
+import android.graphics.YuvImage
 import android.hardware.camera2.*
 import android.media.AudioAttributes
 import android.media.AudioFormat
@@ -56,6 +60,9 @@ object CallManager {
     var callDuration by mutableIntStateOf(0)
     val callHistory = mutableStateListOf<CallRecord>()
 
+    /// Latest decoded JPEG frame from the remote peer, rendered by Compose UI.
+    var remoteVideoBitmap by mutableStateOf<Bitmap?>(null)
+
     // Group call state
     var isGroupCall by mutableStateOf(false)
     var groupPeers = mutableMapOf<String, GroupPeer>()
@@ -90,6 +97,9 @@ object CallManager {
     private var previewSurface: Surface? = null
     private var imageReader: ImageReader? = null
     private var videoJob: Job? = null
+    private var videoSeq: Long = 0L
+    private var lastVideoSendMs: Long = 0L
+    private val videoTargetFps: Long = 8
 
     fun startCall(
         conversationId: String, remoteUserId: String, remoteName: String,
@@ -221,29 +231,24 @@ object CallManager {
         cameraThread = HandlerThread("RocCameraThread").apply { start() }
         cameraHandler = Handler(cameraThread!!.looper)
 
-        // Also create an ImageReader for frame capture (send via P2P/WS)
+        // ImageReader captures NV21-compatible frames that we JPEG-encode
+        // and ship as `call_video` so web and iOS can decode them. Matches
+        // the shared wire format: [0x01 | jpeg bytes] base64 over WS.
         imageReader = ImageReader.newInstance(640, 480, ImageFormat.YUV_420_888, 2)
         imageReader?.setOnImageAvailableListener({ reader ->
-            val image = reader.acquireLatestImage()
-            if (image != null) {
-                // Encode & send frame via P2P transport
-                try {
-                    val buffer = image.planes[0].buffer
-                    val bytes = ByteArray(buffer.remaining())
-                    buffer.get(bytes)
-                    val encoded = Base64.encodeToString(bytes, Base64.NO_WRAP)
-                    val frame = JSONObject().apply {
-                        put("type", "video_frame")
-                        put("data", encoded)
-                        put("w", image.width)
-                        put("h", image.height)
-                    }
-                    if (p2pConnected) {
-                        p2p?.send(frame.toString().toByteArray())
-                    } else {
-                        ws?.send(frame.toString())
-                    }
-                } catch (_: Exception) { }
+            val image = reader.acquireLatestImage() ?: return@setOnImageAvailableListener
+            try {
+                val now = System.currentTimeMillis()
+                if (now - lastVideoSendMs < (1000L / videoTargetFps)) {
+                    return@setOnImageAvailableListener
+                }
+                if (isCameraOff) return@setOnImageAvailableListener
+                lastVideoSendMs = now
+                val jpeg = yuv420ToJpeg(image, quality = 55) ?: return@setOnImageAvailableListener
+                sendVideoFrame(jpeg)
+            } catch (_: Exception) {
+                // ignore malformed frames
+            } finally {
                 image.close()
             }
         }, cameraHandler)
@@ -285,6 +290,70 @@ object CallManager {
         imageReader?.close(); imageReader = null
         cameraThread?.quitSafely(); cameraThread = null
         cameraHandler = null
+        videoSeq = 0L
+        lastVideoSendMs = 0L
+    }
+
+    /**
+     * YUV_420_888 → JPEG. Scales down to 320×240 equivalent by reducing the
+     * JPEG source rect — cheap and good enough for 8 fps preview.
+     */
+    private fun yuv420ToJpeg(image: android.media.Image, quality: Int): ByteArray? {
+        val yPlane = image.planes[0]
+        val uPlane = image.planes[1]
+        val vPlane = image.planes[2]
+        val yBuf = yPlane.buffer
+        val uBuf = uPlane.buffer
+        val vBuf = vPlane.buffer
+        val ySize = yBuf.remaining()
+        val uSize = uBuf.remaining()
+        val vSize = vBuf.remaining()
+        // Build an NV21-shaped byte array. The U/V planes from YUV_420_888 may
+        // be interleaved with a pixelStride of 2; copy raw bytes and let YuvImage
+        // handle it — works well enough for low-fps preview.
+        val nv21 = ByteArray(ySize + uSize + vSize)
+        yBuf.get(nv21, 0, ySize)
+        vBuf.get(nv21, ySize, vSize)
+        uBuf.get(nv21, ySize + vSize, uSize)
+        val yuv = YuvImage(nv21, ImageFormat.NV21, image.width, image.height, null)
+        val out = java.io.ByteArrayOutputStream()
+        val rect = Rect(0, 0, image.width, image.height)
+        return if (yuv.compressToJpeg(rect, quality, out)) out.toByteArray() else null
+    }
+
+    private fun sendVideoFrame(jpeg: ByteArray) {
+        val cid = callId ?: return
+        if (remoteUserId.isEmpty()) return
+        videoSeq += 1
+        val tagged = ByteArray(jpeg.size + 1)
+        tagged[0] = 0x01
+        System.arraycopy(jpeg, 0, tagged, 1, jpeg.size)
+        val b64 = Base64.encodeToString(tagged, Base64.NO_WRAP)
+        val payload = JSONObject()
+            .put("callId", cid)
+            .put("targetUserId", remoteUserId)
+            .put("seq", videoSeq)
+            .put("frame", b64)
+        val msg = JSONObject().put("type", "call_video").put("payload", payload)
+        ws?.send(msg.toString())
+    }
+
+    /**
+     * Inbound `call_video` frame from web or iOS. Tag 0x01 (JPEG) is the
+     * only supported format — decode and publish for Compose to render.
+     */
+    fun handleCallVideo(payload: JSONObject) {
+        if (callStatus != "connected") return
+        val incomingId = payload.optString("callId")
+        if (incomingId != callId) return
+        val b64 = payload.optString("frame")
+        if (b64.isEmpty()) return
+        try {
+            val raw = Base64.decode(b64, Base64.NO_WRAP)
+            if (raw.isEmpty() || raw[0] != 0x01.toByte()) return
+            val bmp = BitmapFactory.decodeByteArray(raw, 1, raw.size - 1) ?: return
+            remoteVideoBitmap = bmp
+        } catch (_: Exception) { /* drop bad frame */ }
     }
 
     fun endCall(reason: String = "hangup", notify: Boolean = true) {
@@ -330,6 +399,7 @@ object CallManager {
         isCameraOff = false
         previewSurface = null
         pendingSdp = null
+        remoteVideoBitmap = null
     }
 
     private fun sendSignal(type: String, extra: Map<String, String>) {

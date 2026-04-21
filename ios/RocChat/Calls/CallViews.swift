@@ -19,6 +19,18 @@ struct CallOverlay: View {
                 VStack(spacing: 24) {
                     Spacer()
 
+                    // Remote video preview (1:1 JPEG-over-WS from web/native).
+                    if callManager.callType == .video,
+                       callManager.callStatus == .connected,
+                       let img = callManager.remoteVideoFrame {
+                        Image(uiImage: img)
+                            .resizable()
+                            .aspectRatio(contentMode: .fit)
+                            .frame(maxWidth: 320, maxHeight: 240)
+                            .background(Color.black)
+                            .cornerRadius(12)
+                    }
+
                     // Avatar
                     ZStack {
                         Circle()

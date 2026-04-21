@@ -15,6 +15,7 @@ import Foundation
 import AVFoundation
 import CryptoKit
 import Combine
+import UIKit
 
 // MARK: - Call State
 
@@ -60,6 +61,9 @@ class CallManager: ObservableObject {
     @Published var callDuration: Int = 0
     @Published var callHistory: [CallRecord] = []
 
+    /// Latest decoded JPEG frame from the remote peer (for SwiftUI rendering).
+    @Published var remoteVideoFrame: UIImage? = nil
+
     // Group call state
     @Published var isGroupCall: Bool = false
     @Published var groupPeers: [String: GroupPeer] = [:] // userId → peer
@@ -89,6 +93,15 @@ class CallManager: ObservableObject {
     private var audioSeq: UInt64 = 0
     private let audioSampleRate: Double = 16000
     private let audioFormat = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: 16000, channels: 1, interleaved: true)!
+
+    // Video-over-WebSocket: AVCaptureSession → JPEG @ 8 fps, 320×240,
+    // base64'd into call_video frames. Matches web's VideoWS wire format.
+    private var videoCapture: AVCaptureSession?
+    private var videoOutput: AVCaptureVideoDataOutput?
+    private let videoQueue = DispatchQueue(label: "rocchat.video.capture", qos: .userInteractive)
+    private var videoSeq: UInt64 = 0
+    private var lastVideoSendAt: TimeInterval = 0
+    private let videoTargetFps: Double = 8
 
     // Independent STUN servers — no Google, no surveillance
     private let iceServers = [
@@ -176,6 +189,7 @@ class CallManager: ObservableObject {
             "targetUserId": remoteUserId
         ])
         startAudioStreaming()
+        if callType == .video { startVideoStreaming() }
     }
 
     func declineCall() {
@@ -191,6 +205,7 @@ class CallManager: ObservableObject {
         startTime = Date()
         startDurationTimer()
         startAudioStreaming()
+        if callType == .video { startVideoStreaming() }
     }
 
     func handleIceCandidate(payload: [String: Any]) {
@@ -248,6 +263,7 @@ class CallManager: ObservableObject {
         durationTimer?.invalidate()
         durationTimer = nil
         stopAudioStreaming()
+        stopVideoStreaming()
         stopP2P()
         callId = nil
         conversationId = nil
@@ -259,6 +275,7 @@ class CallManager: ObservableObject {
         isMuted = false
         isCameraOff = false
         pendingSdp = nil
+        remoteVideoFrame = nil
 
         deactivateAudioSession()
     }
@@ -493,6 +510,113 @@ class CallManager: ObservableObject {
             }
         }
         player.scheduleBuffer(buffer, completionHandler: nil)
+    }
+
+    // MARK: - Video Streaming (1:1, JPEG-over-WS)
+
+    /// Start front-camera capture, throttled to ~8 fps. Each frame is
+    /// scaled to 320×240, JPEG-encoded at quality 0.55, tagged with 0x01,
+    /// base64'd, and shipped as `call_video` over the existing WS. This
+    /// matches the web VideoWS wire format so calls interop cross-platform.
+    private func startVideoStreaming() {
+        guard videoCapture == nil else { return }
+        let session = AVCaptureSession()
+        session.sessionPreset = .vga640x480
+        guard let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .front),
+              let input = try? AVCaptureDeviceInput(device: device),
+              session.canAddInput(input) else { return }
+        session.addInput(input)
+        let output = AVCaptureVideoDataOutput()
+        output.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA]
+        output.alwaysDiscardsLateVideoFrames = true
+        output.setSampleBufferDelegate(self.videoDelegate, queue: videoQueue)
+        guard session.canAddOutput(output) else { return }
+        session.addOutput(output)
+        if let conn = output.connection(with: .video) {
+            conn.videoOrientation = .portrait
+            if device.position == .front { conn.isVideoMirrored = true }
+        }
+        videoCapture = session
+        videoOutput = output
+        videoQueue.async { session.startRunning() }
+    }
+
+    private func stopVideoStreaming() {
+        if let session = videoCapture {
+            videoQueue.async { session.stopRunning() }
+        }
+        videoCapture = nil
+        videoOutput = nil
+        videoSeq = 0
+        lastVideoSendAt = 0
+    }
+
+    /// Lazily-created delegate that forwards AVFoundation callbacks back
+    /// into the actor-isolated CallManager. NSObject-conforming because
+    /// AVCaptureVideoDataOutputSampleBufferDelegate is an ObjC protocol.
+    private lazy var videoDelegate: VideoCaptureDelegate = VideoCaptureDelegate { [weak self] sampleBuffer in
+        self?.handleCapturedFrame(sampleBuffer)
+    }
+
+    private nonisolated func handleCapturedFrame(_ sampleBuffer: CMSampleBuffer) {
+        // FPS throttle — we're aiming for ~8 fps on the wire.
+        let now = CACurrentMediaTime()
+        Task { @MainActor [weak self] in
+            guard let self = self else { return }
+            if self.isCameraOff { return }
+            if now - self.lastVideoSendAt < 1.0 / self.videoTargetFps { return }
+            self.lastVideoSendAt = now
+            guard let pb = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+            guard let jpeg = Self.jpegFromPixelBuffer(pb, maxWidth: 320, maxHeight: 240, quality: 0.55) else { return }
+            self.sendVideoFrame(jpeg: jpeg)
+        }
+    }
+
+    private nonisolated static func jpegFromPixelBuffer(_ pb: CVPixelBuffer, maxWidth: Int, maxHeight: Int, quality: CGFloat) -> Data? {
+        let ci = CIImage(cvPixelBuffer: pb)
+        let w = CGFloat(CVPixelBufferGetWidth(pb))
+        let h = CGFloat(CVPixelBufferGetHeight(pb))
+        let scale = min(CGFloat(maxWidth) / w, CGFloat(maxHeight) / h, 1.0)
+        let scaled = ci.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+        let context = CIContext(options: nil)
+        guard let cg = context.createCGImage(scaled, from: scaled.extent) else { return nil }
+        let ui = UIImage(cgImage: cg)
+        return ui.jpegData(compressionQuality: quality)
+    }
+
+    private func sendVideoFrame(jpeg: Data) {
+        guard let callId = callId, !remoteUserId.isEmpty else { return }
+        guard let ws = ws else { return }
+        videoSeq &+= 1
+        var tagged = Data([0x01])
+        tagged.append(jpeg)
+        let payload: [String: Any] = [
+            "callId": callId,
+            "targetUserId": remoteUserId,
+            "seq": videoSeq,
+            "frame": tagged.base64EncodedString()
+        ]
+        let msg: [String: Any] = ["type": "call_video", "payload": payload]
+        guard let data = try? JSONSerialization.data(withJSONObject: msg),
+              let str = String(data: data, encoding: .utf8) else { return }
+        ws.send(.string(str)) { _ in }
+    }
+
+    /// Inbound `call_video` frame from web or another native peer. Tag 0x01
+    /// is the only format currently emitted; we decode the JPEG and publish
+    /// it for the SwiftUI layer to render.
+    func handleCallVideo(payload: [String: Any]) {
+        guard callStatus == .connected,
+              let frameB64 = payload["frame"] as? String,
+              let incomingCallId = payload["callId"] as? String,
+              incomingCallId == callId,
+              var raw = Data(base64Encoded: frameB64),
+              !raw.isEmpty else { return }
+        let tag = raw.removeFirst()
+        guard tag == 0x01 else { return }
+        if let img = UIImage(data: raw) {
+            self.remoteVideoFrame = img
+        }
     }
 
     // MARK: - Group Calls (Mesh)
@@ -757,5 +881,21 @@ extension CallManager: P2PTransportDelegate {
             }
             player.scheduleBuffer(buffer, completionHandler: nil)
         }
+    }
+}
+
+// MARK: - AVCaptureVideoDataOutputSampleBufferDelegate bridge
+
+/// Bridges AVFoundation's ObjC-protocol delegate into a simple Swift
+/// closure so `CallManager` can stay actor-isolated and not worry about
+/// inheriting from NSObject.
+final class VideoCaptureDelegate: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
+    private let onFrame: (CMSampleBuffer) -> Void
+    init(onFrame: @escaping (CMSampleBuffer) -> Void) { self.onFrame = onFrame }
+
+    func captureOutput(_ output: AVCaptureOutput,
+                       didOutput sampleBuffer: CMSampleBuffer,
+                       from connection: AVCaptureConnection) {
+        onFrame(sampleBuffer)
     }
 }

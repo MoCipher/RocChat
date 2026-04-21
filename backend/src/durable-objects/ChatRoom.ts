@@ -31,6 +31,7 @@ interface WsMessage {
     | 'call_ice'
     | 'call_end'
     | 'call_audio'
+    | 'call_video'
     | 'call_p2p_candidate'
     | 'read_receipt'
     | 'delivery_receipt'
@@ -261,6 +262,18 @@ export class ChatRoom implements DurableObject {
         if (!targetUserId) break;
         this.sendToUser(targetUserId, {
           type: 'call_audio',
+          payload: { ...msg.payload, fromUserId: sender.userId },
+        });
+        break;
+      }
+
+      case 'call_video': {
+        // Relay encrypted video frames — same envelope as call_audio.
+        // Payload: { callId, targetUserId, seq, frame (base64 JPEG, tag 0x01) }
+        const targetUserId = msg.payload.targetUserId as string | undefined;
+        if (!targetUserId) break;
+        this.sendToUser(targetUserId, {
+          type: 'call_video',
           payload: { ...msg.payload, fromUserId: sender.userId },
         });
         break;

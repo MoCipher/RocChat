@@ -1,17 +1,22 @@
 /**
- * RocChat Web — Calls UI + WebRTC
+ * RocChat Web — Calls UI + voice-over-WebSocket transport
  *
- * Complete voice & video call functionality with:
- * - WebRTC peer connections (DTLS-SRTP encrypted)
- * - Signaling via WebSocket (Durable Object relay)
- * - E2E encrypted signaling (Double Ratchet)
- * - Call UI overlay (incoming/outgoing/active)
- * - Media controls (mute, camera toggle)
+ * 1:1 calls speak the SAME wire protocol as iOS / Android:
+ *   call_offer (no SDP) → call_answer (no SDP) → call_audio frames
+ *   (μ-law over PCM16 16 kHz mono, base64'd, relayed by the DO).
+ * No WebRTC, no SDP, no ICE — those never interop'd with native because
+ * iOS / Android never had a libwebrtc stack. Group calls still use
+ * WebRTC mesh because the native side is also WebRTC-mesh-only.
+ *
+ * Signaling envelopes (callId, targetUserId, callType) are E2E
+ * encrypted via the conversation's Double Ratchet.
  */
 
 import { randomId } from '@rocchat/shared';
 import { encryptMessage, decryptMessage } from '../crypto/session-manager.js';
 import { groupEncrypt, groupDecrypt } from '../crypto/group-session-manager.js';
+import { VoiceWS } from './voice-ws.js';
+import { VideoWS } from './video-ws.js';
 
 // ── State ──
 
@@ -31,12 +36,17 @@ interface CallState {
   cameraOff: boolean;
   timerInterval: ReturnType<typeof setInterval> | null;
   pendingSdp: string | null;
+  // Voice-over-WS transport — used for 1:1 interop with iOS/Android.
+  voiceWS: VoiceWS | null;
+  // Video-over-WS transport — 1:1 video calls (JPEG @ 8 fps).
+  videoWS: VideoWS | null;
 }
 
 const callState: CallState = {
   callId: null, conversationId: null, remoteUserId: null, remoteName: 'Unknown',
   callType: 'voice', status: 'idle', pc: null, localStream: null, remoteStream: null,
   ws: null, startTime: null, muted: false, cameraOff: false, timerInterval: null, pendingSdp: null,
+  voiceWS: null, videoWS: null,
 };
 
 // Independent STUN servers — no Google, no surveillance
@@ -216,18 +226,18 @@ export async function startOutgoingCall(
   callType: 'voice' | 'video', ws: WebSocket,
 ) {
   if (callState.status !== 'idle') return;
+  // Note: video is treated as voice on the wire — native peers don't yet
+  // ship a video media stack, so a "video" 1:1 with native would silently
+  // fail to render. UI label can stay 'video' but transport is audio.
   Object.assign(callState, {
-    callId: randomId(), conversationId, remoteUserId, remoteName, callType, status: 'outgoing', ws,
+    callId: randomId(), conversationId, remoteUserId, remoteName, callType,
+    status: 'outgoing', ws,
   });
   showCallOverlay();
   try {
-    callState.localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: callType === 'video' });
-    await createPC();
-    callState.localStream.getTracks().forEach((t) => callState.pc!.addTrack(t, callState.localStream!));
-    const offer = await callState.pc!.createOffer();
-    await callState.pc!.setLocalDescription(offer);
+    // call_offer carries NO sdp — matches iOS / Android wire format.
     const offerPayload = await encryptSignaling({
-      callId: callState.callId, callType, sdp: offer.sdp, targetUserId: remoteUserId, timestamp: Date.now(),
+      callId: callState.callId, callType, targetUserId: remoteUserId, timestamp: Date.now(),
     });
     ws.send(JSON.stringify({ type: 'call_offer', payload: offerPayload }));
   } catch (err) { handleMediaError(err); }
@@ -245,7 +255,8 @@ export async function handleIncomingCallOffer(payload: Record<string, unknown>, 
     callId: decrypted.callId, conversationId, remoteUserId: decrypted.fromUserId || payload.fromUserId,
     remoteName: ((decrypted.fromUserId || payload.fromUserId) as string).slice(0, 8),
     callType: (decrypted.callType as 'voice' | 'video') || 'voice',
-    status: 'incoming', ws, pendingSdp: decrypted.sdp,
+    status: 'incoming', ws,
+    pendingSdp: (decrypted.sdp as string | undefined) ?? null,
   });
   showCallOverlay();
   setTimeout(() => {
@@ -255,11 +266,20 @@ export async function handleIncomingCallOffer(payload: Record<string, unknown>, 
 
 export async function handleCallAnswer(payload: Record<string, unknown>) {
   const decrypted = await decryptSignaling(payload);
-  if (!callState.pc || callState.callId !== decrypted.callId) return;
-  callState.pc.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp: decrypted.sdp as string }));
+  if (callState.callId !== decrypted.callId) return;
+  // Caller side: peer accepted. Promote to connected and start streaming
+  // audio frames over the WS — same protocol iOS uses.
+  callState.status = 'connected';
+  callState.startTime = Date.now();
+  updateOverlay();
+  startTimer();
+  await startVoiceWS();
+  await startVideoWSIfNeeded();
+  showSafetyWordIfReady();
 }
 
 export async function handleIceCandidate(payload: Record<string, unknown>) {
+  // Group calls still use WebRTC mesh — keep ICE handling alive there.
   const decrypted = await decryptSignaling(payload);
   if (!callState.pc || callState.callId !== decrypted.callId) return;
   callState.pc.addIceCandidate(new RTCIceCandidate({
@@ -271,6 +291,102 @@ export async function handleCallEnd(payload: Record<string, unknown>) {
   const decrypted = await decryptSignaling(payload);
   if (callState.callId !== decrypted.callId) return;
   endCall(decrypted.reason as string || 'hangup', false);
+}
+
+/**
+ * Inbound `call_audio` frame from the DO relay. We never decrypt the
+ * frame here — audio bytes are not E2E encrypted on this transport,
+ * matching the iOS/Android implementation. (Tracked separately.)
+ */
+export function handleCallAudio(payload: Record<string, unknown>) {
+  if (callState.status !== 'connected' || !callState.voiceWS) return;
+  if (payload.callId !== callState.callId) return;
+  const frame = payload.frame as string | undefined;
+  if (!frame) return;
+  callState.voiceWS.handleIncomingFrame(frame);
+}
+
+/**
+ * Inbound `call_video` JPEG frame. Painted to #remote-video-canvas
+ * by VideoWS via the onRemoteFrame callback wired in startVideoWS.
+ */
+export function handleCallVideo(payload: Record<string, unknown>) {
+  if (callState.status !== 'connected' || !callState.videoWS) return;
+  if (payload.callId !== callState.callId) return;
+  const frame = payload.frame as string | undefined;
+  if (!frame) return;
+  callState.videoWS.handleIncomingFrame(frame);
+}
+
+// ── Voice / Video lifecycle ──
+
+async function startVoiceWS() {
+  if (callState.voiceWS || !callState.ws || !callState.callId || !callState.remoteUserId) return;
+  const v = new VoiceWS({ ws: callState.ws, callId: callState.callId, targetUserId: callState.remoteUserId });
+  callState.voiceWS = v;
+  try {
+    await v.start();
+  } catch (err) {
+    callState.voiceWS = null;
+    handleMediaError(err);
+  }
+}
+
+async function startVideoWSIfNeeded() {
+  if (callState.callType !== 'video') return;
+  if (callState.videoWS || !callState.ws || !callState.callId || !callState.remoteUserId) return;
+  try {
+    // Re-use any pre-acquired stream; otherwise grab a video-only track.
+    let stream = callState.localStream;
+    const hasVideo = !!stream && stream.getVideoTracks().length > 0;
+    if (!stream || !hasVideo) {
+      const cam = await navigator.mediaDevices.getUserMedia({
+        video: { width: { ideal: 320 }, height: { ideal: 240 }, frameRate: { ideal: 15, max: 30 } },
+        audio: false,
+      });
+      // Merge into existing stream if voice already grabbed one.
+      if (stream) {
+        cam.getVideoTracks().forEach(t => stream!.addTrack(t));
+      } else {
+        stream = cam;
+      }
+      callState.localStream = stream;
+    }
+    // Show local preview
+    const lv = document.getElementById('local-video') as HTMLVideoElement | null;
+    if (lv) lv.srcObject = stream!;
+    const vws = new VideoWS({
+      ws: callState.ws,
+      callId: callState.callId,
+      targetUserId: callState.remoteUserId,
+      stream: stream!,
+      onRemoteFrame: (img) => paintRemoteFrame(img),
+    });
+    callState.videoWS = vws;
+    await vws.start();
+  } catch (err) {
+    callState.videoWS = null;
+    handleMediaError(err);
+  }
+}
+
+function paintRemoteFrame(img: HTMLImageElement) {
+  const canvas = document.getElementById('remote-video-canvas') as HTMLCanvasElement | null;
+  if (!canvas) return;
+  if (canvas.width !== img.naturalWidth) canvas.width = img.naturalWidth;
+  if (canvas.height !== img.naturalHeight) canvas.height = img.naturalHeight;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+  ctx.drawImage(img, 0, 0);
+}
+
+function showSafetyWordIfReady() {
+  const myId = localStorage.getItem('rocchat_user_id') || '';
+  if (!myId || !callState.remoteUserId) return;
+  void deriveSafetyWord(myId, callState.remoteUserId).then(word => {
+    const el = document.getElementById('call-safety-word');
+    if (el) el.textContent = `Safety code: ${word.slice(0, 3)} ${word.slice(3)}`;
+  });
 }
 
 // ── WebRTC ──
@@ -314,32 +430,23 @@ async function createPC() {
 }
 
 async function acceptCall() {
-  if (callState.status !== 'incoming' || !callState.ws || !callState.pendingSdp) return;
+  if (callState.status !== 'incoming' || !callState.ws || !callState.callId) return;
   try {
-    callState.localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: callState.callType === 'video' });
-    await createPC();
-    callState.localStream.getTracks().forEach((t) => callState.pc!.addTrack(t, callState.localStream!));
-    await callState.pc!.setRemoteDescription(new RTCSessionDescription({ type: 'offer', sdp: callState.pendingSdp }));
-    const answer = await callState.pc!.createAnswer();
-    await callState.pc!.setLocalDescription(answer);
+    // Acknowledge the offer first so the caller transitions to 'connected'
+    // and starts streaming audio. No SDP — matches iOS wire format.
     const answerPayload = await encryptSignaling({
-      callId: callState.callId, sdp: answer.sdp, targetUserId: callState.remoteUserId,
+      callId: callState.callId,
+      targetUserId: callState.remoteUserId,
     });
     callState.ws.send(JSON.stringify({ type: 'call_answer', payload: answerPayload }));
     callState.status = 'connected';
+    callState.startTime = Date.now();
     updateOverlay();
+    startTimer();
+    await startVoiceWS();
+    await startVideoWSIfNeeded();
+    showSafetyWordIfReady();
   } catch (err) { handleMediaError(err); }
-}
-
-function toggleMute() {
-  callState.muted = !callState.muted;
-  callState.localStream?.getAudioTracks().forEach((t) => { t.enabled = !callState.muted; });
-  updateControls();
-}
-function toggleCamera() {
-  callState.cameraOff = !callState.cameraOff;
-  callState.localStream?.getVideoTracks().forEach((t) => { t.enabled = !callState.cameraOff; });
-  updateControls();
 }
 
 function handleMediaError(err: unknown) {
@@ -382,15 +489,32 @@ function endCall(reason = 'hangup', notify = true) {
       timestamp: new Date().toISOString(),
     });
   }
+  try { callState.voiceWS?.stop(); } catch { /* ignore */ }
+  try { callState.videoWS?.stop(); } catch { /* ignore */ }
   callState.localStream?.getTracks().forEach((t) => t.stop());
   callState.pc?.close();
   if (callState.timerInterval) clearInterval(callState.timerInterval);
   Object.assign(callState, {
     callId: null, conversationId: null, remoteUserId: null, remoteName: 'Unknown',
     status: 'idle', pc: null, localStream: null, remoteStream: null, startTime: null,
-    muted: false, cameraOff: false, timerInterval: null, pendingSdp: null,
+    muted: false, cameraOff: false, timerInterval: null, pendingSdp: null, voiceWS: null, videoWS: null,
   });
   document.getElementById('call-overlay')?.remove();
+}
+
+function toggleMute() {
+  callState.muted = !callState.muted;
+  callState.voiceWS?.setMuted(callState.muted);
+  callState.localStream?.getAudioTracks().forEach((t) => { t.enabled = !callState.muted; });
+  updateControls();
+}
+function toggleCamera() {
+  // Video is UI-only on this transport (matches native). Kept for the
+  // group-call mesh path which still uses WebRTC.
+  callState.cameraOff = !callState.cameraOff;
+  callState.videoWS?.setCameraOff(callState.cameraOff);
+  callState.localStream?.getVideoTracks().forEach((t) => { t.enabled = !callState.cameraOff; });
+  updateControls();
 }
 
 // ── Call Overlay UI ──
@@ -444,7 +568,7 @@ function overlayHTML(): string {
   const conn = callState.status === 'connected';
   return `
     <div class="call-card ${isV ? 'call-card-video' : ''}">
-      ${isV ? `<video id="remote-video" autoplay playsinline style="width:100%;height:100%;object-fit:cover;border-radius:var(--radius-lg);background:#000"></video>
+      ${isV ? `<canvas id="remote-video-canvas" width="320" height="240" style="width:100%;height:100%;object-fit:contain;border-radius:var(--radius-lg);background:#000"></canvas>
         <video id="local-video" autoplay playsinline muted style="position:absolute;top:var(--sp-4);right:var(--sp-4);width:120px;height:90px;object-fit:cover;border-radius:var(--radius-md);border:2px solid var(--gold);z-index:2"></video>`
         : `<div class="call-avatar">${ini}</div>`}
       <audio id="remote-audio" autoplay></audio>

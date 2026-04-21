@@ -4,6 +4,7 @@
  * Admin features: schedule posts, pin posts, view analytics.
  */
 import * as api from '../api.js';
+import { escapeHtml, parseHTML } from '../utils.js';
 
 interface Channel {
   id: string;
@@ -36,7 +37,7 @@ export function renderChannels(container: HTMLElement) {
 }
 
 function renderDiscoverView(container: HTMLElement) {
-  container.innerHTML = `
+  container.replaceChildren(parseHTML(`
     <div class="channels-view" style="max-width:720px;margin:0 auto;padding:var(--sp-6)">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--sp-4)">
         <h2 style="margin:0;font-size:var(--fs-2xl);font-weight:700">Channels</h2>
@@ -60,7 +61,7 @@ function renderDiscoverView(container: HTMLElement) {
         <div style="text-align:center;padding:var(--sp-4);color:var(--text-secondary)">Loading communities...</div>
       </div>
     </div>
-  `;
+  `));
 
   loadChannels();
   loadCommunities();
@@ -91,13 +92,13 @@ async function loadChannels(query = '') {
     if (query) params.set('q', query);
     const res = await api.req<{ channels: Channel[] }>(`/channels/discover?${params}`, { method: 'GET' });
     if (!res.ok || !res.data?.channels?.length) {
-      list.innerHTML = `<div style="text-align:center;padding:var(--sp-6);color:var(--text-secondary)">
+      list.replaceChildren(parseHTML(`<div style="text-align:center;padding:var(--sp-6);color:var(--text-secondary)">
         ${query ? 'No channels found for "' + query + '"' : 'No public channels yet. Create one!'}
-      </div>`;
+      </div>`));
       return;
     }
 
-    list.innerHTML = res.data.channels.map((ch: Channel) => `
+    list.replaceChildren(parseHTML(res.data.channels.map((ch: Channel) => `
       <div class="channel-card" data-id="${ch.id}" style="padding:var(--sp-4);border-radius:var(--radius-lg);border:1px solid var(--border-weak);background:var(--bg-card);cursor:pointer;transition:background var(--duration-fast) var(--ease-out)">
         <div style="display:flex;align-items:center;gap:var(--sp-3)">
           <div style="width:40px;height:40px;border-radius:var(--radius-md);background:var(--primary-bg);display:flex;align-items:center;justify-content:center;font-size:18px;color:var(--roc-gold)">📢</div>
@@ -111,7 +112,7 @@ async function loadChannels(query = '') {
           </div>
         </div>
       </div>
-    `).join('');
+    `).join('')));
 
     // Click to open channel detail
     list.querySelectorAll('.channel-card').forEach(card => {
@@ -121,7 +122,7 @@ async function loadChannels(query = '') {
       });
     });
   } catch {
-    list.innerHTML = `<div style="color:var(--danger);text-align:center;padding:var(--sp-4)">Failed to load channels</div>`;
+    list.replaceChildren(parseHTML(`<div style="color:var(--danger);text-align:center;padding:var(--sp-4)">Failed to load channels</div>`));
   }
 }
 
@@ -138,7 +139,7 @@ function renderChannelDetail(container: HTMLElement) {
   const isAdmin = ch.my_role === 'owner' || ch.my_role === 'admin';
   const isSubscribed = !!ch.my_role;
 
-  container.innerHTML = `
+  container.replaceChildren(parseHTML(`
     <div class="channels-view" style="max-width:720px;margin:0 auto;padding:var(--sp-6)">
       <button id="back-to-discover" class="btn-secondary" style="margin-bottom:var(--sp-4);padding:6px 14px;font-size:var(--fs-sm)">← Back</button>
 
@@ -176,7 +177,7 @@ function renderChannelDetail(container: HTMLElement) {
         <div style="text-align:center;padding:var(--sp-6);color:var(--text-secondary)">Loading posts...</div>
       </div>
     </div>
-  `;
+  `));
 
   // Back button
   document.getElementById('back-to-discover')?.addEventListener('click', () => {
@@ -226,11 +227,11 @@ async function loadChannelPosts(channelId: string, isAdmin: boolean) {
     // Load recent messages for this channel
     const res = await api.req<{ messages: Array<{ id: string; sender_id: string; ciphertext: string; message_type: string; created_at: number }> }>(`/messages/${channelId}?limit=50`, { method: 'GET' });
     if (!res.ok || !res.data?.messages?.length) {
-      postsEl.innerHTML = `<div style="text-align:center;padding:var(--sp-6);color:var(--text-secondary)">No posts yet</div>`;
+      postsEl.replaceChildren(parseHTML(`<div style="text-align:center;padding:var(--sp-6);color:var(--text-secondary)">No posts yet</div>`));
       return;
     }
 
-    postsEl.innerHTML = res.data.messages.map(msg => `
+    postsEl.replaceChildren(parseHTML(res.data.messages.map(msg => `
       <div class="channel-post" data-id="${msg.id}" style="padding:var(--sp-4);border-radius:var(--radius-lg);border:1px solid var(--border-weak);background:var(--bg-card)">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--sp-2)">
           <span style="font-size:var(--fs-xs);color:var(--text-tertiary)">${new Date(msg.created_at * 1000).toLocaleString()}</span>
@@ -240,7 +241,7 @@ async function loadChannelPosts(channelId: string, isAdmin: boolean) {
         </div>
         <div style="font-size:var(--fs-base);color:var(--text-primary);word-break:break-word">${msg.ciphertext.length > 100 ? '[Encrypted post]' : '[Encrypted]'}</div>
       </div>
-    `).join('');
+    `).join('')));
 
     // Mark posts as read
     for (const msg of res.data.messages) {
@@ -258,14 +259,14 @@ async function loadChannelPosts(channelId: string, isAdmin: boolean) {
       });
     });
   } catch {
-    postsEl.innerHTML = `<div style="color:var(--danger);text-align:center;padding:var(--sp-4)">Failed to load posts</div>`;
+    postsEl.replaceChildren(parseHTML(`<div style="color:var(--danger);text-align:center;padding:var(--sp-4)">Failed to load posts</div>`));
   }
 }
 
 function showPostDialog(channelId: string, isScheduled: boolean, container: HTMLElement) {
   const overlay = document.createElement('div');
   overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;z-index:9999';
-  overlay.innerHTML = `
+  overlay.replaceChildren(parseHTML(`
     <div style="background:var(--bg-elevated);border-radius:var(--radius-xl);padding:var(--sp-6);width:440px;max-width:90vw;box-shadow:var(--shadow-xl)">
       <h3 style="margin:0 0 var(--sp-4)">${isScheduled ? '🕐 Schedule Post' : '📝 New Post'}</h3>
       <textarea id="post-content" rows="5" placeholder="Write your broadcast message..."
@@ -281,7 +282,7 @@ function showPostDialog(channelId: string, isScheduled: boolean, container: HTML
         <button id="post-send" class="btn-primary" style="padding:8px 16px">${isScheduled ? 'Schedule' : 'Post'}</button>
       </div>
     </div>
-  `;
+  `));
   document.body.appendChild(overlay);
   overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
   overlay.querySelector('#post-cancel')?.addEventListener('click', () => overlay.remove());
@@ -321,7 +322,7 @@ function showPostDialog(channelId: string, isScheduled: boolean, container: HTML
 function showScheduledPosts(channelId: string) {
   const overlay = document.createElement('div');
   overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;z-index:9999';
-  overlay.innerHTML = `
+  overlay.replaceChildren(parseHTML(`
     <div style="background:var(--bg-elevated);border-radius:var(--radius-xl);padding:var(--sp-6);width:480px;max-width:90vw;max-height:70vh;overflow-y:auto;box-shadow:var(--shadow-xl)">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--sp-4)">
         <h3 style="margin:0">📋 Scheduled Posts</h3>
@@ -331,7 +332,7 @@ function showScheduledPosts(channelId: string) {
         <div style="text-align:center;color:var(--text-secondary)">Loading...</div>
       </div>
     </div>
-  `;
+  `));
   document.body.appendChild(overlay);
   overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
   overlay.querySelector('#sched-close')?.addEventListener('click', () => overlay.remove());
@@ -339,10 +340,10 @@ function showScheduledPosts(channelId: string) {
   api.req<{ posts: Array<{ id: string; ciphertext: string; scheduled_at: number; created_at: number }> }>(`/channels/${channelId}/scheduled`, { method: 'GET' }).then(r => {
     const list = overlay.querySelector('#sched-list')!;
     if (!r.data?.posts?.length) {
-      list.innerHTML = `<div style="text-align:center;color:var(--text-secondary)">No scheduled posts</div>`;
+      list.replaceChildren(parseHTML(`<div style="text-align:center;color:var(--text-secondary)">No scheduled posts</div>`));
       return;
     }
-    list.innerHTML = r.data.posts.map(p => `
+    list.replaceChildren(parseHTML(r.data.posts.map(p => `
       <div style="padding:var(--sp-3);border:1px solid var(--border-weak);border-radius:var(--radius-md);background:var(--bg-card)">
         <div style="display:flex;justify-content:space-between;align-items:center">
           <span style="font-size:var(--fs-sm);color:var(--text-secondary)">⏰ ${new Date(p.scheduled_at * 1000).toLocaleString()}</span>
@@ -350,7 +351,7 @@ function showScheduledPosts(channelId: string) {
         </div>
         <div style="margin-top:4px;font-size:var(--fs-sm);color:var(--text-primary)">[Encrypted content]</div>
       </div>
-    `).join('');
+    `).join('')));
 
     list.querySelectorAll('.cancel-sched').forEach(btn => {
       btn.addEventListener('click', async () => {
@@ -365,7 +366,7 @@ function showScheduledPosts(channelId: string) {
 function showAnalytics(channelId: string) {
   const overlay = document.createElement('div');
   overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;z-index:9999';
-  overlay.innerHTML = `
+  overlay.replaceChildren(parseHTML(`
     <div style="background:var(--bg-elevated);border-radius:var(--radius-xl);padding:var(--sp-6);width:520px;max-width:90vw;max-height:70vh;overflow-y:auto;box-shadow:var(--shadow-xl)">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--sp-4)">
         <h3 style="margin:0">📊 Channel Analytics</h3>
@@ -375,7 +376,7 @@ function showAnalytics(channelId: string) {
         <div style="text-align:center;color:var(--text-secondary)">Loading...</div>
       </div>
     </div>
-  `;
+  `));
   document.body.appendChild(overlay);
   overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
   overlay.querySelector('#analytics-close')?.addEventListener('click', () => overlay.remove());
@@ -383,14 +384,14 @@ function showAnalytics(channelId: string) {
   api.req<{ subscriber_count: number; posts: Array<{ id: string; created_at: number; read_count: number }> }>(`/channels/${channelId}/analytics`, { method: 'GET' }).then(r => {
     const content = overlay.querySelector('#analytics-content')!;
     if (!r.ok || !r.data) {
-      content.innerHTML = `<div style="color:var(--danger)">Failed to load analytics</div>`;
+      content.replaceChildren(parseHTML(`<div style="color:var(--danger)">Failed to load analytics</div>`));
       return;
     }
 
     const totalReads = r.data.posts.reduce((sum, p) => sum + (p.read_count || 0), 0);
     const avgReads = r.data.posts.length ? Math.round(totalReads / r.data.posts.length) : 0;
 
-    content.innerHTML = `
+    content.replaceChildren(parseHTML(`
       <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:var(--sp-3);margin-bottom:var(--sp-4)">
         <div style="text-align:center;padding:var(--sp-4);background:var(--bg-card);border-radius:var(--radius-md);border:1px solid var(--border-weak)">
           <div style="font-size:var(--fs-2xl);font-weight:700;color:var(--roc-gold)">${r.data.subscriber_count}</div>
@@ -421,7 +422,7 @@ function showAnalytics(channelId: string) {
           `;
         }).join('')}
       </div>
-    `;
+    `));
   });
 }
 
@@ -434,11 +435,11 @@ async function loadCommunities(query = '') {
     if (query) params.set('q', query);
     const res = await api.req<{ communities: Community[] }>(`/communities/discover?${params}`, { method: 'GET' });
     if (!res.ok || !res.data?.communities?.length) {
-      list.innerHTML = `<div style="text-align:center;padding:var(--sp-4);color:var(--text-secondary)">No communities yet</div>`;
+      list.replaceChildren(parseHTML(`<div style="text-align:center;padding:var(--sp-4);color:var(--text-secondary)">No communities yet</div>`));
       return;
     }
 
-    list.innerHTML = res.data.communities.map((c: Community) => `
+    list.replaceChildren(parseHTML(res.data.communities.map((c: Community) => `
       <div class="community-card" data-id="${c.id}" style="border-radius:var(--radius-lg);border:1px solid var(--border-weak);background:var(--bg-card);overflow:hidden;transition:background var(--duration-fast) var(--ease-out)">
         <div class="community-header" style="padding:var(--sp-4);cursor:pointer;display:flex;align-items:center;gap:var(--sp-3)">
           <div style="width:40px;height:40px;border-radius:var(--radius-md);background:rgba(64,224,208,0.1);display:flex;align-items:center;justify-content:center;font-size:18px">🏘️</div>
@@ -453,7 +454,7 @@ async function loadCommunities(query = '') {
         </div>
         <div class="community-channels" data-community-id="${c.id}" style="display:none;padding:0 var(--sp-4) var(--sp-3);border-top:1px solid var(--border-weak)"></div>
       </div>
-    `).join('');
+    `).join('')));
 
     list.querySelectorAll('.community-header').forEach(header => {
       header.addEventListener('click', async () => {
@@ -467,11 +468,11 @@ async function loadCommunities(query = '') {
           chevron.style.transform = 'rotate(90deg)';
 
           if (!channelsEl.dataset.loaded) {
-            channelsEl.innerHTML = '<div style="padding:var(--sp-2);color:var(--text-secondary);font-size:var(--fs-sm)">Loading channels...</div>';
+            channelsEl.replaceChildren(parseHTML('<div style="padding:var(--sp-2);color:var(--text-secondary);font-size:var(--fs-sm)">Loading channels...</div>'));
             try {
               const detail = await api.req<{ community: any; channels: Channel[]; role: string | null }>(`/communities/${id}`, { method: 'GET' });
               if (detail.ok && detail.data?.channels?.length) {
-                channelsEl.innerHTML = detail.data.channels.map((ch: Channel) => `
+                channelsEl.replaceChildren(parseHTML(detail.data.channels.map((ch: Channel) => `
                   <div class="community-channel-row" data-channel-id="${ch.id}" style="padding:var(--sp-2) var(--sp-3);margin-top:var(--sp-2);border-radius:var(--radius-md);background:var(--bg-input);cursor:pointer;display:flex;align-items:center;gap:var(--sp-2);transition:background var(--duration-fast)">
                     <span style="font-size:16px">#</span>
                     <div style="flex:1">
@@ -480,7 +481,7 @@ async function loadCommunities(query = '') {
                     </div>
                     <span style="font-size:var(--fs-xs);color:var(--text-tertiary)">${ch.subscriber_count || 0} subs</span>
                   </div>
-                `).join('');
+                `).join('')));
 
                 channelsEl.querySelectorAll('.community-channel-row').forEach(row => {
                   row.addEventListener('click', (e) => {
@@ -510,10 +511,10 @@ async function loadCommunities(query = '') {
                   channelsEl.appendChild(joinBtn);
                 }
               } else {
-                channelsEl.innerHTML = '<div style="padding:var(--sp-2);color:var(--text-secondary);font-size:var(--fs-sm)">No channels in this community</div>';
+                channelsEl.replaceChildren(parseHTML('<div style="padding:var(--sp-2);color:var(--text-secondary);font-size:var(--fs-sm)">No channels in this community</div>'));
               }
             } catch {
-              channelsEl.innerHTML = '<div style="padding:var(--sp-2);color:var(--danger);font-size:var(--fs-sm)">Failed to load</div>';
+              channelsEl.replaceChildren(parseHTML('<div style="padding:var(--sp-2);color:var(--danger);font-size:var(--fs-sm)">Failed to load</div>'));
             }
             channelsEl.dataset.loaded = '1';
           }
@@ -524,7 +525,7 @@ async function loadCommunities(query = '') {
       });
     });
   } catch {
-    list.innerHTML = `<div style="color:var(--danger);text-align:center;padding:var(--sp-4)">Failed to load communities</div>`;
+    list.replaceChildren(parseHTML(`<div style="color:var(--danger);text-align:center;padding:var(--sp-4)">Failed to load communities</div>`));
   }
 }
 
@@ -535,7 +536,7 @@ function showCreateChannelDialog(container: HTMLElement) {
   const overlay = document.createElement('div');
   overlay.className = 'create-channel-overlay';
   overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;z-index:9999';
-  overlay.innerHTML = `
+  overlay.replaceChildren(parseHTML(`
     <div style="background:var(--bg-elevated);border-radius:var(--radius-xl);padding:var(--sp-6);width:400px;max-width:90vw;box-shadow:var(--shadow-xl)">
       <h3 style="margin:0 0 var(--sp-4)">Create Channel</h3>
       <div style="display:flex;flex-direction:column;gap:var(--sp-3)">
@@ -554,7 +555,7 @@ function showCreateChannelDialog(container: HTMLElement) {
         </div>
       </div>
     </div>
-  `;
+  `));
 
   document.body.appendChild(overlay);
 

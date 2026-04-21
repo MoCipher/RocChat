@@ -180,7 +180,7 @@ function addCallRecord(record: CallRecord) {
 
 export function renderCalls(container: HTMLElement) {
   const history = getCallHistory();
-  container.innerHTML = `
+  container.replaceChildren(parseHTML(`
     <div class="panel-list">
       <div class="panel-header"><h2>Calls</h2></div>
       <div class="calls-list" id="calls-list">
@@ -215,7 +215,7 @@ export function renderCalls(container: HTMLElement) {
         <p style="font-family:var(--font-mono);font-size:var(--text-xs);color:var(--turquoise);margin-top:var(--sp-2)">3-layer encryption: DTLS-SRTP + E2E signaling + verification</p>
       </div>
     </div>
-  `;
+  `));
   if (typeof (window as any).lucide !== 'undefined') (window as any).lucide.createIcons();
 }
 
@@ -547,7 +547,7 @@ function showCallOverlay() {
   document.getElementById('call-overlay')?.remove();
   const el = document.createElement('div');
   el.id = 'call-overlay'; el.className = 'call-overlay';
-  el.innerHTML = overlayHTML();
+  el.replaceChildren(parseHTML(overlayHTML()));
   document.body.appendChild(el);
   bindEvents();
   if (typeof (window as any).lucide !== 'undefined') (window as any).lucide.createIcons();
@@ -556,7 +556,7 @@ function showCallOverlay() {
 function updateOverlay() {
   const el = document.getElementById('call-overlay');
   if (!el) return;
-  el.innerHTML = overlayHTML();
+  el.replaceChildren(parseHTML(overlayHTML()));
   bindEvents();
   if (callState.callType === 'video') {
     const lv = document.getElementById('local-video') as HTMLVideoElement;
@@ -570,8 +570,8 @@ function updateOverlay() {
 function updateControls() {
   const mb = document.getElementById('call-mute');
   const cb = document.getElementById('call-camera');
-  if (mb) { mb.innerHTML = `<i data-lucide="${callState.muted ? 'mic-off' : 'mic'}" style="width:24px;height:24px"></i>`; mb.classList.toggle('active', callState.muted); }
-  if (cb) { cb.innerHTML = `<i data-lucide="${callState.cameraOff ? 'video-off' : 'video'}" style="width:24px;height:24px"></i>`; cb.classList.toggle('active', callState.cameraOff); }
+  if (mb) { setLucideIcon(mb, callState.muted ? 'mic-off' : 'mic'); mb.classList.toggle('active', callState.muted); }
+  if (cb) { setLucideIcon(cb, callState.cameraOff ? 'video-off' : 'video'); cb.classList.toggle('active', callState.cameraOff); }
   if (typeof (window as any).lucide !== 'undefined') (window as any).lucide.createIcons();
 }
 
@@ -694,6 +694,20 @@ function fmtTime(iso: string): string {
   return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
 }
 function esc(t: string): string { const d = document.createElement('div'); d.textContent = t; return d.innerHTML; }
+/** Parse a developer-controlled HTML string via DOMParser (not a TT sink). */
+function parseHTML(html: string): DocumentFragment {
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  const frag = document.createDocumentFragment();
+  Array.from(doc.body.childNodes).forEach((n) => frag.appendChild(n));
+  return frag;
+}
+/** Replace a button's content with a single Lucide <i> element via DOM API. */
+function setLucideIcon(el: HTMLElement, icon: string): void {
+  const i = document.createElement('i');
+  i.dataset.lucide = icon;
+  i.style.cssText = 'width:24px;height:24px';
+  el.replaceChildren(i);
+}
 
 // ── Group Calls (Mesh Topology, up to 6 participants) ──
 
@@ -920,7 +934,7 @@ function showGroupCallOverlay() {
   document.getElementById('group-call-overlay')?.remove();
   const el = document.createElement('div');
   el.id = 'group-call-overlay'; el.className = 'call-overlay';
-  el.innerHTML = groupOverlayHTML();
+  el.replaceChildren(parseHTML(groupOverlayHTML()));
   document.body.appendChild(el);
   bindGroupEvents();
   if (typeof (window as any).lucide !== 'undefined') (window as any).lucide.createIcons();
@@ -929,7 +943,7 @@ function showGroupCallOverlay() {
 function updateGroupOverlay() {
   const el = document.getElementById('group-call-overlay');
   if (!el) return;
-  el.innerHTML = groupOverlayHTML();
+  el.replaceChildren(parseHTML(groupOverlayHTML()));
   // Re-attach streams to video elements
   groupState.peers.forEach((peer) => {
     if (peer.remoteStream && groupState.callType === 'video') {

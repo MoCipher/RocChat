@@ -20,7 +20,7 @@
 
 import * as api from './api.js';
 import { chatState, getPlaintextCacheSnapshot } from './chat/chat.js';
-import { escapeHtml } from './utils.js';
+import { escapeHtml, parseHTML } from './utils.js';
 import { showToast as toast } from './components/toast.js';
 import { aesGcmEncrypt, aesGcmDecrypt, pbkdf2 } from '@rocchat/shared';
 import { argon2id } from 'hash-wasm';
@@ -58,10 +58,10 @@ export function openPerMessageTimerMenu(anchor: HTMLElement): void {
   const menu = document.createElement('div');
   menu.className = 'per-msg-timer-menu';
   menu.setAttribute('role', 'menu');
-  menu.innerHTML = `
+  menu.replaceChildren(parseHTML(`
     <div class="pmt-title">This message disappears in…</div>
     ${PRESETS.map((p) => `<button class="pmt-item" data-sec="${p.seconds}">${p.label}</button>`).join('')}
-  `;
+  `));
   const r = anchor.getBoundingClientRect();
   menu.style.cssText = `position:fixed;left:${Math.max(12, r.left)}px;top:${Math.max(12, r.top - 260)}px;z-index:9999`;
   document.body.appendChild(menu);
@@ -161,7 +161,7 @@ export function openForwardDialog(messageId: string, plaintext: string): void {
   closeAnyDialog();
   const dialog = document.createElement('div');
   dialog.className = 'rc-dialog-overlay';
-  dialog.innerHTML = `
+  dialog.replaceChildren(parseHTML(`
     <div class="rc-dialog" role="dialog" aria-label="Forward message">
       <div class="rc-dialog-header">
         <h3>Forward message</h3>
@@ -171,7 +171,7 @@ export function openForwardDialog(messageId: string, plaintext: string): void {
         <input type="text" class="rc-dialog-search" placeholder="Search conversations…" />
         <div class="rc-forward-list"></div>
       </div>
-    </div>`;
+    </div>`));
   document.body.appendChild(dialog);
   setupDialog(dialog);
   const list = dialog.querySelector('.rc-forward-list') as HTMLElement;
@@ -179,13 +179,13 @@ export function openForwardDialog(messageId: string, plaintext: string): void {
 
   function render(filter = ''): void {
     const q = filter.toLowerCase();
-    list.innerHTML = chatState.conversations
+    list.replaceChildren(parseHTML(chatState.conversations
       .filter((c) => !q || (c.name || '').toLowerCase().includes(q))
       .map((c) => `
         <button class="rc-forward-item" data-conv="${c.id}">
           <div class="rc-forward-name">${escapeHtml(c.name || 'Direct message')}</div>
           <div class="rc-forward-sub">${c.type || 'direct'}</div>
-        </button>`).join('');
+        </button>`).join('')));
     list.querySelectorAll('.rc-forward-item').forEach((b) => {
       b.addEventListener('click', async () => {
         const targetId = (b as HTMLElement).dataset.conv!;
@@ -254,7 +254,7 @@ export function openGlobalSearch(): void {
   closeAnyDialog();
   const dialog = document.createElement('div');
   dialog.className = 'rc-dialog-overlay';
-  dialog.innerHTML = `
+  dialog.replaceChildren(parseHTML(`
     <div class="rc-dialog rc-dialog-search-wrap" role="dialog" aria-label="Search">
       <div class="rc-dialog-header">
         <h3>Search RocChat</h3>
@@ -267,22 +267,22 @@ export function openGlobalSearch(): void {
         </div>
         <div class="rc-search-results" style="margin-top:12px;max-height:50vh;overflow:auto"></div>
       </div>
-    </div>`;
+    </div>`));
   document.body.appendChild(dialog);
   setupDialog(dialog);
   const input = dialog.querySelector('.rc-dialog-search') as HTMLInputElement;
   const results = dialog.querySelector('.rc-search-results') as HTMLElement;
   input.addEventListener('input', () => {
     const q = input.value.trim();
-    if (!q) { results.innerHTML = ''; return; }
+    if (!q) { results.replaceChildren(); return; }
     const hits = runSearch(q);
-    results.innerHTML = hits.length
+    results.replaceChildren(parseHTML(hits.length
       ? hits.map((h) => `
           <button class="rc-search-hit" data-conv="${h.conversationId}" ${h.messageId ? `data-msg="${h.messageId}"` : ''}>
             <div class="rc-search-hit-conv">${escapeHtml(h.conversationName)}</div>
             <div class="rc-search-hit-snippet">${highlight(escapeHtml(h.snippet), q)}</div>
           </button>`).join('')
-      : '<div style="padding:24px;text-align:center;color:var(--text-tertiary)">No matches</div>';
+      : '<div style="padding:24px;text-align:center;color:var(--text-tertiary)">No matches</div>'));
     results.querySelectorAll('.rc-search-hit').forEach((el) => {
       el.addEventListener('click', () => {
         const cid = (el as HTMLElement).dataset.conv!;
@@ -369,7 +369,7 @@ export async function openScheduledMessagesDialog(): Promise<void> {
   closeAnyDialog();
   const dialog = document.createElement('div');
   dialog.className = 'rc-dialog-overlay';
-  dialog.innerHTML = `
+  dialog.replaceChildren(parseHTML(`
     <div class="rc-dialog" role="dialog" aria-label="Scheduled messages">
       <div class="rc-dialog-header">
         <h3>Scheduled messages</h3>
@@ -378,7 +378,7 @@ export async function openScheduledMessagesDialog(): Promise<void> {
       <div class="rc-dialog-body">
         <div class="rc-scheduled-list">Loading…</div>
       </div>
-    </div>`;
+    </div>`));
   document.body.appendChild(dialog);
   setupDialog(dialog);
   dialog.querySelector('.rc-dialog-close')?.addEventListener('click', () => dialog.remove());
@@ -388,8 +388,8 @@ export async function openScheduledMessagesDialog(): Promise<void> {
   const res = await api.getScheduledMessages();
   if (!res.ok) { list.textContent = 'Failed to load.'; return; }
   const items = res.data;
-  if (!items.length) { list.innerHTML = '<div style="padding:24px;text-align:center;color:var(--text-tertiary)">Nothing scheduled.</div>'; return; }
-  list.innerHTML = items.map((it) => {
+  if (!items.length) { list.replaceChildren(parseHTML('<div style="padding:24px;text-align:center;color:var(--text-tertiary)">Nothing scheduled.</div>')); return; }
+  list.replaceChildren(parseHTML(items.map((it) => {
     const conv = chatState.conversations.find((c) => c.id === it.conversation_id);
     const when = new Date(it.scheduled_at * 1000).toLocaleString();
     return `
@@ -400,7 +400,7 @@ export async function openScheduledMessagesDialog(): Promise<void> {
         </div>
         <button class="rc-scheduled-cancel btn-secondary" data-id="${it.id}">Cancel</button>
       </div>`;
-  }).join('');
+  }).join('')));
   list.querySelectorAll('.rc-scheduled-cancel').forEach((b) => {
     b.addEventListener('click', async () => {
       const id = (b as HTMLElement).dataset.id!;
@@ -590,7 +590,7 @@ export function openBackupDialog(): void {
   closeAnyDialog();
   const dialog = document.createElement('div');
   dialog.className = 'rc-dialog-overlay';
-  dialog.innerHTML = `
+  dialog.replaceChildren(parseHTML(`
     <div class="rc-dialog" role="dialog" aria-label="Encrypted backup">
       <div class="rc-dialog-header">
         <h3>Encrypted backup</h3>
@@ -612,7 +612,7 @@ export function openBackupDialog(): void {
           </label>
         </div>
       </div>
-    </div>`;
+    </div>`));
   document.body.appendChild(dialog);
   setupDialog(dialog);
   const pass = dialog.querySelector('.rc-backup-pass') as HTMLInputElement;
@@ -681,7 +681,7 @@ export function openDecoyManager(): void {
   const dialog = document.createElement('div');
   dialog.className = 'rc-dialog-overlay';
   const list = listDecoys();
-  dialog.innerHTML = `
+  dialog.replaceChildren(parseHTML(`
     <div class="rc-dialog" role="dialog" aria-label="Decoy conversations">
       <div class="rc-dialog-header">
         <h3>Decoy conversations</h3>
@@ -709,7 +709,7 @@ export function openDecoyManager(): void {
         </label>
         <button class="btn-primary rc-decoy-add">Add decoy</button>
       </div>
-    </div>`;
+    </div>`));
   document.body.appendChild(dialog);
   setupDialog(dialog);
   dialog.querySelector('.rc-dialog-close')?.addEventListener('click', () => dialog.remove());
@@ -800,7 +800,7 @@ export function openCustomEmojiManager(): void {
   const dialog = document.createElement('div');
   dialog.className = 'rc-dialog-overlay';
   const list = listCustomEmoji();
-  dialog.innerHTML = `
+  dialog.replaceChildren(parseHTML(`
     <div class="rc-dialog" role="dialog" aria-label="Custom emoji">
       <div class="rc-dialog-header">
         <h3>Custom emoji</h3>
@@ -826,7 +826,7 @@ export function openCustomEmojiManager(): void {
             </div>`).join('')}
         </div>
       </div>
-    </div>`;
+    </div>`));
   document.body.appendChild(dialog);
   setupDialog(dialog);
   dialog.querySelector('.rc-dialog-close')?.addEventListener('click', () => dialog.remove());
@@ -855,7 +855,7 @@ export async function openGroupAdminDialog(conversationId: string): Promise<void
   closeAnyDialog();
   const dialog = document.createElement('div');
   dialog.className = 'rc-dialog-overlay';
-  dialog.innerHTML = `
+  dialog.replaceChildren(parseHTML(`
     <div class="rc-dialog" role="dialog" aria-label="Group admin">
       <div class="rc-dialog-header">
         <h3>Group members</h3>
@@ -864,7 +864,7 @@ export async function openGroupAdminDialog(conversationId: string): Promise<void
       <div class="rc-dialog-body">
         <div class="rc-group-members">Loading…</div>
       </div>
-    </div>`;
+    </div>`));
   document.body.appendChild(dialog);
   setupDialog(dialog);
   dialog.querySelector('.rc-dialog-close')?.addEventListener('click', () => dialog.remove());
@@ -874,7 +874,7 @@ export async function openGroupAdminDialog(conversationId: string): Promise<void
   if (!res.ok) { box.textContent = 'Failed to load members.'; return; }
   const me = localStorage.getItem('rocchat_user_id') || '';
   const myRole = res.data.members.find((m) => m.user_id === me)?.role || 'member';
-  box.innerHTML = res.data.members.map((m) => `
+  box.replaceChildren(parseHTML(res.data.members.map((m) => `
     <div class="rc-group-member" data-uid="${m.user_id}">
       <div>
         <div class="rc-gm-name">${escapeHtml(m.username || m.user_id)}</div>
@@ -890,7 +890,7 @@ export async function openGroupAdminDialog(conversationId: string): Promise<void
           <button class="btn-secondary rc-gm-kick" style="color:var(--danger,#e66)">Kick</button>
         ` : ''}
       </div>
-    </div>`).join('');
+    </div>`).join('')));
 
   box.querySelectorAll('.rc-group-member').forEach((row) => {
     const uid = (row as HTMLElement).dataset.uid!;

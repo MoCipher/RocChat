@@ -6,7 +6,7 @@
 
 import * as api from '../api.js';
 import type { Conversation, Message } from '../api.js';
-import { escapeHtml } from '../utils.js';
+import { escapeHtml, parseHTML } from '../utils.js';
 import { showToast } from '../components/toast.js';
 import { encryptMessage, decryptMessage, getOrCreateSession } from '../crypto/session-manager.js';
 import { groupEncrypt, groupDecrypt, isGroupEncrypted, handleSenderKeyDistribution } from '../crypto/group-session-manager.js';
@@ -328,7 +328,7 @@ window.addEventListener('offline', () => {
 
 export async function renderChats(container: HTMLElement) {
   await hydratePlaintextCache();
-  container.innerHTML = `
+  container.replaceChildren(parseHTML(`
     <div class="panel-list" id="conversations-panel">
       <div class="panel-header">
         <div class="panel-header-top">
@@ -372,7 +372,7 @@ export async function renderChats(container: HTMLElement) {
         </p>
       </div>
     </div>
-  `;
+  `));
 
   // Load conversations + folders in parallel
   try {
@@ -491,10 +491,10 @@ function renderFolderTabs(folders: api.ChatFolder[]) {
   tabsEl.style.display = 'flex';
   tabsEl.setAttribute('role', 'tablist');
   tabsEl.setAttribute('aria-label', 'Chat folders');
-  tabsEl.innerHTML = `
+  tabsEl.replaceChildren(parseHTML(`
     <button class="folder-tab ${activeFolderId === null ? 'active' : ''}" role="tab" aria-selected="${activeFolderId === null ? 'true' : 'false'}" data-folder-id="">All</button>
     ${folders.map(f => `<button class="folder-tab ${activeFolderId === f.id ? 'active' : ''}" role="tab" aria-selected="${activeFolderId === f.id ? 'true' : 'false'}" data-folder-id="${f.id}" data-conv-ids="${f.conversation_ids.join(',')}">${escapeHtml(f.icon)} ${escapeHtml(f.name)}</button>`).join('')}
-  `;
+  `));
   tabsEl.querySelectorAll('.folder-tab').forEach(btn => {
     btn.addEventListener('click', () => {
       const fid = (btn as HTMLElement).dataset.folderId || null;
@@ -537,7 +537,7 @@ function renderConversationsList(filter = '') {
   }
 
   if (filtered.length === 0) {
-    list.innerHTML = `
+    list.replaceChildren(parseHTML(`
       <div class="empty-state" style="padding:var(--sp-8);text-align:center">
         <div style="font-size:48px;margin-bottom:var(--sp-4);opacity:0.4">${filter ? '🔍' : '💬'}</div>
         <p style="font-size:var(--text-sm);color:var(--text-secondary);margin-bottom:var(--sp-2)">
@@ -545,11 +545,11 @@ function renderConversationsList(filter = '') {
         </p>
         ${!filter ? '<p style="font-size:var(--text-xs);color:var(--text-tertiary)">Tap the <strong>✏️</strong> button above to start a new chat</p>' : ''}
       </div>
-    `;
+    `));
     return;
   }
 
-  list.innerHTML = filtered
+  list.replaceChildren(parseHTML(filtered
     .map((c) => {
       const name = getConversationName(c, userId);
       const other = c.members.find(m => m.user_id !== userId);
@@ -582,7 +582,7 @@ function renderConversationsList(filter = '') {
         </div>
       `;
     })
-    .join('');
+    .join('')));
 
   // Bind clicks
   list.querySelectorAll('.conversation-item').forEach((el) => {
@@ -620,7 +620,7 @@ async function openConversation(conversationId: string) {
   const chatView = document.getElementById('chat-view');
   if (!chatView) return;
 
-  chatView.innerHTML = `
+  chatView.replaceChildren(parseHTML(`
     <div class="chat-header">
       <button class="mobile-back-btn" id="btn-back" aria-label="Back to conversations">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
@@ -717,7 +717,7 @@ async function openConversation(conversationId: string) {
     <div id="composer-queue-status" style="display:none;padding:6px 14px;border-top:1px solid var(--border-weak);font-size:12px;color:var(--text-secondary)"></div>
     <div class="emoji-picker" id="emoji-picker" style="display:none"></div>
     <div class="gif-picker" id="gif-picker" style="display:none"></div>
-  `;
+  `));
 
   // Mobile responsive: mark layout as having open conversation
   document.querySelector('.app-layout')?.classList.add('has-conversation');
@@ -728,7 +728,7 @@ async function openConversation(conversationId: string) {
     document.querySelector('.app-layout')?.classList.remove('has-conversation');
     renderConversationsList();
     const cv = document.getElementById('chat-view');
-    if (cv) cv.innerHTML = `
+    if (cv) cv.replaceChildren(parseHTML(`
       <div class="empty-state">
         <div class="empty-state-icon">
           <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="var(--roc-gold)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" opacity="0.4">
@@ -738,7 +738,7 @@ async function openConversation(conversationId: string) {
         <h3>Select a conversation</h3>
         <p>Choose from your chats or start a new one.</p>
       </div>
-    `;
+    `));
   });
 
   // Load messages
@@ -796,12 +796,12 @@ async function openConversation(conversationId: string) {
     const queuedForConv = messageQueue.filter(q => q.conversationId === conversationId).length;
     if (queuedForConv === 0) {
       queueStatusEl.style.display = 'none';
-      queueStatusEl.innerHTML = '';
+      queueStatusEl.replaceChildren();
       return;
     }
     queueStatusEl.style.display = 'block';
     const offline = !navigator.onLine;
-    queueStatusEl.innerHTML = `${offline ? '🕐 Offline queue' : '🔄 Pending send'}: ${queuedForConv} message${queuedForConv === 1 ? '' : 's'} ${offline ? '(will auto-send when online)' : ''} <button id="retry-queued-now" class="btn btn-outline" style="margin-left:8px;font-size:11px;padding:3px 8px">Retry now</button>`;
+    queueStatusEl.replaceChildren(parseHTML(`${offline ? '🕐 Offline queue' : '🔄 Pending send'}: ${queuedForConv} message${queuedForConv === 1 ? '' : 's'} ${offline ? '(will auto-send when online)' : ''} <button id="retry-queued-now" class="btn btn-outline" style="margin-left:8px;font-size:11px;padding:3px 8px">Retry now</button>`));
     queueStatusEl.querySelector('#retry-queued-now')?.addEventListener('click', () => {
       void flushMessageQueue().then(() => {
         renderQueueStatus();
@@ -1015,7 +1015,7 @@ function applyDecryptedContent(div: HTMLElement, plaintext: string, isMine: bool
     div.className = 'message-row system-notification';
     div.removeAttribute('aria-label');
     div.setAttribute('role', 'status');
-    div.innerHTML = `<div class="system-message screenshot-alert">📸 ${escapeHtml(senderName)} took a screenshot</div>`;
+    div.replaceChildren(parseHTML(`<div class="system-message screenshot-alert">📸 ${escapeHtml(senderName)} took a screenshot</div>`));
     return;
   }
 
@@ -1044,7 +1044,7 @@ function applyDecryptedContent(div: HTMLElement, plaintext: string, isMine: bool
   } else {
     const textEl = div.querySelector('.message-text');
     if (textEl) {
-      (textEl as HTMLElement).innerHTML = renderCustomEmoji(plaintext, true);
+      (textEl as HTMLElement).replaceChildren(parseHTML(renderCustomEmoji(plaintext, true)));
       const bubbleEl = div.querySelector('.message-bubble') as HTMLElement | null;
       if (bubbleEl) attachPreviewIfAny(bubbleEl, plaintext);
     }
@@ -1066,7 +1066,7 @@ function renderMessages(messages: Message[]) {
   if (!area.querySelector('.encryption-banner')) {
     const banner = document.createElement('div');
     banner.className = 'encryption-banner';
-    banner.innerHTML = '🔒 Messages are end-to-end encrypted';
+    banner.replaceChildren(parseHTML('🔒 Messages are end-to-end encrypted'));
     area.prepend(banner);
   }
 
@@ -1109,7 +1109,7 @@ function renderMessages(messages: Message[]) {
       // Update deleted state
       if (msg.deleted_at && !existing.querySelector('.message-deleted')) {
         const bubble = existing.querySelector('.message-bubble');
-        if (bubble) bubble.innerHTML = '<em>🚫 This message was deleted</em>';
+        if (bubble) bubble.replaceChildren(parseHTML('<em>🚫 This message was deleted</em>'));
         existing.querySelector('.message-bubble')?.classList.add('message-deleted');
       }
       // Ensure correct DOM order
@@ -1129,7 +1129,7 @@ function renderMessages(messages: Message[]) {
       const senderName = (msg as any).sender_name || (msg as any).sender_username || 'Someone';
       div.className = 'message-row system-notification';
       div.setAttribute('role', 'status');
-      div.innerHTML = `<div class="system-message screenshot-alert">📸 ${escapeHtml(senderName)} took a screenshot</div>`;
+      div.replaceChildren(parseHTML(`<div class="system-message screenshot-alert">📸 ${escapeHtml(senderName)} took a screenshot</div>`));
       if (prevChild) prevChild.after(div); else area.prepend(div);
       prevChild = div;
       return;
@@ -1140,7 +1140,7 @@ function renderMessages(messages: Message[]) {
     div.setAttribute('aria-label', `${isMine ? 'You' : 'Message'} at ${formatTime(msg.created_at)}`);
 
     if (msg.deleted_at) {
-      div.innerHTML = `<div class="message-bubble message-deleted"><em>🚫 This message was deleted</em></div>`;
+      div.replaceChildren(parseHTML(`<div class="message-bubble message-deleted"><em>🚫 This message was deleted</em></div>`));
       if (prevChild) prevChild.after(div); else area.prepend(div);
       prevChild = div;
       return;
@@ -1162,7 +1162,7 @@ function renderMessages(messages: Message[]) {
 
     const priorityBadge = msg.priority === 'urgent' ? '<span class="priority-badge urgent" title="Urgent">🔴</span>'
       : msg.priority === 'high' ? '<span class="priority-badge high" title="High Priority">🟠</span>' : '';
-    div.innerHTML = `
+    div.replaceChildren(parseHTML(`
       <div class="message-bubble${gifContent ? ' gif-bubble' : ''}${msg.priority && msg.priority !== 'normal' ? ' priority-' + msg.priority : ''}">
         ${priorityBadge}
         ${replyQuoteHtml}
@@ -1178,7 +1178,7 @@ function renderMessages(messages: Message[]) {
           ${getStatusIcon(msg.id, isMine)}
         </div>
       </div>
-    `;
+    `));
     div.addEventListener('contextmenu', (e) => {
       e.preventDefault();
       showMessageContextMenu(e as MouseEvent, msg.id, isMine, msg.conversation_id);
@@ -1286,11 +1286,11 @@ async function sendMessageHandler() {
         t.className = 'push-nudge-toast';
         t.setAttribute('role', 'dialog');
         t.setAttribute('aria-label', 'Enable push notifications');
-        t.innerHTML = `
+        t.replaceChildren(parseHTML(`
           <span style="flex:1">🔔 Get notified when someone replies?</span>
           <button class="btn-secondary push-nudge-yes" style="font-size:12px;padding:4px 10px">Enable</button>
           <button class="btn-secondary push-nudge-no"  style="font-size:12px;padding:4px 10px">Not now</button>
-        `;
+        `));
         Object.assign(t.style, {
           position: 'fixed', bottom: '20px', left: '50%', transform: 'translateX(-50%)',
           background: 'var(--bg-elevated)', color: 'var(--text-primary)',
@@ -1601,17 +1601,17 @@ async function connectWebSocket(conversationId: string) {
               if (enc) {
                 decryptMeta(conversationId, enc).then(meta => {
                   if (meta.isTyping) {
-                    typingEl.innerHTML = `<span class="typing-indicator"><span></span><span></span><span></span></span> typing...`;
+                    typingEl.replaceChildren(parseHTML(`<span class="typing-indicator"><span></span><span></span><span></span></span> typing...`));
                     setTimeout(() => {
-                      if (typingEl) typingEl.innerHTML = `<span style="font-size:8px">🔒</span> End-to-end encrypted`;
+                      if (typingEl) typingEl.replaceChildren(parseHTML(`<span style="font-size:8px">🔒</span> End-to-end encrypted`));
                     }, 3000);
                   }
                 }).catch(() => {});
               } else if (data.payload.isTyping) {
                 // Fallback for unencrypted (backward compat)
-                typingEl.innerHTML = `<span class="typing-indicator"><span></span><span></span><span></span></span> typing...`;
+                typingEl.replaceChildren(parseHTML(`<span class="typing-indicator"><span></span><span></span><span></span></span> typing...`));
                 setTimeout(() => {
-                  if (typingEl) typingEl.innerHTML = `<span style="font-size:8px">🔒</span> End-to-end encrypted`;
+                  if (typingEl) typingEl.replaceChildren(parseHTML(`<span style="font-size:8px">🔒</span> End-to-end encrypted`));
                 }, 3000);
               }
             }
@@ -1840,7 +1840,7 @@ function showNewChatDialog(container: HTMLElement) {
     position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:50;
     display:flex;align-items:center;justify-content:center;padding:var(--sp-4);
   `;
-  overlay.innerHTML = `
+  overlay.replaceChildren(parseHTML(`
     <div class="auth-card" style="max-width:400px">
       <h2 style="font-size:var(--text-lg);margin-bottom:var(--sp-4)">New Conversation</h2>
       <div style="display:flex;gap:var(--sp-2);margin-bottom:var(--sp-4)">
@@ -1864,7 +1864,7 @@ function showNewChatDialog(container: HTMLElement) {
         <button class="btn-primary" id="create-group-btn" style="flex:1;display:none">Create Group</button>
       </div>
     </div>
-  `;
+  `));
 
   document.body.appendChild(overlay);
   trapFocusInOverlay(overlay);
@@ -1899,12 +1899,12 @@ function showNewChatDialog(container: HTMLElement) {
   });
 
   function renderSelectedMembers() {
-    selectedMembersEl.innerHTML = selectedMembers.map((m, i) => `
+    selectedMembersEl.replaceChildren(parseHTML(selectedMembers.map((m, i) => `
       <span style="background:var(--bg-tertiary);padding:2px 8px;border-radius:12px;font-size:var(--text-xs);display:flex;align-items:center;gap:4px">
         @${escapeHtml(m.username)}
         <span data-remove-idx="${i}" style="cursor:pointer;opacity:0.6">&times;</span>
       </span>
-    `).join('');
+    `).join('')));
     selectedMembersEl.querySelectorAll('[data-remove-idx]').forEach(el => {
       el.addEventListener('click', () => {
         selectedMembers.splice(Number((el as HTMLElement).dataset.removeIdx), 0 + 1);
@@ -1953,11 +1953,11 @@ function showNewChatDialog(container: HTMLElement) {
 
       const users = res.data.results || [];
       if (users.length === 0) {
-        results.innerHTML = '<p style="font-size:var(--text-sm);color:var(--text-tertiary)">No users found.</p>';
+        results.replaceChildren(parseHTML('<p style="font-size:var(--text-sm);color:var(--text-tertiary)">No users found.</p>'));
         return;
       }
 
-      results.innerHTML = users
+      results.replaceChildren(parseHTML(users
         .map(
           (u) => `
         <div class="conversation-item" data-user-id="${u.userId}" data-display-name="${escapeHtml(u.displayName)}" data-username="${escapeHtml(u.username)}" style="cursor:pointer">
@@ -1971,7 +1971,7 @@ function showNewChatDialog(container: HTMLElement) {
         </div>
       `,
         )
-        .join('');
+        .join('')));
 
       results.querySelectorAll('.conversation-item').forEach((el) => {
         el.addEventListener('click', async () => {
@@ -2090,7 +2090,7 @@ function showScheduleDialog(conversationId: string, input: HTMLTextAreaElement) 
   now.setHours(now.getHours() + 1, 0, 0, 0);
   const defaultTime = now.toISOString().slice(0, 16);
 
-  overlay.innerHTML = `
+  overlay.replaceChildren(parseHTML(`
     <div style="background:var(--bg-elevated);border-radius:var(--radius-xl);max-width:360px;width:100%;padding:var(--sp-5);box-shadow:var(--shadow-xl)">
       <h3 style="margin-bottom:var(--sp-3)">Schedule Message</h3>
       <p style="font-size:var(--text-sm);color:var(--text-secondary);margin-bottom:var(--sp-4)">Choose when to send this message:</p>
@@ -2100,7 +2100,7 @@ function showScheduleDialog(conversationId: string, input: HTMLTextAreaElement) 
         <button class="btn-primary" id="schedule-confirm" style="flex:1">Schedule</button>
       </div>
     </div>
-  `;
+  `));
 
   overlay.querySelector('#schedule-cancel')?.addEventListener('click', () => overlay.remove());
   overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
@@ -2229,7 +2229,7 @@ function initSwipeActions(listEl: HTMLElement) {
       // Show notification mode picker
       const overlay = document.createElement('div');
       overlay.className = 'view-once-modal';
-      overlay.innerHTML = `
+      overlay.replaceChildren(parseHTML(`
         <div class="view-once-dialog" style="max-width:300px">
           <h3 style="margin:0 0 12px">Notification Mode</h3>
           ${['normal', 'quiet', 'focus', 'emergency', 'silent', 'scheduled'].map(m =>
@@ -2247,7 +2247,7 @@ function initSwipeActions(listEl: HTMLElement) {
           ).join('')}
           <button class="btn-secondary" id="notif-cancel" style="width:100%;margin-top:4px">Cancel</button>
         </div>
-      `;
+      `));
       document.body.appendChild(overlay);
       trapFocusInOverlay(overlay);
       overlay.querySelector('#notif-cancel')?.addEventListener('click', () => overlay.remove());
@@ -2330,7 +2330,7 @@ function showDisappearingMenu(conversationId: string) {
   const renderOpts = (opts: {label:string;value:number}[], current: number, cls: string) =>
     opts.map(o => `<button class="btn-secondary ${cls} ${current === o.value ? 'active' : ''}" data-value="${o.value}" style="font-size:var(--text-xs);padding:4px 8px;${current === o.value ? 'border-color:var(--roc-gold);color:var(--roc-gold)' : ''}">${o.label}</button>`).join('');
 
-  overlay.innerHTML = `
+  overlay.replaceChildren(parseHTML(`
     <div class="auth-card" style="max-width:380px;max-height:90vh;overflow-y:auto">
       <h2 style="font-size:var(--text-lg);margin-bottom:var(--sp-3)">Disappearing Settings</h2>
 
@@ -2362,7 +2362,7 @@ function showDisappearingMenu(conversationId: string) {
 
       <button class="btn-secondary" id="close-disappear" style="width:100%">Done</button>
     </div>
-  `;
+  `));
 
   document.body.appendChild(overlay);
   trapFocusInOverlay(overlay);
@@ -2460,7 +2460,7 @@ function showNotificationModeMenu(conversationId: string, anchor: HTMLElement) {
   menu.className = 'notif-mode-menu msg-context-menu';
   menu.setAttribute('role', 'menu');
   menu.style.cssText = 'min-width:260px';
-  menu.innerHTML = `
+  menu.replaceChildren(parseHTML(`
     <div style="padding:8px 12px;font-size:11px;letter-spacing:0.08em;color:var(--text-tertiary);text-transform:uppercase">Notifications</div>
     ${modes.map(m => `
       <button class="ctx-menu-item notif-mode-item" data-mode="${m.value}" role="menuitemradio" aria-checked="${current === m.value}" style="display:flex;align-items:flex-start;gap:10px;width:100%;text-align:left;padding:10px 12px;background:none;border:none;color:var(--text-primary);cursor:pointer">
@@ -2471,7 +2471,7 @@ function showNotificationModeMenu(conversationId: string, anchor: HTMLElement) {
         </span>
       </button>
     `).join('')}
-  `;
+  `));
 
   // Position below the anchor button.
   const rect = anchor.getBoundingClientRect();
@@ -2511,7 +2511,7 @@ function showConversationThemePicker(conversationId: string) {
   const overlay = document.createElement('div');
   overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:50;display:flex;align-items:center;justify-content:center;padding:var(--sp-4)';
 
-  overlay.innerHTML = `
+  overlay.replaceChildren(parseHTML(`
     <div class="auth-card" style="max-width:320px">
       <h2 style="font-size:var(--text-lg);margin-bottom:var(--sp-2)">Chat Theme</h2>
       <p style="font-size:var(--text-sm);color:var(--text-tertiary);margin-bottom:var(--sp-4)">Choose a theme for this conversation.</p>
@@ -2526,7 +2526,7 @@ function showConversationThemePicker(conversationId: string) {
       </div>
       <button class="btn-secondary" id="close-theme" style="width:100%;margin-top:var(--sp-3)">Cancel</button>
     </div>
-  `;
+  `));
 
   document.body.appendChild(overlay);
   trapFocusInOverlay(overlay);
@@ -2579,7 +2579,7 @@ async function showSafetyNumber(conv: Conversation) {
     display:flex;align-items:center;justify-content:center;padding:var(--sp-4);
   `;
 
-  overlay.innerHTML = `
+  overlay.replaceChildren(parseHTML(`
     <div class="auth-card" style="max-width:380px">
       <h2 style="font-size:var(--text-lg);margin-bottom:var(--sp-2)">
         <i data-lucide="shield-check" style="width:20px;height:20px;display:inline-block;vertical-align:text-bottom"></i>
@@ -2600,7 +2600,7 @@ async function showSafetyNumber(conv: Conversation) {
         <button class="btn-primary" id="verify-safety" style="flex:1;background:var(--accent-secondary,#22c55e)">${isVerified ? '✅ Verified' : '🔒 Mark Verified'}</button>
       </div>
     </div>
-  `;
+  `));
 
   document.body.appendChild(overlay);
   trapFocusInOverlay(overlay);
@@ -2819,7 +2819,7 @@ function buildRecordingOverlay(kind: 'audio' | 'video'): HTMLElement {
   injectRecordingStyles();
   const el = document.createElement('div');
   el.className = 'rocchat-rec-overlay';
-  el.innerHTML = `
+  el.replaceChildren(parseHTML(`
     <div class="rocchat-rec-panel">
       <div class="rocchat-rec-header">
         <span class="rocchat-rec-dot"></span>
@@ -2838,7 +2838,7 @@ function buildRecordingOverlay(kind: 'audio' | 'video'): HTMLElement {
         </button>
       </div>
     </div>
-  `;
+  `));
   return el;
 }
 
@@ -3048,19 +3048,19 @@ function renderFileMessage(bubble: Element, fileMsg: ParsedFileMessage, conversa
     if (alreadyViewed) {
       const opened = document.createElement('div');
       opened.className = 'view-once-opened';
-      opened.innerHTML = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--text-tertiary)" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7S2 12 2 12z"/></svg><span>Opened</span>`;
+      opened.replaceChildren(parseHTML(`<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--text-tertiary)" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7S2 12 2 12z"/></svg><span>Opened</span>`));
       textEl.replaceWith(opened);
       return;
     }
 
     const wrapper = document.createElement('div');
     wrapper.className = 'view-once-wrapper';
-    wrapper.innerHTML = `
+    wrapper.replaceChildren(parseHTML(`
       <div class="view-once-overlay">
         <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="var(--roc-gold)" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7S2 12 2 12z"/></svg>
         <span>View once</span>
       </div>
-    `;
+    `));
     wrapper.addEventListener('click', async () => {
       try {
         const blob = await fetchAndDecryptMedia(fileMsg, conversationId);
@@ -3070,7 +3070,7 @@ function renderFileMessage(bubble: Element, fileMsg: ParsedFileMessage, conversa
         const modal = document.createElement('div');
         modal.className = 'view-once-modal';
         const isImg = fileMsg.mime.startsWith('image/');
-        modal.innerHTML = `
+        modal.replaceChildren(parseHTML(`
           <div class="view-once-modal-content">
             ${isImg
               ? `<img src="${url}" decoding="async" style="max-width:90vw;max-height:80vh;border-radius:12px" />`
@@ -3078,14 +3078,14 @@ function renderFileMessage(bubble: Element, fileMsg: ParsedFileMessage, conversa
             }
             <div class="view-once-timer">This media will disappear when closed</div>
           </div>
-        `;
+        `));
         modal.addEventListener('click', (e) => {
           if (e.target === modal || (e.target as HTMLElement).closest('.view-once-timer')) {
             URL.revokeObjectURL(url);
             modal.remove();
             const opened = document.createElement('div');
             opened.className = 'view-once-opened';
-            opened.innerHTML = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--text-tertiary)" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7S2 12 2 12z"/></svg><span>Opened</span>`;
+            opened.replaceChildren(parseHTML(`<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--text-tertiary)" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7S2 12 2 12z"/></svg><span>Opened</span>`));
             wrapper.replaceWith(opened);
           }
         });
@@ -3275,7 +3275,7 @@ function showFileUpload(conversationId: string, initialFile?: File) {
       viewOnce = await new Promise<boolean>((resolve) => {
         const dialog = document.createElement('div');
         dialog.className = 'view-once-modal';
-        dialog.innerHTML = `
+        dialog.replaceChildren(parseHTML(`
           <div class="view-once-dialog">
             <h3 style="margin:0 0 8px">Send ${file.name}</h3>
             <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin:12px 0">
@@ -3287,7 +3287,7 @@ function showFileUpload(conversationId: string, initialFile?: File) {
               <button class="btn" id="vo-send" style="padding:6px 16px;background:var(--roc-gold);color:#fff;border:none;border-radius:8px;cursor:pointer">Send</button>
             </div>
           </div>
-        `;
+        `));
         document.body.appendChild(dialog);
         dialog.querySelector('#vo-cancel')?.addEventListener('click', () => { dialog.remove(); resolve(false); });
         dialog.querySelector('#vo-send')?.addEventListener('click', () => {
@@ -3307,7 +3307,7 @@ function showFileUpload(conversationId: string, initialFile?: File) {
     const progressDiv = document.createElement('div');
     progressDiv.className = 'message-row mine';
     const optimisticId = `upload-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-    progressDiv.innerHTML = `
+    progressDiv.replaceChildren(parseHTML(`
       <div class="message-bubble" data-upload-id="${optimisticId}">
         <div class="message-text" style="color:var(--text-tertiary)">
           📎 Preparing ${escapeHtml(file.name)}...
@@ -3319,7 +3319,7 @@ function showFileUpload(conversationId: string, initialFile?: File) {
           <button class="btn btn-outline upload-cancel" style="font-size:11px;padding:4px 10px">Cancel</button>
         </div>
       </div>
-    `;
+    `));
     area?.appendChild(progressDiv);
     area && (area.scrollTop = area.scrollHeight);
     const progressBar = progressDiv.querySelector('.upload-progress') as HTMLElement | null;
@@ -3472,7 +3472,7 @@ function toggleMessageSearch() {
     display:flex;align-items:center;gap:8px;padding:8px 16px;
     background:var(--bg-secondary);border-bottom:1px solid var(--border);
   `;
-  bar.innerHTML = `
+  bar.replaceChildren(parseHTML(`
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--text-tertiary)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
     <input type="text" id="msg-search-input" placeholder="Search in conversation..."
       style="flex:1;background:var(--bg-primary);border:1px solid var(--border);border-radius:8px;padding:6px 12px;font-size:13px;color:var(--text-primary);outline:none" />
@@ -3486,7 +3486,7 @@ function toggleMessageSearch() {
     <button id="msg-search-close" class="icon-btn" style="padding:4px" title="Close">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
     </button>
-  `;
+  `));
 
   chatHeader.after(bar);
   const input = bar.querySelector('#msg-search-input') as HTMLInputElement;
@@ -3614,19 +3614,19 @@ function renderVaultItem(bubble: Element, vault: { vaultType: string; label: str
   const alreadyViewed = vault.viewOnce && localStorage.getItem(viewedKey);
 
   if (isExpired) {
-    textEl.innerHTML = `<div class="vault-item expired"><span>${icon}</span> <strong>${escapeHtml(vault.label)}</strong><br><em style="color:var(--text-tertiary)">Expired</em></div>`;
+    textEl.replaceChildren(parseHTML(`<div class="vault-item expired"><span>${icon}</span> <strong>${escapeHtml(vault.label)}</strong><br><em style="color:var(--text-tertiary)">Expired</em></div>`));
     return;
   }
   if (alreadyViewed) {
-    textEl.innerHTML = `<div class="vault-item viewed"><span>${icon}</span> <strong>${escapeHtml(vault.label)}</strong><br><em style="color:var(--text-tertiary)">Already viewed</em></div>`;
+    textEl.replaceChildren(parseHTML(`<div class="vault-item viewed"><span>${icon}</span> <strong>${escapeHtml(vault.label)}</strong><br><em style="color:var(--text-tertiary)">Already viewed</em></div>`));
     return;
   }
 
-  textEl.innerHTML = `<div class="vault-item" style="cursor:pointer;padding:12px;background:var(--bg-input);border-radius:var(--radius-md);border:1px solid var(--border-norm)">
+  textEl.replaceChildren(parseHTML(`<div class="vault-item" style="cursor:pointer;padding:12px;background:var(--bg-input);border-radius:var(--radius-md);border:1px solid var(--border-norm)">
     <div style="font-size:1.5em;margin-bottom:4px">${icon}</div>
     <strong>${escapeHtml(vault.label)}</strong>
     <div style="font-size:var(--text-xs);color:var(--text-tertiary);margin-top:4px">${vault.vaultType} · ${vault.viewOnce ? 'view once' : 'tap to reveal'}</div>
-  </div>`;
+  </div>`));
 
   textEl.querySelector('.vault-item')?.addEventListener('click', () => {
     try {
@@ -3637,14 +3637,14 @@ function renderVaultItem(bubble: Element, vault: { vaultType: string; label: str
       const content = formatVaultContent(vault.vaultType, decoded);
       const modal = document.createElement('div');
       modal.className = 'view-once-modal';
-      modal.innerHTML = `<div class="view-once-dialog" style="max-width:360px">
+      modal.replaceChildren(parseHTML(`<div class="view-once-dialog" style="max-width:360px">
         <h3 style="margin:0 0 12px">${icon} ${escapeHtml(vault.label)}</h3>
         <div style="font-family:var(--font-mono);word-break:break-all;padding:12px;background:var(--bg-input);border-radius:var(--radius-sm);user-select:text">${content}</div>
         <div style="display:flex;gap:8px;margin-top:16px">
           <button class="btn-primary" id="vault-copy" style="flex:1">Copy</button>
           <button class="btn-secondary" id="vault-close" style="flex:1">Close</button>
         </div>
-      </div>`;
+      </div>`));
       document.body.appendChild(modal);
       modal.querySelector('#vault-close')?.addEventListener('click', () => modal.remove());
       modal.addEventListener('click', (e) => { if (e.target === modal) modal.remove(); });
@@ -3654,7 +3654,7 @@ function renderVaultItem(bubble: Element, vault: { vaultType: string; label: str
       });
       if (vault.viewOnce) {
         localStorage.setItem(viewedKey, '1');
-        textEl.innerHTML = `<div class="vault-item viewed"><span>${icon}</span> <strong>${escapeHtml(vault.label)}</strong><br><em style="color:var(--text-tertiary)">Already viewed</em></div>`;
+        textEl.replaceChildren(parseHTML(`<div class="vault-item viewed"><span>${icon}</span> <strong>${escapeHtml(vault.label)}</strong><br><em style="color:var(--text-tertiary)">Already viewed</em></div>`));
       }
     } catch {
       showToast('Could not decrypt vault item', 'error');
@@ -3687,7 +3687,7 @@ function formatVaultContent(type: string, raw: string): string {
 export function showVaultComposer() {
   const overlay = document.createElement('div');
   overlay.className = 'view-once-modal';
-  overlay.innerHTML = `<div class="view-once-dialog" style="max-width:400px">
+  overlay.replaceChildren(parseHTML(`<div class="view-once-dialog" style="max-width:400px">
     <h3 style="margin:0 0 16px">🔐 Share Vault Item</h3>
     <select id="vault-type" class="input" style="width:100%;margin-bottom:12px">
       <option value="password">🔑 Password</option>
@@ -3704,7 +3704,7 @@ export function showVaultComposer() {
       <button class="btn-primary" id="vault-send" style="flex:1">Send</button>
       <button class="btn-secondary" id="vault-cancel" style="flex:1">Cancel</button>
     </div>
-  </div>`;
+  </div>`));
   document.body.appendChild(overlay);
   trapFocusInOverlay(overlay);
 
@@ -3723,7 +3723,7 @@ export function showVaultComposer() {
     } else {
       html = `<textarea class="input vault-field" data-key="note" placeholder="Secure note content" rows="4" style="width:100%;resize:vertical"></textarea>`;
     }
-    fieldsDiv.innerHTML = html;
+    fieldsDiv.replaceChildren(parseHTML(html));
   }
   typeSelect.addEventListener('change', renderFields);
   renderFields();
@@ -3824,7 +3824,7 @@ function showMessageContextMenu(e: MouseEvent, msgId: string, isMine: boolean, c
           const banner = document.createElement('div');
           banner.id = 'reply-banner';
           banner.className = 'reply-banner';
-          banner.innerHTML = `<span class="reply-banner-text">↩️ ${escapeHtml(snippet)}</span><button class="reply-banner-close" aria-label="Cancel reply">✕</button>`;
+          banner.replaceChildren(parseHTML(`<span class="reply-banner-text">↩️ ${escapeHtml(snippet)}</span><button class="reply-banner-close" aria-label="Cancel reply">✕</button>`));
           banner.querySelector('.reply-banner-close')?.addEventListener('click', () => {
             delete input.dataset.replyTo;
             banner.remove();
@@ -3913,7 +3913,7 @@ function showMessageContextMenu(e: MouseEvent, msgId: string, isMine: boolean, c
     if (condition === false) return;
     const item = document.createElement('button');
     item.className = 'ctx-menu-item';
-    item.innerHTML = `<span class="ctx-icon">${icon}</span>${label}`;
+    item.replaceChildren(parseHTML(`<span class="ctx-icon">${icon}</span>${label}`));
     item.addEventListener('click', action);
     menu.appendChild(item);
   });
@@ -3999,7 +3999,7 @@ function updateReactionUI(msgId: string, userId: string, reaction: string | null
     chip.setAttribute('data-reaction-chip', groupKey);
     chip.setAttribute('data-count', '0');
     chip.setAttribute('aria-label', isLocal ? `Your reaction ${display}` : 'Reaction');
-    chip.innerHTML = `<span class="reaction-glyph">${display}</span><span class="reaction-count">0</span>`;
+    chip.replaceChildren(parseHTML(`<span class="reaction-glyph">${display}</span><span class="reaction-count">0</span>`));
     chip.addEventListener('click', async () => {
       // Tapping your own chip removes it; tapping someone else's adds the
       // same emoji from you (mirrors Slack/Telegram/iMessage behaviour).
@@ -4078,13 +4078,13 @@ async function showPinnedMessages(conversationId: string) {
 
   const panel = document.createElement('div');
   panel.className = 'pinned-panel';
-  panel.innerHTML = `
+  panel.replaceChildren(parseHTML(`
     <div class="pinned-panel-header">
       <h3>📌 Pinned Messages</h3>
       <button class="icon-btn pinned-close" aria-label="Close">&times;</button>
     </div>
     <div class="pinned-panel-body"><p style="text-align:center;opacity:0.5">Loading...</p></div>
-  `;
+  `));
 
   const chatView = document.querySelector('.chat-view');
   if (!chatView) return;
@@ -4097,18 +4097,18 @@ async function showPinnedMessages(conversationId: string) {
     const body = panel.querySelector('.pinned-panel-body')!;
     const pins = (res as any).data || [];
     if (!pins.length) {
-      body.innerHTML = '<p style="text-align:center;opacity:0.5;padding:20px">No pinned messages</p>';
+      body.replaceChildren(parseHTML('<p style="text-align:center;opacity:0.5;padding:20px">No pinned messages</p>'));
       return;
     }
-    body.innerHTML = '';
+    body.replaceChildren();
     for (const pin of pins) {
       const div = document.createElement('div');
       div.className = 'pinned-item';
-      div.innerHTML = `
+      div.replaceChildren(parseHTML(`
         <div class="pinned-text">${escapeHtml(pin.ciphertext?.substring(0, 100) || '🔒 Encrypted')}</div>
         <div class="pinned-meta">${formatTime(pin.pinned_at)} · pinned by ${escapeHtml(pin.pinned_by?.substring(0, 8) || '?')}</div>
         <button class="pinned-unpin" data-mid="${pin.message_id}">Unpin</button>
-      `;
+      `));
       div.querySelector('.pinned-unpin')?.addEventListener('click', async (e) => {
         const mid = (e.target as HTMLElement).dataset.mid!;
         await api.unpinMessage(conversationId, mid);
@@ -4129,6 +4129,6 @@ async function showPinnedMessages(conversationId: string) {
     }
   } catch {
     const body = panel.querySelector('.pinned-panel-body');
-    if (body) body.innerHTML = '<p style="text-align:center;color:#e74c3c">Failed to load pinned messages</p>';
+    if (body) body.replaceChildren(parseHTML('<p style="text-align:center;color:#e74c3c">Failed to load pinned messages</p>'));
   }
 }

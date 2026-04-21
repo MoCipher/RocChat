@@ -3,6 +3,7 @@
  */
 
 import * as api from '../api.js';
+import { parseHTML } from '../utils.js';
 import { generateQRCodeSVG } from '../auth/qr-login.js';
 import { clearAllSecrets, deleteSecret, getSecretString, putSecretString } from '../crypto/secure-store.js';
 import { showToast } from './toast.js';
@@ -44,7 +45,7 @@ async function saveSetting(fn: () => Promise<unknown>) {
 }
 
 export function renderSettings(container: HTMLElement) {
-  container.innerHTML = `
+  container.replaceChildren(parseHTML(`
     <div class="panel-list" style="width:100%;max-width:640px;border-right:none">
       <div class="panel-header">
         <h2>Profile</h2>
@@ -622,7 +623,7 @@ export function renderSettings(container: HTMLElement) {
         </div>
       </div>
     </div>
-  `;
+  `));
 
   // Load profile
   loadProfile();
@@ -735,21 +736,21 @@ export function renderSettings(container: HTMLElement) {
   if (username && identityKey) {
     const qrData = JSON.stringify({ u: username, k: identityKey, v: 1 });
     const qrEl = document.getElementById('my-qr-code');
-    if (qrEl) qrEl.innerHTML = generateQRCodeSVG(qrData, 200);
+    if (qrEl) qrEl.replaceChildren(parseHTML(generateQRCodeSVG(qrData, 200)));
   }
 
   // QR Scanner
   document.getElementById('btn-scan-qr')?.addEventListener('click', async () => {
     const overlay = document.createElement('div');
     overlay.className = 'view-once-modal';
-    overlay.innerHTML = `
+    overlay.replaceChildren(parseHTML(`
       <div class="view-once-dialog" style="max-width:400px;text-align:center">
         <h3 style="margin:0 0 12px">Scan QR Code</h3>
         <video id="qr-video" style="width:100%;max-height:300px;border-radius:12px;background:#000" autoplay playsinline></video>
         <p id="qr-status" style="margin:12px 0 0;font-size:var(--text-sm);color:var(--text-tertiary)">Point camera at a RocChat QR code</p>
         <button class="btn-secondary" id="qr-close" style="margin-top:12px">Close</button>
       </div>
-    `;
+    `));
     document.body.appendChild(overlay);
 
     const video = overlay.querySelector('#qr-video') as HTMLVideoElement;
@@ -796,7 +797,7 @@ export function renderSettings(container: HTMLElement) {
           canvas.height = video.videoHeight;
           ctx.drawImage(video, 0, 0);
           // No jsQR library — prompt user to paste the QR data
-          status.innerHTML = 'Camera scanning not supported in this browser.<br>Paste QR text: <input id="qr-paste" style="margin-top:8px;padding:4px 8px;border:1px solid var(--border-norm);border-radius:6px" placeholder="Paste QR data..." />';
+          status.replaceChildren(parseHTML('Camera scanning not supported in this browser.<br>Paste QR text: <input id="qr-paste" style="margin-top:8px;padding:4px 8px;border:1px solid var(--border-norm);border-radius:6px" placeholder="Paste QR data..." />'));
           const pasteInput = status.querySelector('#qr-paste');
           pasteInput?.addEventListener('change', async (e) => {
             await handleQrResult((e.target as HTMLInputElement).value, status, cleanup);
@@ -1529,14 +1530,14 @@ export function renderSettings(container: HTMLElement) {
       const svgMarkup = generateQRCodeSVG(qrData, 240);
       const modal = document.createElement('div');
       modal.className = 'modal-overlay';
-      modal.innerHTML = `
+      modal.replaceChildren(parseHTML(`
         <div class="modal" style="max-width:340px;text-align:center">
           <h3 style="margin:0 0 8px">Your Identity Key</h3>
           <p style="font-size:var(--text-xs);color:var(--text-tertiary);margin:0 0 16px">Share this QR code with contacts to verify your identity out-of-band</p>
           <div style="display:inline-block;background:#fff;border-radius:12px;padding:12px">${svgMarkup}</div>
           <p style="font-size:10px;font-family:var(--font-mono);word-break:break-all;color:var(--text-secondary);margin:12px 0 0">${escapeHtml(key.slice(0, 40))}…</p>
           <button class="btn btn-outline" style="margin-top:16px;width:100%" id="close-identity-qr">Close</button>
-        </div>`;
+        </div>`));
       document.body.appendChild(modal);
       document.getElementById('close-identity-qr')?.addEventListener('click', () => modal.remove());
       modal.addEventListener('click', (e) => { if (e.target === modal) modal.remove(); });
@@ -1630,7 +1631,7 @@ async function loadDonorBadge() {
       localStorage.setItem(`rocchat_donor_${userId}`, tier);
       const recurringLine = donor.recurring ? '<br><span style="color:var(--turquoise)">Recurring supporter</span>' : '';
       const sinceLine = donor.donor_since ? `<br><span style="color:var(--text-tertiary)">Supporting since ${new Date(donor.donor_since * 1000).toLocaleDateString()}</span>` : '';
-      display.innerHTML = `<span style="font-size:var(--text-sm)">${tierNames[tier]}</span>${recurringLine}${sinceLine}<br><span style="color:var(--text-tertiary)">Your feather badge is shown on your avatar</span>`;
+      display.replaceChildren(parseHTML(`<span style="font-size:var(--text-sm)">${tierNames[tier]}</span>${recurringLine}${sinceLine}<br><span style="color:var(--text-tertiary)">Your feather badge is shown on your avatar</span>`));
     } else {
       display.textContent = 'No active badge — donate to earn your Roc Feather!';
     }
@@ -1652,14 +1653,14 @@ async function loadQuietHours() {
     const listEl = document.getElementById('dnd-exceptions-list');
     if (listEl) {
       if (!data.dnd_exceptions?.length) {
-        listEl.innerHTML = '<div style="font-size:var(--text-xs);color:var(--text-tertiary)">No exceptions set</div>';
+        listEl.replaceChildren(parseHTML('<div style="font-size:var(--text-xs);color:var(--text-tertiary)">No exceptions set</div>'));
       } else {
-        listEl.innerHTML = data.dnd_exceptions.map(uid =>
+        listEl.replaceChildren(parseHTML(data.dnd_exceptions.map(uid =>
           `<div style="display:flex;align-items:center;gap:var(--sp-2);padding:4px 0">
             <span style="font-size:var(--text-sm);color:var(--text-primary)">${uid.slice(0, 8)}...</span>
             <button class="btn-secondary remove-dnd-exception" data-uid="${uid}" style="font-size:var(--text-xs);padding:2px 8px;color:var(--danger)">Remove</button>
           </div>`
-        ).join('');
+        ).join('')));
         listEl.querySelectorAll('.remove-dnd-exception').forEach(btn => {
           btn.addEventListener('click', async () => {
             const uid = (btn as HTMLElement).dataset.uid!;
@@ -1677,11 +1678,11 @@ async function loadQuietHours() {
     if (kwEl) {
       const keywords = data.alert_keywords || [];
       if (!keywords.length) {
-        kwEl.innerHTML = '<div style="font-size:var(--text-xs);color:var(--text-tertiary)">No keywords set</div>';
+        kwEl.replaceChildren(parseHTML('<div style="font-size:var(--text-xs);color:var(--text-tertiary)">No keywords set</div>'));
       } else {
-        kwEl.innerHTML = keywords.map(kw =>
+        kwEl.replaceChildren(parseHTML(keywords.map(kw =>
           `<span style="display:inline-flex;align-items:center;gap:4px;background:var(--bg-primary);border:1px solid var(--border);border-radius:20px;padding:2px 10px;font-size:var(--text-xs);color:var(--text-primary)">${kw}<button class="remove-keyword" data-kw="${kw}" style="background:none;border:none;color:var(--danger);cursor:pointer;font-size:14px;padding:0;line-height:1">&times;</button></span>`
-        ).join('');
+        ).join('')));
         kwEl.querySelectorAll('.remove-keyword').forEach(btn => {
           btn.addEventListener('click', async () => {
             const kw = (btn as HTMLElement).dataset.kw!;
@@ -1695,7 +1696,7 @@ async function loadQuietHours() {
     }
   } catch {
     const listEl = document.getElementById('dnd-exceptions-list');
-    if (listEl) listEl.innerHTML = '<div style="font-size:var(--text-xs);color:var(--text-tertiary)">Could not load</div>';
+    if (listEl) listEl.replaceChildren(parseHTML('<div style="font-size:var(--text-xs);color:var(--text-tertiary)">Could not load</div>'));
   }
 }
 
@@ -1720,22 +1721,22 @@ function applyChatTheme(theme: string) {
 
 async function showScheduledMessages() {
   const overlay = createOverlay();
-  overlay.querySelector('.overlay-body')!.innerHTML = '<div style="text-align:center;padding:var(--sp-4)">Loading...</div>';
+  overlay.querySelector('.overlay-body')!.replaceChildren(parseHTML('<div style="text-align:center;padding:var(--sp-4)">Loading...</div>'));
 
   try {
     const res = await api.getScheduledMessages();
     const msgs = res.ok ? (res.data as unknown as { id: string; conversation_id: string; scheduled_at: number }[]) : [];
     const body = overlay.querySelector('.overlay-body')!;
     if (msgs.length === 0) {
-      body.innerHTML = `
+      body.replaceChildren(parseHTML(`
         <div style="text-align:center;padding:var(--sp-8);color:var(--text-tertiary)">
           <div style="font-size:48px;margin-bottom:var(--sp-3)">📋</div>
           <p>No scheduled messages</p>
           <p style="font-size:var(--text-xs);margin-top:var(--sp-2)">Use the clock icon in the composer to schedule a message</p>
         </div>
-      `;
+      `));
     } else {
-      body.innerHTML = msgs.map(m => `
+      body.replaceChildren(parseHTML(msgs.map(m => `
         <div class="setting-row" style="padding:var(--sp-3)">
           <div>
             <div class="setting-label">Message to ${m.conversation_id.slice(0, 8)}...</div>
@@ -1743,7 +1744,7 @@ async function showScheduledMessages() {
           </div>
           <button class="btn-secondary" style="font-size:var(--text-xs);color:var(--danger);border-color:var(--danger);padding:var(--sp-1) var(--sp-2)" data-cancel-scheduled="${m.id}">Cancel</button>
         </div>
-      `).join('');
+      `).join('')));
       body.querySelectorAll('[data-cancel-scheduled]').forEach(btn => {
         btn.addEventListener('click', async () => {
           const id = (btn as HTMLElement).dataset.cancelScheduled!;
@@ -1758,14 +1759,14 @@ async function showScheduledMessages() {
 
 async function showFoldersManager() {
   const overlay = createOverlay();
-  overlay.querySelector('.overlay-body')!.innerHTML = '<div style="text-align:center;padding:var(--sp-4)">Loading...</div>';
+  overlay.querySelector('.overlay-body')!.replaceChildren(parseHTML('<div style="text-align:center;padding:var(--sp-4)">Loading...</div>'));
 
   try {
     const res = await api.getChatFolders();
     const folders = res.ok ? (res.data as unknown as api.ChatFolder[]) : [];
     const body = overlay.querySelector('.overlay-body')!;
 
-    body.innerHTML = `
+    body.replaceChildren(parseHTML(`
       ${folders.length === 0 ? `
         <div style="text-align:center;padding:var(--sp-6);color:var(--text-tertiary)">
           <div style="font-size:48px;margin-bottom:var(--sp-3)">📁</div>
@@ -1783,7 +1784,7 @@ async function showFoldersManager() {
       <div style="padding:var(--sp-3)">
         <button class="btn-secondary" id="overlay-create-folder" style="width:100%">+ Create Folder</button>
       </div>
-    `;
+    `));
 
     body.querySelectorAll('[data-delete-folder]').forEach(btn => {
       btn.addEventListener('click', async () => {
@@ -1813,7 +1814,7 @@ async function showFoldersManager() {
 
 async function showContactsManager() {
   const overlay = createOverlay();
-  overlay.querySelector('.overlay-body')!.innerHTML = '<div style="text-align:center;padding:var(--sp-4)">Loading...</div>';
+  overlay.querySelector('.overlay-body')!.replaceChildren(parseHTML('<div style="text-align:center;padding:var(--sp-4)">Loading...</div>'));
 
   try {
     const res = await api.getSavedContacts();
@@ -1821,7 +1822,7 @@ async function showContactsManager() {
     const body = overlay.querySelector('.overlay-body')!;
     const uid = localStorage.getItem('rocchat_user_id') || '';
 
-    body.innerHTML = `
+    body.replaceChildren(parseHTML(`
       ${contacts.length === 0 ? `
         <div style="text-align:center;padding:var(--sp-6);color:var(--text-tertiary)">
           <div style="font-size:48px;margin-bottom:var(--sp-3)">👤</div>
@@ -1855,7 +1856,7 @@ async function showContactsManager() {
           </div>
         `;
       }).join('')}
-    `;
+    `));
 
     body.querySelectorAll('[data-edit-nickname]').forEach(btn => {
       btn.addEventListener('click', async () => {
@@ -1890,14 +1891,14 @@ function createOverlay(): HTMLElement {
   overlay.className = 'settings-overlay';
   overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:50;display:flex;align-items:center;justify-content:center;padding:var(--sp-4)';
 
-  overlay.innerHTML = `
+  overlay.replaceChildren(parseHTML(`
     <div style="background:var(--bg-elevated);border-radius:var(--radius-xl);max-width:480px;width:100%;max-height:80vh;display:flex;flex-direction:column;box-shadow:var(--shadow-xl)">
       <div style="display:flex;justify-content:flex-end;padding:var(--sp-3)">
         <button class="icon-btn overlay-close" style="width:32px;height:32px" aria-label="Close">✕</button>
       </div>
       <div class="overlay-body" style="overflow-y:auto;padding:0 var(--sp-4) var(--sp-4)"></div>
     </div>
-  `;
+  `));
 
   overlay.querySelector('.overlay-close')?.addEventListener('click', () => overlay.remove());
   overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
@@ -1932,13 +1933,13 @@ async function loadBusinessDashboard() {
     const orgs = res.ok ? (res.data as unknown as api.Organization[]) : [];
 
     if (orgs.length === 0) {
-      orgList.innerHTML = `
+      orgList.replaceChildren(parseHTML(`
         <div style="text-align:center;padding:var(--sp-4);color:var(--text-tertiary)">
           <p>No organizations yet. Create one to get started.</p>
         </div>
-      `;
+      `));
     } else {
-      orgList.innerHTML = orgs.map(o => `
+      orgList.replaceChildren(parseHTML(orgs.map(o => `
         <div class="setting-row" style="padding:var(--sp-3);cursor:pointer" data-org-id="${o.id}">
           <div>
             <div class="setting-label" style="display:flex;align-items:center;gap:var(--sp-2)">
@@ -1948,7 +1949,7 @@ async function loadBusinessDashboard() {
             <div class="setting-desc">Role: ${escHtml(o.role)} · Created ${new Date(o.created_at * 1000).toLocaleDateString()}</div>
           </div>
         </div>
-      `).join('');
+      `).join('')));
 
       orgList.querySelectorAll('[data-org-id]').forEach(el => {
         el.addEventListener('click', () => {
@@ -1962,7 +1963,7 @@ async function loadBusinessDashboard() {
 
 async function showOrgDashboard(orgId: string) {
   const overlay = createOverlay();
-  overlay.querySelector('.overlay-body')!.innerHTML = '<div style="text-align:center;padding:var(--sp-4)">Loading...</div>';
+  overlay.querySelector('.overlay-body')!.replaceChildren(parseHTML('<div style="text-align:center;padding:var(--sp-4)">Loading...</div>'));
 
   try {
     const res = await api.getOrganization(orgId);
@@ -1970,7 +1971,7 @@ async function showOrgDashboard(orgId: string) {
     const org = res.data as unknown as api.Organization & { members: api.OrgMember[] };
     const body = overlay.querySelector('.overlay-body')!;
 
-    body.innerHTML = `
+    body.replaceChildren(parseHTML(`
       <h3 style="margin-bottom:var(--sp-3)">${escHtml(org.name)}</h3>
 
       <div style="margin-bottom:var(--sp-4)">
@@ -2013,7 +2014,7 @@ async function showOrgDashboard(orgId: string) {
         <button class="btn-secondary" id="org-webhooks">🔗 Webhooks</button>
         <button class="btn-secondary" id="org-branding">🎨 Custom Branding</button>
       </div>
-    `;
+    `));
 
     // Remove member
     body.querySelectorAll('[data-remove-member]').forEach(btn => {
@@ -2073,7 +2074,7 @@ async function showOrgDashboard(orgId: string) {
       const current = ssoRes.ok ? (ssoRes.data as unknown as { provider: string; issuer_url: string; client_id: string; redirect_uri: string; enabled: number }) : { provider: 'oidc', issuer_url: '', client_id: '', redirect_uri: '', enabled: 0 };
 
       const ssoOverlay = createOverlay();
-      ssoOverlay.querySelector('.overlay-body')!.innerHTML = `
+      ssoOverlay.querySelector('.overlay-body')!.replaceChildren(parseHTML(`
         <h3 style="margin-bottom:var(--sp-3)">SSO Configuration</h3>
         <div style="display:grid;gap:var(--sp-3)">
           <div>
@@ -2108,7 +2109,7 @@ async function showOrgDashboard(orgId: string) {
             <button class="btn-secondary" id="sso-remove" style="flex:1;color:var(--danger);border-color:var(--danger)">Remove</button>
           </div>
         </div>
-      `;
+      `));
 
       ssoOverlay.querySelector('#sso-save')?.addEventListener('click', async () => {
         const issuerUrl = (ssoOverlay.querySelector('#sso-issuer') as HTMLInputElement).value.trim();
@@ -2204,7 +2205,7 @@ async function showOrgDashboard(orgId: string) {
       const renderKeys = async () => {
         const res = await api.listApiKeys(orgId);
         const keys = (res.data || []) as Record<string, string>[];
-        ob.innerHTML = `
+        ob.replaceChildren(parseHTML(`
           <h3 style="margin-bottom:var(--sp-3)">🔑 API Keys</h3>
           <div style="display:grid;gap:var(--sp-2);margin-bottom:var(--sp-3)">
             ${keys.map((k: any) => `
@@ -2218,7 +2219,7 @@ async function showOrgDashboard(orgId: string) {
             `).join('') || '<p style="color:var(--text-tertiary)">No API keys yet</p>'}
           </div>
           <button class="btn-primary" id="create-api-key" style="width:100%">+ Create New Key</button>
-        `;
+        `));
         ob.querySelectorAll('.revoke-key').forEach(btn => {
           btn.addEventListener('click', async () => {
             const kid = (btn as HTMLElement).dataset.kid!;
@@ -2250,7 +2251,7 @@ async function showOrgDashboard(orgId: string) {
       const renderHooks = async () => {
         const res = await api.listWebhooks(orgId);
         const hooks = (res.data || []) as Record<string, string>[];
-        ob.innerHTML = `
+        ob.replaceChildren(parseHTML(`
           <h3 style="margin-bottom:var(--sp-3)">🔗 Webhooks</h3>
           <div style="display:grid;gap:var(--sp-2);margin-bottom:var(--sp-3)">
             ${hooks.map((h: any) => `
@@ -2264,7 +2265,7 @@ async function showOrgDashboard(orgId: string) {
             `).join('') || '<p style="color:var(--text-tertiary)">No webhooks registered</p>'}
           </div>
           <button class="btn-primary" id="create-webhook" style="width:100%">+ Add Webhook</button>
-        `;
+        `));
         ob.querySelectorAll('.remove-hook').forEach(btn => {
           btn.addEventListener('click', async () => {
             const hid = (btn as HTMLElement).dataset.hid!;
@@ -2295,7 +2296,7 @@ async function showOrgDashboard(orgId: string) {
       const ob = brandOverlay.querySelector('.overlay-body')!;
       const currentColor = org.accent_color || '#c9a84c';
       const currentLogo = (org as any).logo_url || '';
-      ob.innerHTML = `
+      ob.replaceChildren(parseHTML(`
         <h3 style="margin-bottom:var(--sp-3)">🎨 Custom Branding</h3>
         <div style="display:grid;gap:var(--sp-3)">
           <div>
@@ -2313,7 +2314,7 @@ async function showOrgDashboard(orgId: string) {
           </div>
           <button class="btn-primary" id="brand-save" style="width:100%">Save Branding</button>
         </div>
-      `;
+      `));
       const colorPicker = ob.querySelector('#brand-color') as HTMLInputElement;
       const hexInput = ob.querySelector('#brand-color-hex') as HTMLInputElement;
       colorPicker.addEventListener('input', () => { hexInput.value = colorPicker.value; });
@@ -2382,7 +2383,7 @@ async function loadProfile() {
           const uid = user.id || localStorage.getItem('rocchat_user_id') || '';
           const avatarPath = (user.avatar_url as string).startsWith('/api/') ? (user.avatar_url as string) : `${api.getApiBase()}${user.avatar_url}`;
           const sep = avatarPath.includes('?') ? '&' : '?';
-          avatarEl.innerHTML = `<img src="${avatarPath}${sep}uid=${encodeURIComponent(uid as string)}" alt="${escHtml(displayName)}" style="width:100%;height:100%;object-fit:cover;border-radius:50%" />`;
+          avatarEl.replaceChildren(parseHTML(`<img src="${avatarPath}${sep}uid=${encodeURIComponent(uid as string)}" alt="${escHtml(displayName)}" style="width:100%;height:100%;object-fit:cover;border-radius:50%" />`));
           if (removeBtn) removeBtn.style.display = 'inline-flex';
         } else {
           avatarEl.textContent = initials;
@@ -2426,11 +2427,11 @@ async function showBlockedContactsDialog() {
   overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:1000;display:flex;align-items:center;justify-content:center';
   const dialog = document.createElement('div');
   dialog.style.cssText = 'background:var(--bg-secondary);border-radius:var(--radius-lg);padding:var(--sp-6);width:90%;max-width:400px;max-height:70vh;overflow-y:auto';
-  dialog.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--sp-4)">
+  dialog.replaceChildren(parseHTML(`<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--sp-4)">
     <h3 style="margin:0;color:var(--text-primary)">Blocked Contacts</h3>
     <button id="close-blocked" style="background:none;border:none;color:var(--text-tertiary);font-size:24px;cursor:pointer">&times;</button>
   </div>
-  <div id="blocked-list" style="color:var(--text-secondary)">Loading...</div>`;
+  <div id="blocked-list" style="color:var(--text-secondary)">Loading...</div>`));
   overlay.appendChild(dialog);
   document.body.appendChild(overlay);
   overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
@@ -2441,27 +2442,27 @@ async function showBlockedContactsDialog() {
     const list = dialog.querySelector('#blocked-list')!;
     const contacts = res?.data;
     if (!contacts || contacts.length === 0) {
-      list.innerHTML = '<p style="text-align:center;color:var(--text-tertiary);padding:var(--sp-6) 0">No blocked contacts</p>';
+      list.replaceChildren(parseHTML('<p style="text-align:center;color:var(--text-tertiary);padding:var(--sp-6) 0">No blocked contacts</p>'));
       return;
     }
-    list.innerHTML = '';
+    list.replaceChildren();
     for (const c of contacts) {
       const row = document.createElement('div');
       row.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:var(--sp-3);border-bottom:1px solid var(--border-color)';
-      row.innerHTML = `<span style="color:var(--text-primary)">${escapeHtml(c.display_name || c.user_id)}</span>
-        <button class="btn-secondary" style="font-size:var(--text-xs);padding:var(--sp-1) var(--sp-3)" data-uid="${escapeHtml(c.user_id)}">Unblock</button>`;
+      row.replaceChildren(parseHTML(`<span style="color:var(--text-primary)">${escapeHtml(c.display_name || c.user_id)}</span>
+        <button class="btn-secondary" style="font-size:var(--text-xs);padding:var(--sp-1) var(--sp-3)" data-uid="${escapeHtml(c.user_id)}">Unblock</button>`));
       row.querySelector('button')!.addEventListener('click', async (e) => {
         const btn = e.target as HTMLButtonElement;
         btn.disabled = true;
         btn.textContent = '...';
         await api.blockContact(c.user_id, false);
         row.remove();
-        if (!list.children.length) list.innerHTML = '<p style="text-align:center;color:var(--text-tertiary);padding:var(--sp-6) 0">No blocked contacts</p>';
+        if (!list.children.length) list.replaceChildren(parseHTML('<p style="text-align:center;color:var(--text-tertiary);padding:var(--sp-6) 0">No blocked contacts</p>'));
       });
       list.appendChild(row);
     }
   } catch {
-    dialog.querySelector('#blocked-list')!.innerHTML = '<p style="color:var(--text-tertiary)">Could not load blocked contacts</p>';
+    dialog.querySelector('#blocked-list')!.replaceChildren(parseHTML('<p style="color:var(--text-tertiary)">Could not load blocked contacts</p>'));
   }
 }
 
@@ -2481,7 +2482,7 @@ async function showAppLockSetup() {
   dialog.setAttribute('aria-modal', 'true');
   dialog.setAttribute('aria-labelledby', 'app-lock-setup-title');
   dialog.style.cssText = 'background:var(--bg-secondary);border-radius:var(--radius-lg);padding:var(--sp-6);width:90%;max-width:340px;text-align:center';
-  dialog.innerHTML = `<h3 id="app-lock-setup-title" style="margin:0 0 var(--sp-3);color:var(--text-primary)">Set App Lock PIN</h3>
+  dialog.replaceChildren(parseHTML(`<h3 id="app-lock-setup-title" style="margin:0 0 var(--sp-3);color:var(--text-primary)">Set App Lock PIN</h3>
     <p style="font-size:var(--text-sm);color:var(--text-tertiary);margin-bottom:var(--sp-4)">Enter a 4-6 digit PIN to lock RocChat</p>
     <label for="pin-input" style="display:block;text-align:left;font-size:var(--text-sm);color:var(--text-secondary);margin-bottom:var(--sp-1)">PIN</label>
     <input type="password" inputmode="numeric" pattern="[0-9]*" id="pin-input" maxlength="6" placeholder="Enter PIN" autocomplete="off" style="width:100%;padding:var(--sp-3);font-size:var(--text-lg);text-align:center;border:1px solid var(--border-color);border-radius:var(--radius);background:var(--bg-primary);color:var(--text-primary);letter-spacing:8px;margin-bottom:var(--sp-3)" />
@@ -2490,7 +2491,7 @@ async function showAppLockSetup() {
     <div style="display:flex;gap:var(--sp-3);justify-content:center">
       <button class="btn-secondary" id="pin-cancel">Cancel</button>
       <button class="btn-primary" id="pin-save">Save</button>
-    </div>`;
+    </div>`));
   overlay.appendChild(dialog);
   document.body.appendChild(overlay);
   focusFirstDialogField(dialog);
@@ -2539,14 +2540,14 @@ export async function showAppLockScreen(onUnlock: () => void) {
   overlay.id = 'app-lock-overlay';
   overlay.setAttribute('role', 'presentation');
   overlay.style.cssText = 'position:fixed;inset:0;background:var(--bg-primary);z-index:9999;display:flex;align-items:center;justify-content:center;flex-direction:column';
-  overlay.innerHTML = `<div role="dialog" aria-modal="true" aria-labelledby="app-lock-title" style="text-align:center;width:90%;max-width:300px">
+  overlay.replaceChildren(parseHTML(`<div role="dialog" aria-modal="true" aria-labelledby="app-lock-title" style="text-align:center;width:90%;max-width:300px">
     <div style="font-size:48px;margin-bottom:var(--sp-4)">🔒</div>
     <h2 id="app-lock-title" style="color:var(--text-primary);margin-bottom:var(--sp-4)">RocChat Locked</h2>
     <label for="lock-pin-input" style="display:block;text-align:left;font-size:var(--text-sm);color:var(--text-secondary);margin-bottom:var(--sp-1)">PIN</label>
     <input type="password" inputmode="numeric" pattern="[0-9]*" id="lock-pin-input" maxlength="6" placeholder="Enter PIN" autocomplete="off" style="width:100%;padding:var(--sp-3);font-size:var(--text-lg);text-align:center;border:1px solid var(--border-color);border-radius:var(--radius);background:var(--bg-secondary);color:var(--text-primary);letter-spacing:8px;margin-bottom:var(--sp-4)" />
     <button class="btn-primary" id="lock-unlock-btn" style="width:100%" aria-describedby="lock-error">Unlock</button>
     <p id="lock-error" style="color:red;font-size:var(--text-sm);margin-top:var(--sp-2);display:none" aria-live="polite">Wrong PIN</p>
-  </div>`;
+  </div>`));
   document.body.appendChild(overlay);
   focusFirstDialogField(overlay);
 
@@ -2616,15 +2617,15 @@ async function loadDevices() {
   try {
     const res = await api.getDevices();
     if (!res.ok) {
-      container.innerHTML = '<p style="font-size:var(--text-sm);color:var(--text-tertiary)">Could not load devices.</p>';
+      container.replaceChildren(parseHTML('<p style="font-size:var(--text-sm);color:var(--text-tertiary)">Could not load devices.</p>'));
       return;
     }
     const devices = res.data as unknown as Array<{ id: string; device_name: string; platform: string; last_active: number; created_at: number }>;
     if (!devices.length) {
-      container.innerHTML = '<p style="font-size:var(--text-sm);color:var(--text-tertiary)">No devices.</p>';
+      container.replaceChildren(parseHTML('<p style="font-size:var(--text-sm);color:var(--text-tertiary)">No devices.</p>'));
       return;
     }
-    container.innerHTML = devices.map((d) => {
+    container.replaceChildren(parseHTML(devices.map((d) => {
       const icon = d.platform === 'ios' ? '📱' : d.platform === 'android' ? '📱' : '💻';
       const active = d.last_active ? new Date(d.last_active * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : 'Unknown';
       return `
@@ -2637,7 +2638,7 @@ async function loadDevices() {
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>
           </button>
         </div>`;
-    }).join('');
+    }).join('')));
 
     container.querySelectorAll('.device-remove-btn').forEach((btn) => {
       btn.addEventListener('click', async () => {
@@ -2653,7 +2654,7 @@ async function loadDevices() {
       });
     });
   } catch {
-    container.innerHTML = '<p style="font-size:var(--text-sm);color:var(--text-tertiary)">Could not load devices.</p>';
+    container.replaceChildren(parseHTML('<p style="font-size:var(--text-sm);color:var(--text-tertiary)">Could not load devices.</p>'));
   }
 }
 

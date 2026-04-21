@@ -31,6 +31,7 @@ import { renderSettings, applyTheme, checkAppLock, showAppLockScreen } from './c
 import { getToken, getPreKeyCount, uploadPreKeys, getMe, registerPushToken, getTransparencyReports, getSupportersWall } from './api.js';
 import { migrateLegacySecrets, pruneOldDrafts } from './crypto/secure-store.js';
 import { installCommandPaletteHotkey, registerPaletteCommand } from './components/cmdk.js';
+import { syncChannel, setRocClientEnabled, isRocClient } from './components/roc-client.js';
 
 // ── Trusted Types policy (defense-in-depth) ──
 // We do not enforce via CSP yet (legacy innerHTML callsites exist), but
@@ -84,6 +85,10 @@ async function init() {
 
   // Garbage-collect drafts older than 30 days (best-effort, non-blocking)
   pruneOldDrafts().catch(() => { /* ignore IDB errors on first boot */ });
+
+  // Pull authoritative Roc Client (canary) channel state. Non-blocking;
+  // if the user is unauthenticated this no-ops on the server side.
+  syncChannel().catch(() => { /* offline; cached value already applied */ });
 
   // Apply saved theme
   const savedTheme = localStorage.getItem('rocchat_theme') || 'auto';
@@ -152,6 +157,16 @@ function initAfterUnlock() {
       await mod.showAppLockScreen(() => location.reload());
     } catch { location.reload(); }
   } });
+  registerPaletteCommand({
+    id: 'app.roc-client.toggle',
+    label: 'Toggle Roc Client (canary) channel',
+    hint: 'Opt in/out of experimental builds',
+    action: async () => {
+      const next = !isRocClient();
+      const ok = await setRocClientEnabled(next);
+      if (!ok) alert('Could not update channel.');
+    },
+  });
 
   // Numeric tab shortcuts
   window.addEventListener('keydown', (e) => {

@@ -114,13 +114,21 @@ final class SecureStorage {
         ]
         SecItemDelete(deleteQuery as CFDictionary)
 
-        let addQuery: [String: Any] = [
+        // Build access control. Default keys are first-unlock, this-device-only.
+        // High-sensitivity items (master key) get the same protection class
+        // because using `.biometryCurrentSet` would lock users out after
+        // adding/removing a finger or face. Apps that want biometry-gated
+        // unlock should layer LAContext on top in the unlock flow instead.
+        var addQuery: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrAccount as String: tag,
             kSecAttrService as String: "com.rocchat.secure-storage",
             kSecValueData as String: data,
             kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
         ]
+        // Mark the item Synchronizable=false explicitly so iCloud Keychain
+        // never attempts to sync the master key off-device.
+        addQuery[kSecAttrSynchronizable as String] = kCFBooleanFalse
         return SecItemAdd(addQuery as CFDictionary, nil) == errSecSuccess
     }
 }

@@ -3283,3 +3283,66 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
   color: var(--text-tertiary);
   font-size: 13px;
 }
+
+/* ── Roc Client (canary channel) ─────────────────────────────────── */
+.roc-client-toggle {
+  margin-top: 16px;
+}
+.roc-client-card {
+  display: flex;
+  gap: 16px;
+  padding: 18px;
+  border-radius: 16px;
+  background: linear-gradient(135deg, rgba(212,175,55,0.10), rgba(64,224,208,0.06));
+  border: 1px solid rgba(212,175,55,0.35);
+  align-items: flex-start;
+}
+.roc-client-mark {
+  width: 48px;
+  height: 48px;
+  flex-shrink: 0;
+  border-radius: 12px;
+}
+.roc-client-copy h3 {
+  margin: 0 0 6px;
+  font-size: var(--text-base, 15px);
+  color: var(--roc-gold, #D4AF37);
+}
+.roc-client-copy p {
+  margin: 0 0 10px;
+  font-size: var(--text-sm, 13px);
+  color: var(--text-secondary);
+  line-height: 1.55;
+}
+.roc-client-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--text-sm, 13px);
+  cursor: pointer;
+}
+.roc-client-hint {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  margin-top: 8px !important;
+}
+html[data-channel="roc"] .roc-client-card::after {
+  content: 'CANARY';
+  position: absolute;
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  color: var(--roc-gold, #D4AF37);
+  margin-left: 8px;
+  font-weight: 700;
+}
+html[data-channel="roc"] header[role="banner"]::after,
+html[data-channel="roc"] .top-bar::after {
+  content: 'Roc Client';
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  color: var(--roc-gold, #D4AF37);
+  text-transform: uppercase;
+  margin-left: 12px;
+  align-self: center;
+  opacity: 0.9;
+}

@@ -7,6 +7,7 @@ import { generateQRCodeSVG } from '../auth/qr-login.js';
 import { clearAllSecrets, deleteSecret, getSecretString, putSecretString } from '../crypto/secure-store.js';
 import { showToast } from './toast.js';
 import { encryptProfileField, decryptProfileField } from '../crypto/profile-crypto.js';
+import { renderRocClientToggle } from './roc-client.js';
 
 const APP_LOCK_KEY = 'rocchat_app_lock_v1';
 const APP_LOCK_LEGACY_KEY = 'rocchat_app_lock_pin';
@@ -578,6 +579,8 @@ export function renderSettings(container: HTMLElement) {
           </div>
         </div>
 
+        <div class="settings-section" id="settings-roc-client-mount"></div>
+
         <div class="settings-section" style="border:1px solid var(--roc-gold,#D4AF37);border-radius:var(--radius-lg);padding:var(--sp-4);background:rgba(212,175,55,0.05)">
           <h3 style="color:var(--roc-gold,#D4AF37)">🪶 The Roc Family Manifesto</h3>
           <div style="font-size:var(--text-sm);color:var(--text-secondary);line-height:1.7">
@@ -929,21 +932,66 @@ export function renderSettings(container: HTMLElement) {
   // Export data
   document.getElementById('export-data-btn')?.addEventListener('click', async () => {
     const btn = document.getElementById('export-data-btn') as HTMLButtonElement;
+    const passphrase = prompt(
+      'Enter a strong passphrase to encrypt your export.\n' +
+      'Leave blank to download unencrypted JSON (NOT recommended).',
+    );
+    if (passphrase === null) return; // user cancelled
     btn.disabled = true;
-    btn.textContent = 'Exporting...';
+    btn.textContent = 'Exporting…';
     try {
       const res = await api.exportData();
-      if (res.ok) {
-        const blob = new Blob([JSON.stringify(res.data.export, null, 2)], { type: 'application/json' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `rocchat-export-${Date.now()}.json`;
-        a.click();
-        URL.revokeObjectURL(url);
+      if (!res.ok) { alert('Export failed'); return; }
+      const json = JSON.stringify(res.data.export, null, 2);
+      let blob: Blob;
+      let filename: string;
+      if (passphrase.length >= 12) {
+        // Encrypt with PBKDF2(SHA-256, 600k iters) -> AES-256-GCM.
+        // 600k matches OWASP 2023 guidance for PBKDF2-HMAC-SHA256.
+        const enc = new TextEncoder();
+        const salt = crypto.getRandomValues(new Uint8Array(16));
+        const iv = crypto.getRandomValues(new Uint8Array(12));
+        const baseKey = await crypto.subtle.importKey(
+          'raw', enc.encode(passphrase), 'PBKDF2', false, ['deriveKey'],
+        );
+        const aesKey = await crypto.subtle.deriveKey(
+          { name: 'PBKDF2', salt: salt as unknown as BufferSource, iterations: 600_000, hash: 'SHA-256' },
+          baseKey,
+          { name: 'AES-GCM', length: 256 },
+          false,
+          ['encrypt'],
+        );
+        const ct = new Uint8Array(
+          await crypto.subtle.encrypt({ name: 'AES-GCM', iv: iv as unknown as BufferSource }, aesKey, enc.encode(json)),
+        );
+        // Wrapper format: rocchat-export-v1 (versioned, self-describing)
+        const envelope = {
+          format: 'rocchat-export-v1',
+          kdf: 'PBKDF2-SHA256',
+          iterations: 600_000,
+          cipher: 'AES-256-GCM',
+          salt: btoa(String.fromCharCode(...salt)),
+          iv: btoa(String.fromCharCode(...iv)),
+          ciphertext: btoa(String.fromCharCode(...ct)),
+          exported_at: new Date().toISOString(),
+        };
+        blob = new Blob([JSON.stringify(envelope, null, 2)], { type: 'application/json' });
+        filename = `rocchat-export-encrypted-${Date.now()}.json`;
       } else {
-        alert('Export failed');
+        if (passphrase.length > 0) {
+          alert('Passphrase too short (need at least 12 characters). Aborting.');
+          return;
+        }
+        blob = new Blob([json], { type: 'application/json' });
+        filename = `rocchat-export-${Date.now()}.json`;
       }
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(url);
+      showToast(passphrase.length >= 12 ? 'Encrypted export downloaded' : 'Plain export downloaded');
     } catch { alert('Export failed'); }
     btn.disabled = false;
     btn.textContent = 'Export My Data';
@@ -985,6 +1033,10 @@ export function renderSettings(container: HTMLElement) {
   if (typeof (window as any).lucide !== 'undefined') {
     (window as any).lucide.createIcons();
   }
+
+  // Mount Roc Client (canary) toggle.
+  const rocClientMount = document.getElementById('settings-roc-client-mount');
+  if (rocClientMount) renderRocClientToggle(rocClientMount);
 
   // Edit display name
   document.getElementById('edit-name-btn')?.addEventListener('click', () => {

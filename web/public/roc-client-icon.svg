@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Roc Client">
+  <!--
+    Roc Client mark — a stylised roc bird in flight.
+    The roc is a giant mythical bird; we render it as an angular,
+    chevron-like silhouette to evoke wings spread over distance.
+    Single-color, scales cleanly down to a 16x16 favicon and up to
+    iOS / Android launcher icons.
+  -->
+  <defs>
+    <linearGradient id="rocGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#c8a96b"/>
+      <stop offset="55%" stop-color="#a37a3d"/>
+      <stop offset="100%" stop-color="#6e4a1e"/>
+    </linearGradient>
+  </defs>
+  <rect x="0" y="0" width="64" height="64" rx="14" ry="14" fill="#0d0a06"/>
+  <!-- Body -->
+  <path d="M32 41
+           L24 28
+           L20 32
+           L14 30
+           L22 26
+           L18 22
+           L26 24
+           L32 18
+           L38 24
+           L46 22
+           L42 26
+           L50 30
+           L44 32
+           L40 28
+           Z"
+        fill="url(#rocGradient)"
+        stroke="#1a120a"
+        stroke-width="1.4"
+        stroke-linejoin="round"/>
+  <!-- Tail -->
+  <path d="M32 41 L28 50 L32 47 L36 50 Z"
+        fill="url(#rocGradient)"
+        stroke="#1a120a"
+        stroke-width="1.2"
+        stroke-linejoin="round"/>
+  <!-- Eye accent -->
+  <circle cx="32" cy="22" r="1.6" fill="#0d0a06"/>
+</svg>

@@ -1,4 +1,4 @@
-const CACHE_NAME = 'rocchat-v5';
+const CACHE_NAME = 'rocchat-v6';
 const SHELL_ASSETS = [
   '/',
   '/index.html',
@@ -6,6 +6,52 @@ const SHELL_ASSETS = [
   '/favicon.svg',
   '/manifest.json',
 ];
+
+// Runtime cache budget. SW caches grow unbounded by default; we cap the
+// hashed-asset cache to keep on-device storage modest. Eviction is approximate
+// LRU based on Response "date" header (browsers fill it on store).
+const RUNTIME_BYTE_BUDGET = 8 * 1024 * 1024; // 8 MB
+const RUNTIME_ENTRY_BUDGET = 96;
+
+async function trimCache(cacheName) {
+  try {
+    const cache = await caches.open(cacheName);
+    const keys = await cache.keys();
+    if (keys.length <= RUNTIME_ENTRY_BUDGET) return;
+    // Drop the oldest entries first.
+    const stamped = await Promise.all(keys.map(async (req) => {
+      const res = await cache.match(req);
+      const dateHeader = res?.headers.get('date');
+      const ts = dateHeader ? Date.parse(dateHeader) : 0;
+      return { req, ts };
+    }));
+    stamped.sort((a, b) => a.ts - b.ts);
+    const overflow = stamped.length - RUNTIME_ENTRY_BUDGET;
+    for (let i = 0; i < overflow; i++) {
+      await cache.delete(stamped[i].req);
+    }
+  } catch { /* best effort */ }
+}
+
+async function estimateAndTrim(cacheName) {
+  if (!navigator.storage?.estimate) return trimCache(cacheName);
+  try {
+    const { usage = 0, quota = 0 } = await navigator.storage.estimate();
+    if (quota > 0 && usage / quota > 0.6) {
+      // Approaching browser quota — prune aggressively.
+      const cache = await caches.open(cacheName);
+      const keys = await cache.keys();
+      for (let i = 0; i < Math.ceil(keys.length / 4); i++) {
+        await cache.delete(keys[i]);
+      }
+      return;
+    }
+    if (usage > RUNTIME_BYTE_BUDGET) await trimCache(cacheName);
+    else await trimCache(cacheName);
+  } catch {
+    await trimCache(cacheName);
+  }
+}
 
 // Install — cache app shell & activate immediately
 self.addEventListener('install', (event) => {
@@ -110,7 +156,10 @@ self.addEventListener('fetch', (event) => {
         return fetch(event.request).then((response) => {
           if (response.ok) {
             const clone = response.clone();
-            caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
+            caches.open(CACHE_NAME).then(async (cache) => {
+              await cache.put(event.request, clone);
+              estimateAndTrim(CACHE_NAME);
+            });
           }
           return response;
         });

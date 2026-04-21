@@ -1195,6 +1195,7 @@ struct ConversationView: View {
                         .foregroundColor(.rocGold.opacity(0.7))
                 }
                 .padding(.trailing, 8)
+                .accessibilityLabel("Open sticker picker")
             }
             .background(
                 RoundedRectangle(cornerRadius: 22, style: .continuous)
@@ -1228,6 +1229,8 @@ struct ConversationView: View {
             }
             .buttonStyle(.plain)
             .disabled(inputText.trimmingCharacters(in: .whitespaces).isEmpty || isSending)
+            .accessibilityLabel(isSending ? "Sending message" : "Send message")
+            .accessibilityHint("Long-press to schedule")
             .contextMenu {
                 Button {
                     showScheduleSheet = true

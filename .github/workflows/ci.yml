@@ -1,0 +1,86 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  web:
+    name: Web (Vite + tsc)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: ./web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - run: npm run build
+      # Surface dependency vulnerabilities (warning only — does not fail CI).
+      - run: npm audit --omit=dev --audit-level=moderate || true
+
+  backend:
+    name: Backend (Workers + tsc)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: ./backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - run: npx tsc --noEmit
+      - run: npx wrangler deploy --dry-run --outdir=dist
+      - run: npm audit --omit=dev --audit-level=moderate || true
+
+  android:
+    name: Android (Gradle assemble)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: ./android
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+      - uses: gradle/actions/setup-gradle@v3
+      - run: ./gradlew assembleDebug --no-daemon
+
+  ios:
+    name: iOS (xcodebuild)
+    runs-on: macos-14
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install xcodegen
+        run: brew install xcodegen
+      - name: Regenerate Xcode project
+        working-directory: ./ios
+        run: xcodegen generate
+      - name: Build for iOS Simulator
+        working-directory: ./ios
+        run: |
+          xcodebuild \
+            -project RocChat.xcodeproj \
+            -scheme RocChat \
+            -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
+            build

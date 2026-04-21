@@ -40,16 +40,30 @@ object SecureStorage {
             KeyProperties.KEY_ALGORITHM_AES,
             "AndroidKeyStore"
         )
-        keyGen.init(
-            KeyGenParameterSpec.Builder(
-                KEYSTORE_ALIAS,
-                KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT
-            )
-                .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
-                .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
-                .setKeySize(256)
-                .build()
+        val builder = KeyGenParameterSpec.Builder(
+            KEYSTORE_ALIAS,
+            KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT
         )
+            .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+            .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+            .setKeySize(256)
+
+        // Prefer StrongBox (dedicated secure element) on Pixel 3+/devices that
+        // support it. Falls back to TEE-backed Keystore if the request is
+        // rejected with StrongBoxUnavailableException.
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+            try {
+                builder.setIsStrongBoxBacked(true)
+                keyGen.init(builder.build())
+                return keyGen.generateKey()
+            } catch (_: android.security.keystore.StrongBoxUnavailableException) {
+                builder.setIsStrongBoxBacked(false)
+            } catch (_: Exception) {
+                builder.setIsStrongBoxBacked(false)
+            }
+        }
+
+        keyGen.init(builder.build())
         return keyGen.generateKey()
     }
 

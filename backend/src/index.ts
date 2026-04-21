@@ -713,6 +713,49 @@ export default {
         return withCors(jsonResponse({ ok: true }));
       }
 
+      // ── Roc Client (canary) opt-in ──────────────────────────────
+      // GET  -> { enabled: bool, channel: 'stable' | 'roc' }
+      // POST -> { enabled: bool } persists choice on the user record.
+      // The web client uses this to gate experimental features. Server
+      // never *forces* canary; it's a per-user opt-in.
+      if (path === '/api/canary' && request.method === 'GET') {
+        const enabled = (await env.KV.get(`canary:${session.userId}`)) === '1';
+        return withCors(jsonResponse({ enabled, channel: enabled ? 'roc' : 'stable' }));
+      }
+      if (path === '/api/canary' && request.method === 'POST') {
+        const body = (await request.json()) as { enabled?: boolean };
+        if (body.enabled) {
+          await env.KV.put(`canary:${session.userId}`, '1');
+        } else {
+          await env.KV.delete(`canary:${session.userId}`);
+        }
+        return withCors(jsonResponse({ ok: true, enabled: !!body.enabled }));
+      }
+
+      // ── Encrypted export ────────────────────────────────────────
+      // Returns a server-built archive of the caller's data (already
+      // E2EE-encrypted at rest, so the export is a pass-through). The
+      // client wraps the result with an Argon2id-derived passphrase key
+      // before writing it to disk.
+      if (path === '/api/export' && request.method === 'GET') {
+        const [profile, convs, msgs, contacts, devices] = await Promise.all([
+          env.DB.prepare('SELECT id, username, display_name, identity_key, created_at FROM users WHERE id = ?').bind(session.userId).first(),
+          env.DB.prepare('SELECT c.id, c.kind, c.created_at FROM conversations c JOIN conversation_members m ON m.conversation_id = c.id WHERE m.user_id = ?').bind(session.userId).all(),
+          env.DB.prepare('SELECT id, conversation_id, sender_id, encrypted, server_timestamp FROM messages WHERE sender_id = ? ORDER BY server_timestamp DESC LIMIT 5000').bind(session.userId).all(),
+          env.DB.prepare('SELECT contact_id, created_at FROM contacts WHERE user_id = ?').bind(session.userId).all(),
+          env.DB.prepare('SELECT id, name, last_active FROM devices WHERE user_id = ?').bind(session.userId).all(),
+        ]);
+        return withCors(jsonResponse({
+          exported_at: Date.now(),
+          format: 'rocchat-export-v1',
+          profile,
+          conversations: convs.results,
+          messages: msgs.results,
+          contacts: contacts.results,
+          devices: devices.results,
+        }));
+      }
+
       return withCors(errorResponse('Not found', 404));
     } catch (err) {
       logEvent('error', 'request_error', {

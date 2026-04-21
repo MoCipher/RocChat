@@ -1,7 +1,35 @@
 <?xml version="1.0" encoding="utf-8"?>
 <network-security-config>
+    <!--
+        Hardened defaults: HTTPS-only everywhere, no user-installed CAs in
+        production builds. Code-side certificate-pinning lives in APIClient
+        (chat.mocipher.com + rocchat-api.spoass.workers.dev SHA-256 leaf).
+
+        TODO(operator): once the SubjectPublicKeyInfo (SPKI) SHA-256 of each
+        leaf certificate has been generated with
+            openssl x509 -in cert.pem -pubkey -noout |
+            openssl pkey -pubin -outform der |
+            openssl dgst -sha256 -binary |
+            openssl enc -base64
+        add a <pin-set expiration="..."> block per domain. Wrong pins WILL
+        brick the app, so this is left out of source until the values are
+        verified against production.
+    -->
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
     <domain-config cleartextTrafficPermitted="false">
         <domain includeSubdomains="true">chat.mocipher.com</domain>
         <domain includeSubdomains="true">rocchat-api.spoass.workers.dev</domain>
     </domain-config>
+    <debug-overrides>
+        <trust-anchors>
+            <certificates src="system" />
+            <certificates src="user" />
+        </trust-anchors>
+    </debug-overrides>
 </network-security-config>
+
+

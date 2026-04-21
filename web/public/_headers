@@ -1,7 +1,29 @@
 /*
-  Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; connect-src 'self' wss://rocchat-api.spoass.workers.dev https://rocchat-api.spoass.workers.dev; img-src 'self' data: blob:; media-src 'self' blob:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; manifest-src 'self'; worker-src 'self'
+  Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; connect-src 'self' wss://chat.mocipher.com wss://rocchat-api.spoass.workers.dev https://chat.mocipher.com https://rocchat-api.spoass.workers.dev; img-src 'self' data: blob:; media-src 'self' blob:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; manifest-src 'self'; worker-src 'self'; object-src 'none'
+  Content-Security-Policy-Report-Only: default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; connect-src 'self' wss://chat.mocipher.com wss://rocchat-api.spoass.workers.dev https://chat.mocipher.com https://rocchat-api.spoass.workers.dev; img-src 'self' data: blob:; media-src 'self' blob:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; manifest-src 'self'; worker-src 'self'; object-src 'none'; require-trusted-types-for 'script'; trusted-types rocchat-default
   X-Content-Type-Options: nosniff
   X-Frame-Options: DENY
   Referrer-Policy: strict-origin-when-cross-origin
-  Permissions-Policy: camera=(self), microphone=(self), geolocation=()
-  Strict-Transport-Security: max-age=31536000; includeSubDomains
+  Permissions-Policy: camera=(self), microphone=(self), geolocation=(), interest-cohort=(), browsing-topics=(), serial=(), usb=(), bluetooth=(), gamepad=(), magnetometer=(), accelerometer=(), gyroscope=(), payment=(), publickey-credentials-create=(self), publickey-credentials-get=(self)
+  Strict-Transport-Security: max-age=63072000; includeSubDomains; preload
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Resource-Policy: same-origin
+  X-DNS-Prefetch-Control: off
+  X-Permitted-Cross-Domain-Policies: none
+  Origin-Agent-Cluster: ?1
+
+# Hashed Vite assets are immutable — long cache + immutable
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable
+
+# HTML & service worker — short cache so deploys roll out fast
+/
+  Cache-Control: no-cache
+/index.html
+  Cache-Control: no-cache
+/sw.js
+  Cache-Control: no-cache, no-store, must-revalidate
+/manifest.json
+  Cache-Control: public, max-age=300
+/status.html
+  Cache-Control: public, max-age=60

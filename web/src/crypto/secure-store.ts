@@ -152,6 +152,52 @@ export async function clearAllSecrets(): Promise<void> {
 }
 
 /**
+ * Garbage-collect stale draft entries (rocchat_draft_*) older than `maxAgeMs`.
+ * Drafts are stored without a TTL; without periodic cleanup IDB grows unbounded.
+ * Called from app boot.
+ */
+export async function pruneOldDrafts(maxAgeMs: number = 30 * 24 * 60 * 60 * 1000): Promise<number> {
+  const META_KEY = (n: string) => `${n}__meta`;
+  const db = await openDb();
+  const now = Date.now();
+  let removed = 0;
+  await new Promise<void>((resolve, reject) => {
+    const tx = db.transaction(STORE_SECRETS, 'readwrite');
+    const store = tx.objectStore(STORE_SECRETS);
+    const req = store.getAllKeys();
+    req.onsuccess = () => {
+      const keys = req.result as IDBValidKey[];
+      const drafts = keys.filter((k): k is string => typeof k === 'string' && k.startsWith('rocchat_draft_') && !k.endsWith('__meta'));
+      let pending = drafts.length;
+      if (pending === 0) { resolve(); return; }
+      drafts.forEach((k) => {
+        const metaReq = store.get(META_KEY(k));
+        metaReq.onsuccess = () => {
+          const meta = metaReq.result as { ts?: number } | undefined;
+          if (meta?.ts && now - meta.ts > maxAgeMs) {
+            store.delete(k);
+            store.delete(META_KEY(k));
+            removed++;
+          } else if (!meta) {
+            // No timestamp recorded yet — set one now so we can age it later
+            store.put({ ts: now }, META_KEY(k));
+          }
+          if (--pending === 0) resolve();
+        };
+        metaReq.onerror = () => { if (--pending === 0) resolve(); };
+      });
+    };
+    req.onerror = () => reject(req.error);
+  });
+  return removed;
+}
+
+/** Touch a draft's metadata timestamp (called on every save). */
+export async function touchSecretTimestamp(name: string): Promise<void> {
+  try { await idbPut(STORE_SECRETS, `${name}__meta`, { ts: Date.now() }); } catch { /* ignore */ }
+}
+
+/**
  * One-time migration: pull legacy plaintext entries out of localStorage
  * into the encrypted IDB store, then scrub the LS copies.
  */

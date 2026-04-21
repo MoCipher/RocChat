@@ -795,12 +795,17 @@ function applyCors(response: Response, request?: Request): Response {
   headers.set('X-Content-Type-Options', 'nosniff');
   headers.set('X-Frame-Options', 'DENY');
   headers.set('Referrer-Policy', 'strict-origin-when-cross-origin');
-  headers.set('Permissions-Policy', 'camera=(self), microphone=(self), geolocation=()');
+  headers.set('Permissions-Policy', 'camera=(self), microphone=(self), geolocation=(), interest-cohort=(), browsing-topics=(), serial=(), usb=(), bluetooth=(), gamepad=(), magnetometer=(), accelerometer=(), gyroscope=(), payment=()');
   headers.set(
     'Content-Security-Policy',
-    "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; connect-src 'self' wss://chat.mocipher.com wss://rocchat-api.spoass.workers.dev https://rocchat-api.spoass.workers.dev; img-src 'self' data: blob:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; manifest-src 'self';",
+    "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; connect-src 'self' wss://chat.mocipher.com wss://rocchat-api.spoass.workers.dev https://rocchat-api.spoass.workers.dev; img-src 'self' data: blob:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; manifest-src 'self'; object-src 'none';",
   );
-  headers.set('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  headers.set('Strict-Transport-Security', 'max-age=63072000; includeSubDomains; preload');
+  headers.set('Cross-Origin-Opener-Policy', 'same-origin');
+  headers.set('Cross-Origin-Resource-Policy', 'same-origin');
+  headers.set('X-DNS-Prefetch-Control', 'off');
+  headers.set('X-Permitted-Cross-Domain-Policies', 'none');
+  headers.set('Origin-Agent-Cluster', '?1');
   return new Response(response.body, {
     status: response.status,
     statusText: response.statusText,

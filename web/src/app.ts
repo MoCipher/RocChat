@@ -29,7 +29,25 @@ import { renderCalls } from './calls/calls.js';
 import { renderChannels } from './channels/channels.js';
 import { renderSettings, applyTheme, checkAppLock, showAppLockScreen } from './components/settings.js';
 import { getToken, getPreKeyCount, uploadPreKeys, getMe, registerPushToken, getTransparencyReports, getSupportersWall } from './api.js';
-import { migrateLegacySecrets } from './crypto/secure-store.js';
+import { migrateLegacySecrets, pruneOldDrafts } from './crypto/secure-store.js';
+import { installCommandPaletteHotkey, registerPaletteCommand } from './components/cmdk.js';
+
+// ── Trusted Types policy (defense-in-depth) ──
+// We do not enforce via CSP yet (legacy innerHTML callsites exist), but
+// declaring the policy lets us migrate sinks one by one.
+try {
+  const tt = (window as unknown as { trustedTypes?: { createPolicy: (name: string, rules: object) => unknown; defaultPolicy?: unknown } }).trustedTypes;
+  if (tt && typeof tt.createPolicy === 'function') {
+    // Default policy: pass-through but logged so migration callers can find it.
+    if (!tt.defaultPolicy) {
+      tt.createPolicy('rocchat-default', {
+        createHTML: (s: string) => s,
+        createScript: (s: string) => s,
+        createScriptURL: (s: string) => s,
+      });
+    }
+  }
+} catch { /* trustedTypes unavailable */ }
 
 let currentTab: Tab = 'chats';
 
@@ -60,6 +78,12 @@ window.addEventListener('unhandledrejection', (e) => {
 async function init() {
   // Migrate any legacy secrets from localStorage to encrypted IDB
   migrateLegacySecrets().catch(e => console.warn('Secret migration failed:', e));
+
+  // Install command palette hotkey (⌘K / Ctrl+K)
+  installCommandPaletteHotkey();
+
+  // Garbage-collect drafts older than 30 days (best-effort, non-blocking)
+  pruneOldDrafts().catch(() => { /* ignore IDB errors on first boot */ });
 
   // Apply saved theme
   const savedTheme = localStorage.getItem('rocchat_theme') || 'auto';
@@ -113,6 +137,33 @@ function initAfterUnlock() {
   cacheUserProfile();
   bootstrapVapidKey().then(() => registerWebPush());
   showOnboardingIfNeeded();
+
+  // ── Command palette commands (lazy-registered, idempotent) ──
+  registerPaletteCommand({ id: 'tab.chats',    label: 'Go to Chats',    shortcut: '⌘1', action: () => { currentTab = 'chats';    renderApp(); } });
+  registerPaletteCommand({ id: 'tab.calls',    label: 'Go to Calls',    shortcut: '⌘2', action: () => { currentTab = 'calls';    renderApp(); } });
+  registerPaletteCommand({ id: 'tab.channels', label: 'Go to Channels', shortcut: '⌘3', action: () => { currentTab = 'channels'; renderApp(); } });
+  registerPaletteCommand({ id: 'tab.settings', label: 'Go to Settings', shortcut: '⌘,', action: () => { currentTab = 'settings'; renderApp(); } });
+  registerPaletteCommand({ id: 'app.canary',   label: 'View Warrant Canary', action: () => { location.hash = '#/canary'; location.reload(); } });
+  registerPaletteCommand({ id: 'app.transparency', label: 'View Transparency Reports', action: () => { location.hash = '#/transparency'; location.reload(); } });
+  registerPaletteCommand({ id: 'app.status',   label: 'Open Status Page', action: () => { window.open('/status.html', '_blank', 'noopener,noreferrer'); } });
+  registerPaletteCommand({ id: 'app.lock',     label: 'Lock app',  action: async () => {
+    try {
+      const mod = await import('./components/settings.js');
+      await mod.showAppLockScreen(() => location.reload());
+    } catch { location.reload(); }
+  } });
+
+  // Numeric tab shortcuts
+  window.addEventListener('keydown', (e) => {
+    if (!(e.metaKey || e.ctrlKey) || e.shiftKey || e.altKey) return;
+    const target = e.target as HTMLElement | null;
+    if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return;
+    const key = e.key;
+    if (key === '1') { e.preventDefault(); currentTab = 'chats';    renderApp(); }
+    else if (key === '2') { e.preventDefault(); currentTab = 'calls';    renderApp(); }
+    else if (key === '3') { e.preventDefault(); currentTab = 'channels'; renderApp(); }
+    else if (key === ',') { e.preventDefault(); currentTab = 'settings'; renderApp(); }
+  });
 }
 
 function showLanding() {

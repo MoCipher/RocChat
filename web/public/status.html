@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#D4AF37" />
+  <meta name="robots" content="index, follow" />
+  <title>RocChat — Status</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <style>
+    :root {
+      color-scheme: dark light;
+      --bg: #0D1117;
+      --surface: #1C1814;
+      --text: #E8E2D4;
+      --muted: #A09888;
+      --gold: #D4AF37;
+      --green: #1EA672;
+      --amber: #E5A00D;
+      --red: #DC3545;
+      --border: rgba(139, 115, 85, 0.18);
+    }
+    * { box-sizing: border-box }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+      padding: 24px 16px;
+    }
+    main {
+      max-width: 720px;
+      margin: 0 auto;
+    }
+    h1 {
+      color: var(--gold);
+      font-size: 28px;
+      margin: 0 0 4px;
+    }
+    .subtitle { color: var(--muted); margin: 0 0 24px; font-size: 14px }
+    .status-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 20px;
+      margin-bottom: 16px;
+    }
+    .status-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 12px 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .status-row:last-child { border-bottom: 0 }
+    .status-name { font-weight: 500 }
+    .status-pill {
+      padding: 4px 10px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.4px;
+      text-transform: uppercase;
+    }
+    .status-pill.ok { background: rgba(30, 166, 114, 0.15); color: var(--green) }
+    .status-pill.degraded { background: rgba(229, 160, 13, 0.15); color: var(--amber) }
+    .status-pill.down { background: rgba(220, 53, 69, 0.15); color: var(--red) }
+    .status-pill.unknown { background: rgba(160, 152, 136, 0.15); color: var(--muted) }
+    .updated { color: var(--muted); font-size: 12px; margin-top: 12px }
+    a { color: var(--gold); text-decoration: none }
+    a:hover { text-decoration: underline }
+    footer { margin-top: 32px; color: var(--muted); font-size: 13px; text-align: center }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>🪶 RocChat Status</h1>
+    <p class="subtitle">Live health of API, WebSocket relay, and supporting services.</p>
+
+    <div class="status-card" id="card">
+      <div class="status-row">
+        <span class="status-name">API (rocchat-api)</span>
+        <span class="status-pill unknown" id="api">Checking…</span>
+      </div>
+      <div class="status-row">
+        <span class="status-name">WebSocket relay</span>
+        <span class="status-pill unknown" id="ws">Checking…</span>
+      </div>
+      <div class="status-row">
+        <span class="status-name">Push notifications</span>
+        <span class="status-pill unknown" id="push">Checking…</span>
+      </div>
+      <div class="status-row">
+        <span class="status-name">Web app (Pages)</span>
+        <span class="status-pill ok" id="web">Operational</span>
+      </div>
+      <div class="updated" id="updated"></div>
+    </div>
+
+    <p class="subtitle">
+      RocChat is fully self-hosted on Cloudflare Workers, D1, R2, and KV. No third-party trackers,
+      analytics, or telemetry. <a href="/">← Back to RocChat</a>
+    </p>
+
+    <footer>
+      Subscribe to incidents: RSS coming soon. Issues? Email <a href="mailto:status@chat.mocipher.com">status@chat.mocipher.com</a>.
+    </footer>
+  </main>
+
+  <script>
+    (async () => {
+      const setPill = (id, status, label) => {
+        const el = document.getElementById(id);
+        el.className = 'status-pill ' + status;
+        el.textContent = label;
+      };
+      const apiBase = 'https://rocchat-api.spoass.workers.dev';
+      const start = performance.now();
+      try {
+        const r = await fetch(apiBase + '/api/health', { cache: 'no-store' });
+        const ms = Math.round(performance.now() - start);
+        if (r.ok) {
+          setPill('api', 'ok', 'Operational · ' + ms + 'ms');
+          setPill('push', 'ok', 'Operational');
+        } else if (r.status >= 500) {
+          setPill('api', 'down', 'Down (' + r.status + ')');
+          setPill('push', 'unknown', 'Unknown');
+        } else {
+          setPill('api', 'degraded', 'Degraded (' + r.status + ')');
+          setPill('push', 'unknown', 'Unknown');
+        }
+      } catch {
+        setPill('api', 'down', 'Unreachable');
+        setPill('push', 'unknown', 'Unknown');
+      }
+      // WebSocket reachability
+      try {
+        await new Promise((resolve, reject) => {
+          const t = setTimeout(() => { reject(new Error('timeout')); try { ws.close(); } catch {} }, 4000);
+          const ws = new WebSocket('wss://rocchat-api.spoass.workers.dev/ws/health');
+          ws.onopen = () => { clearTimeout(t); ws.close(); resolve(); };
+          ws.onerror = () => { clearTimeout(t); reject(new Error('error')); };
+        });
+        setPill('ws', 'ok', 'Operational');
+      } catch {
+        setPill('ws', 'degraded', 'Reachability uncertain');
+      }
+      document.getElementById('updated').textContent = 'Last checked: ' + new Date().toLocaleString();
+    })();
+  </script>
+</body>
+</html>

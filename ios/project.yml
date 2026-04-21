@@ -29,6 +29,9 @@ targets:
         INFOPLIST_KEY_NSCameraUsageDescription: "RocChat needs camera access for video calls"
         INFOPLIST_KEY_NSMicrophoneUsageDescription: "RocChat needs microphone access for voice and video calls"
         INFOPLIST_KEY_NSFaceIDUsageDescription: "RocChat uses Face ID to protect your messages"
+        # ATS defaults already enforce HTTPS-only with TLS 1.2+. No exceptions
+        # required because both pinned hosts (chat.mocipher.com and
+        # rocchat-api.spoass.workers.dev) satisfy ATS by default.
         PRODUCT_BUNDLE_IDENTIFIER: com.mocipher.rocchat
         MARKETING_VERSION: "0.1.0"
         CURRENT_PROJECT_VERSION: 1

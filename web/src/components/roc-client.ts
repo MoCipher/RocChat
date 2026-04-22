@@ -1,5 +1,5 @@
 /**
- * Roc Client (canary channel)
+ * Roc Client (Roc Bird channel)
  * --------------------------------------------------------------------------
  * A tiny opt-in surface that lets users join the experimental release
  * channel. When `enabled` is true the global `window.__rocChannel` flag
@@ -13,7 +13,7 @@
  *   GET  /api/canary  -> { enabled: boolean, channel: 'stable' | 'roc' }
  *   POST /api/canary  -> { ok: true, enabled }
  *
- * The canary flag is per-user, persisted in KV server-side, AND mirrored
+ * The release-channel flag is per-user, persisted in KV server-side, AND mirrored
  * to localStorage so cold loads can bias UI before the network call
  * resolves. The localStorage value is treated as a hint only — the
  * server response is always authoritative.
@@ -75,7 +75,7 @@ export async function syncChannel(): Promise<ReleaseChannel> {
 }
 
 /**
- * Toggle membership in the Roc Client channel.
+ * Toggle membership in the Roc Client (Roc Bird) channel.
  */
 export async function setRocClientEnabled(enabled: boolean): Promise<boolean> {
   const res = await req<{ ok: boolean; enabled: boolean }>('/canary', {
@@ -101,7 +101,7 @@ function applyBranding(channel: ReleaseChannel) {
     const link = document.querySelector<HTMLLinkElement>('link[rel="icon"]');
     if (link) link.href = ICON_PATH;
     // Tag the document title with a small marker so users always know
-    // they're on the canary channel.
+    // they're on the Roc Bird channel.
     if (!document.title.includes('Roc Client')) {
       const base = document.title.replace(/\s*·\s*Roc Client$/, '');
       document.title = `${base} · Roc Client`;
@@ -125,7 +125,7 @@ export function renderRocClientToggle(container: HTMLElement) {
       <div class="roc-client-copy">
         <h3>Roc Client</h3>
         <p>
-          Opt into the canary channel to try new UI and protocol features
+          Opt into the Roc Bird channel to try new UI and protocol features
           first. Changes ship here for a few days before the stable build.
           You can leave any time.
         </p>

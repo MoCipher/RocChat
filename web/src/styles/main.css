@@ -117,6 +117,8 @@
   --text-muted: var(--text-tertiary);
   --border: var(--border-norm);
   --accent: var(--roc-gold);
+  --bg-elev: var(--bg-elevated);
+  --radius: var(--radius-md);
 }
 
 /* ── Light Theme (opt-in only: add .light class on <html>) ── */
@@ -3333,7 +3335,7 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
   font-size: 13px;
 }
 
-/* ── Roc Client (canary channel) ─────────────────────────────────── */
+/* ── Roc Client (Roc Bird channel) ───────────────────────────────── */
 .roc-client-toggle {
   margin-top: 16px;
 }
@@ -3376,7 +3378,7 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
   margin-top: 8px !important;
 }
 html[data-channel="roc"] .roc-client-card::after {
-  content: 'CANARY';
+  content: 'ROC BIRD';
   position: absolute;
   font-size: 10px;
   letter-spacing: 0.16em;

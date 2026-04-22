@@ -14,6 +14,15 @@ const APP_LOCK_KEY = 'rocchat_app_lock_v1';
 const APP_LOCK_LEGACY_KEY = 'rocchat_app_lock_pin';
 const APP_LOCK_ITERATIONS = 600_000;
 
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = '';
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+  }
+  return btoa(binary);
+}
+
 async function deriveAppLockVerifier(pin: string, salt: Uint8Array): Promise<string> {
   const baseKey = await crypto.subtle.importKey('raw', new TextEncoder().encode(pin), 'PBKDF2', false, ['deriveBits']);
   const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt: salt as unknown as BufferSource, iterations: APP_LOCK_ITERATIONS }, baseKey, 256);
@@ -561,7 +570,7 @@ export function renderSettings(container: HTMLElement) {
             <div id="donor-badge-display" style="font-size:var(--text-xs);color:var(--text-tertiary)">Loading...</div>
           </div>
           <div style="margin-top:var(--sp-3);display:flex;gap:var(--sp-3);flex-wrap:wrap">
-            <a href="#/canary" style="font-size:var(--text-xs);color:var(--turquoise);text-decoration:none">🐦 View Warrant Canary</a>
+            <a href="#/roc-bird" style="font-size:var(--text-xs);color:var(--turquoise);text-decoration:none">🪶 View Roc Bird Status</a>
             <a href="#/transparency" style="font-size:var(--text-xs);color:var(--turquoise);text-decoration:none">📜 Transparency Report</a>
             <a href="#/supporters" style="font-size:var(--text-xs);color:var(--turquoise);text-decoration:none">🪶 Supporters Wall</a>
           </div>
@@ -624,7 +633,7 @@ export function renderSettings(container: HTMLElement) {
               <li>🌍 <strong>Free for everyone, forever</strong> — No paywalls, no premium tiers that gate security features. All features are free. Donations via cryptocurrency only — no corporate payment processors.</li>
               <li>🛡️ <strong>Proof-of-work, not surveillance</strong> — We use mathematical proof-of-work instead of corporate CAPTCHAs that track you.</li>
               <li>📡 <strong>Self-sovereign infrastructure</strong> — Self-hosted STUN/TURN servers, self-hosted push notifications, self-hosted fonts and icons. No phone call touches Google's servers.</li>
-              <li>🏴 <strong>Transparency</strong> — Open-source code, public warrant canary, regular transparency reports. If we are ever compromised, you will know.</li>
+              <li>🏴 <strong>Transparency</strong> — Open-source code, public Roc Bird status page, regular transparency reports. If we are ever compromised, you will know.</li>
             </ul>
             <p style="margin-top:var(--sp-2);font-style:italic;color:var(--roc-gold,#D4AF37)">Built with love, for the people. 🇵🇸</p>
           </div>
@@ -1015,9 +1024,9 @@ export function renderSettings(container: HTMLElement) {
           kdf: 'PBKDF2-SHA256',
           iterations: 600_000,
           cipher: 'AES-256-GCM',
-          salt: btoa(String.fromCharCode(...salt)),
-          iv: btoa(String.fromCharCode(...iv)),
-          ciphertext: btoa(String.fromCharCode(...ct)),
+          salt: bytesToBase64(salt),
+          iv: bytesToBase64(iv),
+          ciphertext: bytesToBase64(ct),
           exported_at: new Date().toISOString(),
         };
         blob = new Blob([JSON.stringify(envelope, null, 2)], { type: 'application/json' });
@@ -2616,7 +2625,7 @@ async function showAppLockSetup() {
     const salt = crypto.getRandomValues(new Uint8Array(16));
     const verifier = await deriveAppLockVerifier(pin, salt);
     await putSecretString(APP_LOCK_KEY, JSON.stringify({
-      salt: btoa(String.fromCharCode(...salt)),
+      salt: bytesToBase64(salt),
       verifier,
     }));
     localStorage.removeItem(APP_LOCK_LEGACY_KEY);
@@ -2772,7 +2781,7 @@ async function handleKeyTransferAsSource(requestId: string, remoteEphemeralPub: 
     // Generate our ephemeral X25519 key pair
     const ephemeral = await crypto.subtle.generateKey({ name: 'X25519' } as any, true, ['deriveBits']) as CryptoKeyPair;
     const ephPubRaw = await crypto.subtle.exportKey('raw', ephemeral.publicKey);
-    const ephPubB64 = btoa(String.fromCharCode(...new Uint8Array(ephPubRaw)));
+    const ephPubB64 = bytesToBase64(new Uint8Array(ephPubRaw));
 
     // Import remote ephemeral public key
     const remotePubBytes = Uint8Array.from(atob(remoteEphemeralPub), (c) => c.charCodeAt(0));
@@ -2811,7 +2820,7 @@ async function handleKeyTransferAsSource(requestId: string, remoteEphemeralPub: 
     const combined = new Uint8Array(12 + ct.byteLength);
     combined.set(iv, 0);
     combined.set(new Uint8Array(ct), 12);
-    const encryptedBundle = btoa(String.fromCharCode(...combined));
+    const encryptedBundle = bytesToBase64(combined);
 
     // Upload to server
     await api.uploadKeyBundle(requestId, encryptedBundle, ephPubB64);
@@ -2827,7 +2836,7 @@ async function requestKeyTransferAsNewDevice() {
     // Generate ephemeral X25519 key pair
     const ephemeral = await crypto.subtle.generateKey({ name: 'X25519' } as any, true, ['deriveBits']) as CryptoKeyPair;
     const ephPubRaw = await crypto.subtle.exportKey('raw', ephemeral.publicKey);
-    const ephPubB64 = btoa(String.fromCharCode(...new Uint8Array(ephPubRaw)));
+    const ephPubB64 = bytesToBase64(new Uint8Array(ephPubRaw));
 
     // Send request
     const res = await api.requestKeyTransfer(ephPubB64);

@@ -3652,7 +3652,7 @@ fun SettingsTab(onLogout: () -> Unit) {
 
         HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
 
-        // Canary, Transparency, Supporters
+        // Roc Bird status, Transparency, Supporters
         var showCanary by remember { mutableStateOf(false) }
         var showTransparency by remember { mutableStateOf(false) }
         var showSupporters by remember { mutableStateOf(false) }
@@ -3663,7 +3663,7 @@ fun SettingsTab(onLogout: () -> Unit) {
         ) {
             Icon(Icons.Default.Shield, contentDescription = null, tint = RocColors.TextSecondary, modifier = Modifier.size(20.dp))
             Spacer(Modifier.width(12.dp))
-            Text("Warrant Canary")
+            Text("Roc Bird Status")
         }
         Row(
             modifier = Modifier.fillMaxWidth().clickable { showTransparency = true }.padding(horizontal = 16.dp, vertical = 12.dp),
@@ -4987,21 +4987,21 @@ suspend fun flushMessageQueue(context: android.content.Context): Boolean {
     return remaining.isEmpty()
 }
 
-// ── Canary Sheet ──
+// ── Roc Bird Status Sheet ──
 @Composable
 fun CanarySheet(onDismiss: () -> Unit) {
     var text by remember { mutableStateOf("Loading...") }
     LaunchedEffect(Unit) {
         try {
             val json = com.rocchat.network.APIClient.get("/features/canary")
-            text = json.optString("statement", "No canary statement available.")
+            text = json.optString("statement", "No Roc Bird status statement available.")
         } catch (_: Exception) {
-            text = "Failed to load canary."
+            text = "Failed to load Roc Bird status."
         }
     }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Warrant Canary") },
+        title = { Text("Roc Bird Status") },
         text = { Text(text) },
         confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
     )

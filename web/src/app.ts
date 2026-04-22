@@ -139,8 +139,8 @@ function initAfterUnlock() {
   const loading = document.getElementById('loading-screen');
   if (loading) loading.remove();
 
-  // Check for warrant canary route
-  if (location.hash === '#/canary') {
+  // Check for Roc Bird status route (legacy #/canary is still supported)
+  if (location.hash === '#/roc-bird' || location.hash === '#/canary') {
     showCanary();
     return;
   }
@@ -202,7 +202,7 @@ function initAfterUnlock() {
   registerPaletteCommand({ id: 'tab.calls',    label: 'Go to Calls',    shortcut: '⌘2', action: () => { currentTab = 'calls';    renderApp(); } });
   registerPaletteCommand({ id: 'tab.channels', label: 'Go to Channels', shortcut: '⌘3', action: () => { currentTab = 'channels'; renderApp(); } });
   registerPaletteCommand({ id: 'tab.settings', label: 'Go to Settings', shortcut: '⌘,', action: () => { currentTab = 'settings'; renderApp(); } });
-  registerPaletteCommand({ id: 'app.canary',   label: 'View Warrant Canary', action: () => { location.hash = '#/canary'; location.reload(); } });
+  registerPaletteCommand({ id: 'app.roc-bird', label: 'View Roc Bird Status', action: () => { location.hash = '#/roc-bird'; location.reload(); } });
   registerPaletteCommand({ id: 'app.transparency', label: 'View Transparency Reports', action: () => { location.hash = '#/transparency'; location.reload(); } });
   registerPaletteCommand({ id: 'app.status',   label: 'Open Status Page', action: () => { window.open('/status.html', '_blank', 'noopener,noreferrer'); } });
   registerPaletteCommand({ id: 'app.lock',     label: 'Lock app',  action: async () => {
@@ -213,7 +213,7 @@ function initAfterUnlock() {
   } });
   registerPaletteCommand({
     id: 'app.roc-client.toggle',
-    label: 'Toggle Roc Client (canary) channel',
+    label: 'Toggle Roc Client channel',
     hint: 'Opt in/out of experimental builds',
     action: async () => {
       const next = !isRocClient();
@@ -397,10 +397,10 @@ async function showCanary() {
     <div style="max-width:640px;margin:40px auto;padding:24px;font-family:var(--font-sans,system-ui)">
       <div style="text-align:center;margin-bottom:32px">
         <div style="font-size:48px;margin-bottom:8px">🐦</div>
-        <h1 style="font-size:28px;font-weight:bold;color:var(--roc-gold,#D4AF37);margin:0">RocChat Warrant Canary</h1>
+        <h1 style="font-size:28px;font-weight:bold;color:var(--roc-gold,#D4AF37);margin:0">RocChat Roc Bird Status</h1>
       </div>
       <div id="canary-content" style="border:1px solid var(--border-primary,#333);border-radius:12px;padding:24px;background:var(--bg-secondary,#1a1a2e)">
-        <p style="color:var(--text-secondary,#aaa)">Loading canary status...</p>
+        <p style="color:var(--text-secondary,#aaa)">Loading Roc Bird status...</p>
       </div>
       <div style="text-align:center;margin-top:24px">
         <a href="#/" style="color:var(--roc-gold,#D4AF37);text-decoration:none" onclick="location.hash='';location.reload()">← Back to RocChat</a>
@@ -428,7 +428,7 @@ async function showCanary() {
       </div>
     `));
   } catch {
-    document.getElementById('canary-content')!.replaceChildren(parseHTML('<p style="color:#ef4444">Failed to load canary status.</p>'));
+    document.getElementById('canary-content')!.replaceChildren(parseHTML('<p style="color:#ef4444">Failed to load Roc Bird status.</p>'));
   }
 }
 

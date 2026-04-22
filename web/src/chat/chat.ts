@@ -849,20 +849,28 @@ async function openConversation(conversationId: string) {
   });
 
   // Bind call buttons
-  chatView.querySelector('#btn-voice-call')?.addEventListener('click', () => {
+  chatView.querySelector('#btn-voice-call')?.addEventListener('click', async () => {
     if (!conv) return;
-    if (conv.type === 'group') {
-      startGroupCallFromChat(conv);
-    } else {
-      startCall(conv, 'voice');
+    try {
+      if (conv.type === 'group') {
+        await startGroupCallFromChat(conv);
+      } else {
+        await startCall(conv, 'voice');
+      }
+    } catch {
+      showToast('Voice call failed to start', 'error');
     }
   });
-  chatView.querySelector('#btn-video-call')?.addEventListener('click', () => {
+  chatView.querySelector('#btn-video-call')?.addEventListener('click', async () => {
     if (!conv) return;
-    if (conv.type === 'group') {
-      startGroupCallFromChat(conv);
-    } else {
-      startCall(conv, 'video');
+    try {
+      if (conv.type === 'group') {
+        await startGroupCallFromChat(conv);
+      } else {
+        await startCall(conv, 'video');
+      }
+    } catch {
+      showToast('Video call failed to start', 'error');
     }
   });
 
@@ -1491,6 +1499,7 @@ async function connectWebSocket(conversationId: string) {
         wsUrl = `${proto}//${wsHost}/api/ws/${conversationId}?userId=${userId}&deviceId=${deviceId}&ticket=${retry.data.ticket}`;
       } else {
         console.warn('WS ticket unavailable, skipping connection');
+        showToast('Realtime reconnect unavailable. Please refresh.', 'error');
         return;
       }
     }
@@ -1501,10 +1510,12 @@ async function connectWebSocket(conversationId: string) {
         wsUrl = `${proto}//${wsHost}/api/ws/${conversationId}?userId=${userId}&deviceId=${deviceId}&ticket=${retry.data.ticket}`;
       } else {
         console.warn('WS ticket unavailable, skipping connection');
+        showToast('Realtime reconnect unavailable. Please refresh.', 'error');
         return;
       }
     } catch {
       console.warn('WS ticket fetch failed, skipping connection');
+      showToast('Realtime reconnect failed. Please refresh.', 'error');
       return;
     }
   }
@@ -3210,9 +3221,15 @@ async function decryptAndDisplayMedia(
     } else {
       (el as HTMLVideoElement | HTMLAudioElement).src = url;
     }
-  } catch {
+  } catch (err) {
     const span = document.createElement('span');
-    span.textContent = `⚠️ Failed to load ${fileMsg.filename}`;
+    const reason = err instanceof Error ? err.message : '';
+    if (reason.includes('integrity')) {
+      span.textContent = `⚠️ Integrity check failed for ${fileMsg.filename}`;
+      showToast('File integrity check failed', 'error');
+    } else {
+      span.textContent = `⚠️ Failed to load ${fileMsg.filename}`;
+    }
     span.style.color = 'var(--text-tertiary)';
     el.replaceWith(span);
   }

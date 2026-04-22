@@ -14,6 +14,9 @@ describe('Backend API — Health & Public Routes', () => {
   it('returns CORS headers', async () => {
     const res = await fetch(`${API}/api/health`, {
       method: 'OPTIONS',
+      headers: {
+        Origin: 'https://chat.mocipher.com',
+      },
     });
     const headers = res.headers;
     expect(headers.get('access-control-allow-origin')).toBeTruthy();

@@ -3616,7 +3616,7 @@ struct SettingsView: View {
                     NavigationLink {
                         CanaryView()
                     } label: {
-                        Label("Warrant Canary", systemImage: "shield.checkered")
+                        Label("Roc Bird Status", systemImage: "bird")
                     }
                     NavigationLink {
                         TransparencyView()
@@ -5583,7 +5583,7 @@ struct StickerPickerView: View {
     }
 }
 
-// MARK: - Canary View
+// MARK: - Roc Bird Status View
 struct CanaryView: View {
     @State private var canaryText = ""
     @State private var loading = true
@@ -5593,12 +5593,12 @@ struct CanaryView: View {
             if loading {
                 ProgressView().padding()
             } else {
-                Text(canaryText.isEmpty ? "No canary statement available." : canaryText)
+                Text(canaryText.isEmpty ? "No Roc Bird status statement available." : canaryText)
                     .padding()
                     .font(.body)
             }
         }
-        .navigationTitle("Warrant Canary")
+            .navigationTitle("Roc Bird Status")
         .task {
             do {
                 let data = try await APIClient.shared.getRaw("/features/canary")

@@ -1,0 +1,8 @@
+User-agent: *
+Allow: /
+Allow: /status.html
+
+# No API crawling
+Disallow: /api/
+
+Sitemap: https://chat.mocipher.com/sitemap.xml

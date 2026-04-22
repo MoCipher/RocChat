@@ -4,6 +4,8 @@ const SHELL_ASSETS = [
   '/index.html',
   '/offline.html',
   '/favicon.svg',
+  '/icon-192.png',
+  '/icon-512.png',
   '/manifest.json',
 ];
 

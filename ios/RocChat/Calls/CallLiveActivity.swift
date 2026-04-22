@@ -1,5 +1,6 @@
 import ActivityKit
 import SwiftUI
+import WidgetKit
 
 // MARK: - Live Activity Attributes
 

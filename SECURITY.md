@@ -124,6 +124,30 @@ RocChat is designed under the following assumptions:
   element so `replaceChildren()` cannot destroy it before `dismissSplash()` runs.
   Wrapped `init()` in try-catch so splash is always dismissed on error, with
   fallback to landing page. Bumped SW cache to `rocchat-v10` to force refresh.
+- **CSP / Trusted Types overhaul**: Renamed TT policy to `'default'` so the
+  browser auto-applies `createHTML`/`createScriptURL` at all injection sinks.
+  Removed all inline event handlers (`onclick`, `onerror`) and replaced with
+  `addEventListener` / `data-fallback` attributes + global delegated listener.
+  Added separate `sw-init` TT policy for the service worker registration URL sink.
+  Removed stale script hashes from `_headers`; synced meta CSP with server CSP.
+  Added `data:` to `font-src` for `@fontsource` base64 fonts. Removed unsupported
+  `frame-ancestors` from meta tag (only valid as HTTP header).
+- **COEP header**: Added `Cross-Origin-Embedder-Policy: credentialless` for
+  cross-origin isolation, enabling `SharedArrayBuffer` for future crypto/WebRTC
+  performance improvements.
+- **WebSocket auth fix**: Router now validates WS tickets and passes
+  `routerAuthed=1` to the Durable Object, preventing 400 errors when ticket-based
+  connections lacked a `token` query param.
+- **Rate limiting**: Added dedicated rate limit bucket for `/api/ws/ticket`
+  (30 req/min) to prevent ticket flooding.
+- **Offline page**: Replaced inline `onclick` with `addEventListener` and added
+  a CSP meta tag with script hash. Replaced emoji with SVG wifi-off icon.
+- **PWA badge count**: Added `navigator.setAppBadge()` support to show unread
+  conversation count on the home screen icon.
+- **Build optimizations**: Vite now targets ES2022 for smaller output, produces
+  hidden source maps, and splits crypto code into a separate cached chunk.
+- **Preconnect hints**: Added `<link rel="preconnect">` and `dns-prefetch` for
+  the API domain to reduce first-request latency.
 
 ---
 _Last updated: 2026-04-22_

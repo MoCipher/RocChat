@@ -609,6 +609,29 @@ function renderConversationsList(filter = '') {
 
   // Bind swipe gestures
   initSwipeActions(list);
+
+  // Update PWA app badge with total unread count
+  updateAppBadge();
+}
+
+/** Update PWA badge count (home screen icon) with total unread conversations. */
+function updateAppBadge(): void {
+  try {
+    const nav = navigator as Navigator & { setAppBadge?: (n: number) => Promise<void>; clearAppBadge?: () => Promise<void> };
+    if (!nav.setAppBadge) return;
+    // Count conversations with unread messages (those not currently open)
+    const userId = localStorage.getItem('rocchat_user_id') || '';
+    const unread = state.conversations.filter(c =>
+      c.id !== state.activeConversationId &&
+      c.last_message_at &&
+      c.members.some(m => m.user_id !== userId)
+    ).length;
+    if (unread > 0) {
+      nav.setAppBadge(unread).catch(() => {});
+    } else {
+      nav.clearAppBadge?.().catch(() => {});
+    }
+  } catch { /* Badge API unavailable */ }
 }
 
 async function openConversation(conversationId: string) {

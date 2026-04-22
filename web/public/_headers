@@ -6,6 +6,7 @@
   Permissions-Policy: camera=(self), microphone=(self), geolocation=(), interest-cohort=(), browsing-topics=(), serial=(), usb=(), bluetooth=(), gamepad=(), magnetometer=(), accelerometer=(), gyroscope=(), payment=(), publickey-credentials-create=(self), publickey-credentials-get=(self)
   Strict-Transport-Security: max-age=63072000; includeSubDomains; preload
   Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Embedder-Policy: credentialless
   Cross-Origin-Resource-Policy: same-origin
   X-DNS-Prefetch-Control: off
   X-Permitted-Cross-Domain-Policies: none

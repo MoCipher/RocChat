@@ -283,6 +283,8 @@ export default {
 
       // Issue short-lived WebSocket ticket (90s TTL — generous for slow connections)
       if (path === '/api/ws/ticket' && request.method === 'POST') {
+        const rl = await rateLimit(env, session.userId, '/api/ws/ticket');
+        if (!rl.ok) return withCors(apiError('RATE_LIMITED', 'Too many ticket requests', 429));
         const ticket = crypto.randomUUID();
         await env.KV.put(`ws-ticket:${ticket}`, JSON.stringify({
           userId: session.userId,

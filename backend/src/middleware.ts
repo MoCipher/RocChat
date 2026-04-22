@@ -62,6 +62,7 @@ export async function rateLimit(
   else if (path === '/api/recovery/vault') { limit = 10; window = 3600; bucket = '/api/recovery/vault'; }
   else if (path.startsWith('/api/media')) { limit = 20; window = 3600; bucket = '/api/media'; }
   else if (path.startsWith('/api/contacts/search')) { limit = 10; window = 60; bucket = '/api/contacts/search'; }
+  else if (path === '/api/ws/ticket') { limit = 30; window = 60; bucket = '/api/ws/ticket'; }
   else if (path.startsWith('/api/keys')) { limit = 30; window = 60; bucket = '/api/keys'; }
   else if (path.startsWith('/api/groups')) {
     // Separate buckets for sensitive admin actions vs read operations

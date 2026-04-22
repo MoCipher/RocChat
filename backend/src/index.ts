@@ -177,7 +177,7 @@ export default {
         ).all();
         return withCors(jsonResponse({ supporters: supporters.results }));
       }
-      // Warrant canary — public, no auth
+      // Roc Bird Status (canary) — public, no auth
       if (path === '/api/features/canary' && request.method === 'GET') {
         return withCors(await handleFeatures(request, env, { userId: '', username: '', tier: 'free', deviceId: '' } as Session, url));
       }
@@ -710,12 +710,12 @@ export default {
           'SELECT c.contact_user_id, u.username, u.display_name, c.verified, c.created_at FROM contacts c LEFT JOIN users u ON c.contact_user_id = u.id WHERE c.user_id = ?'
         ).bind(userId).all();
         const conversations = await env.DB.prepare(
-          `SELECT cm.conversation_id, c.type, c.name, cm.role, cm.joined_at
+          `SELECT cm.conversation_id, c.type, c.encrypted_meta, cm.role, cm.joined_at
            FROM conversation_members cm JOIN conversations c ON cm.conversation_id = c.id
            WHERE cm.user_id = ?`
         ).bind(userId).all();
         const devices = await env.DB.prepare(
-          'SELECT id, device_name, platform, created_at, last_active_at FROM devices WHERE user_id = ?'
+          'SELECT id, device_name, platform, created_at, last_active FROM devices WHERE user_id = ?'
         ).bind(userId).all();
         const exportData = {
           account: user,
@@ -791,10 +791,10 @@ export default {
       if (path === '/api/export' && request.method === 'GET') {
         const [profile, convs, msgs, contacts, devices] = await Promise.all([
           env.DB.prepare('SELECT id, username, display_name, identity_key, created_at FROM users WHERE id = ?').bind(session.userId).first(),
-          env.DB.prepare('SELECT c.id, c.kind, c.created_at FROM conversations c JOIN conversation_members m ON m.conversation_id = c.id WHERE m.user_id = ?').bind(session.userId).all(),
+          env.DB.prepare('SELECT c.id, c.type, c.created_at FROM conversations c JOIN conversation_members m ON m.conversation_id = c.id WHERE m.user_id = ?').bind(session.userId).all(),
           env.DB.prepare('SELECT id, conversation_id, sender_id, encrypted, server_timestamp FROM messages WHERE sender_id = ? ORDER BY server_timestamp DESC LIMIT 5000').bind(session.userId).all(),
-          env.DB.prepare('SELECT contact_id, created_at FROM contacts WHERE user_id = ?').bind(session.userId).all(),
-          env.DB.prepare('SELECT id, name, last_active FROM devices WHERE user_id = ?').bind(session.userId).all(),
+          env.DB.prepare('SELECT contact_user_id, created_at FROM contacts WHERE user_id = ?').bind(session.userId).all(),
+          env.DB.prepare('SELECT id, device_name, last_active FROM devices WHERE user_id = ?').bind(session.userId).all(),
         ]);
         return withCors(jsonResponse({
           exported_at: Date.now(),

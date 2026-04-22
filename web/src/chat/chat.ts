@@ -2148,9 +2148,9 @@ function showScheduleDialog(conversationId: string, input: HTMLTextAreaElement) 
       const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, encoder.encode(text));
       const rawKey = await crypto.subtle.exportKey('raw', key);
       encrypted = JSON.stringify({
-        ct: btoa(String.fromCharCode(...new Uint8Array(ct))),
-        iv: btoa(String.fromCharCode(...iv)),
-        key: btoa(String.fromCharCode(...new Uint8Array(rawKey))),
+        ct: toBase64(new Uint8Array(ct)),
+        iv: toBase64(iv),
+        key: toBase64(new Uint8Array(rawKey)),
         type: 'scheduled'
       });
     } catch {

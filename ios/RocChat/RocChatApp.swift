@@ -7,23 +7,40 @@ struct RocChatApp: App {
     @StateObject private var authVM = AuthViewModel()
     @Environment(\.scenePhase) var scenePhase
     @State private var isObscured = false
+    @State private var showSplash = true
 
     var body: some Scene {
         WindowGroup {
-            Group {
-                if authVM.biometricLocked {
-                    BiometricLockView()
-                        .environmentObject(authVM)
-                } else if authVM.isAuthenticated {
-                    MainTabView()
-                        .environmentObject(authVM)
-                        .onAppear {
-                            requestPushNotifications()
-                            Task { await KeyRotationManager.shared.performMaintenance() }
-                        }
-                } else {
-                    AuthView()
-                        .environmentObject(authVM)
+            ZStack {
+                Group {
+                    if authVM.biometricLocked {
+                        BiometricLockView()
+                            .environmentObject(authVM)
+                    } else if authVM.isAuthenticated {
+                        MainTabView()
+                            .environmentObject(authVM)
+                            .onAppear {
+                                requestPushNotifications()
+                                Task { await KeyRotationManager.shared.performMaintenance() }
+                            }
+                    } else {
+                        AuthView()
+                            .environmentObject(authVM)
+                    }
+                }
+
+                // Splash screen overlay — dismiss after 0.8s minimum
+                if showSplash {
+                    SplashView()
+                        .transition(.opacity)
+                        .zIndex(999)
+                }
+            }
+            .onAppear {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+                    withAnimation(.easeOut(duration: 0.5)) {
+                        showSplash = false
+                    }
                 }
             }
             .preferredColorScheme(nil) // Follow system

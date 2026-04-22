@@ -1,7 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
   <defs>
     <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#0D1117"/><stop offset="40%" stop-color="#161B22"/><stop offset="100%" stop-color="#0D1117"/>
+      <stop offset="0%" stop-color="#1A1410"/><stop offset="40%" stop-color="#0F0D0A"/><stop offset="100%" stop-color="#1A1410"/>
     </linearGradient>
     <radialGradient id="glow" cx="50%" cy="40%" r="55%">
       <stop offset="0%" stop-color="#D4AF37" stop-opacity="0.2"/><stop offset="100%" stop-color="transparent"/>
@@ -21,11 +21,12 @@
     <linearGradient id="head" x1="30%" y1="0%" x2="70%" y2="100%">
       <stop offset="0%" stop-color="#fffbeb"/><stop offset="100%" stop-color="#fbbf24"/>
     </linearGradient>
-    <linearGradient id="bubble" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#40E0D0" stop-opacity="0.35"/><stop offset="100%" stop-color="#40E0D0" stop-opacity="0.15"/>
+    <!-- Signal wave gradient (turquoise) -->
+    <linearGradient id="signal" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#40E0D0" stop-opacity="0.8"/><stop offset="100%" stop-color="#40E0D0" stop-opacity="0.2"/>
     </linearGradient>
     <filter id="ds" x="-5%" y="-5%" width="110%" height="110%">
-      <feDropShadow dx="0" dy="2" stdDeviation="6" flood-color="#0D1117" flood-opacity="0.5"/>
+      <feDropShadow dx="0" dy="2" stdDeviation="6" flood-color="#0F0D0A" flood-opacity="0.5"/>
     </filter>
   </defs>
 
@@ -79,12 +80,13 @@
     <path d="M20,0 C28,-5 35,-8 42,-8" fill="none" stroke="#d97706" stroke-width="1.5" opacity="0.3"/>
   </g>
 
-  <!-- Chat speech bubble overlay (bottom-right, RocChat-specific) -->
-  <g transform="translate(355, 365)">
-    <path d="M0,0 C0,-22 18,-40 40,-40 L75,-40 C97,-40 115,-22 115,0 L115,28 C115,50 97,68 75,68 L35,68 L12,88 L18,68 L0,68 C-8,68 -15,62 -15,55 L-15,15 C-15,6 -8,0 0,0 Z" fill="url(#bubble)" stroke="#40E0D0" stroke-width="1.5" stroke-opacity="0.4"/>
-    <!-- Signal waves inside bubble -->
-    <path d="M42,8 C42,8 50,-2 58,8" fill="none" stroke="#40E0D0" stroke-width="2.5" stroke-linecap="round" opacity="0.7"/>
-    <path d="M35,14 C35,14 50,-4 65,14" fill="none" stroke="#40E0D0" stroke-width="2" stroke-linecap="round" opacity="0.5"/>
-    <path d="M28,20 C28,20 50,-6 72,20" fill="none" stroke="#40E0D0" stroke-width="1.5" stroke-linecap="round" opacity="0.35"/>
+  <!-- Signal waves — encrypted broadcast emanating from the bird -->
+  <g transform="translate(256, 208)">
+    <path d="M50,-40 A65,65 0 0,1 50,40" fill="none" stroke="#40E0D0" stroke-width="3.5" stroke-linecap="round" opacity="0.7"/>
+    <path d="M72,-62 A95,95 0 0,1 72,62" fill="none" stroke="#40E0D0" stroke-width="2.8" stroke-linecap="round" opacity="0.48"/>
+    <path d="M94,-82 A125,125 0 0,1 94,82" fill="none" stroke="#40E0D0" stroke-width="2.2" stroke-linecap="round" opacity="0.28"/>
+    <path d="M-50,-40 A65,65 0 0,0 -50,40" fill="none" stroke="#40E0D0" stroke-width="3.5" stroke-linecap="round" opacity="0.7"/>
+    <path d="M-72,-62 A95,95 0 0,0 -72,62" fill="none" stroke="#40E0D0" stroke-width="2.8" stroke-linecap="round" opacity="0.48"/>
+    <path d="M-94,-82 A125,125 0 0,0 -94,82" fill="none" stroke="#40E0D0" stroke-width="2.2" stroke-linecap="round" opacity="0.28"/>
   </g>
 </svg>

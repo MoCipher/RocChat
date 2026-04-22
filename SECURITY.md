@@ -48,7 +48,7 @@ RocChat is designed under the following assumptions:
 | **T**ampering w/ msgs   | AES-256-GCM authenticated encryption; Double Ratchet integrity            |
 | **R**epudiation         | Per-device session tokens + audit log on key changes (`key_audit_log`)    |
 | **I**nfo disclosure     | E2EE; server stores ciphertext only; encrypted media in R2; encrypted IDB |
-| **D**oS                 | Per-user/route token-bucket rate limits in KV; PoW gate for registration  |
+| **D**oS                 | Per-user/route token-bucket rate limits in KV; PoW gate for registration; 10 MB global payload guard; 64 KB encrypted-message ceiling; WS send rate limit (30 msg/s) |
 | **E**levation of priv.  | RBAC on group/admin endpoints; CSRF via Origin allowlist; bearer + KV    |
 
 ## Cryptography summary
@@ -97,5 +97,33 @@ RocChat is designed under the following assumptions:
 - Hardware-backed identity key on iOS via `SecureEnclave` for newer devices.
 - WebAuthn passkey unlock for the web client.
 
+## Recent UI/UX security-relevant changes
+
+- **Splash screen (all platforms)**: Loading screen is now a fixed overlay with
+  minimum 800 ms display and a fade-out transition. Prevents UI content from
+  briefly flashing before authentication/app-lock checks complete.
+- **App icon**: Replaced speech bubble with signal wave arcs; background changed
+  from cold blue-black to warm charcoal. No security impact; branding only.
+- **Settings redesign (web)**: Card-based sections, hover states, removed inline
+  emoji in favour of inline SVGs. No change to encryption controls or auth flows.
+- **Donor badges**: Replaced emoji-based badges with custom SVG feather paths.
+  No change to authentication or payment flows.
+- **iOS splash**: New SwiftUI `SplashView` as a ZStack overlay in `RocChatApp`.
+  Dismissed after 0.8 s. Does not affect biometric lock or auth flow ordering.
+- **Android splash**: `RocSplashScreen` composable in `MainActivity`. Uses
+  `AnimatedVisibility` overlay dismissed after 800 ms via `LaunchedEffect`.
+  Auth checks and biometric lock are unchanged.
+- **Landing page overhaul**: Glassmorphism sticky nav, hero radial glow, beta
+  badge pill, manifesto quote section, 8 feature cards with scroll-in animations,
+  mobile hamburger menu, enhanced footer. No auth endpoints or data flows changed.
+  All links are static (`#` anchors, mailto, GitHub). No third-party scripts added.
+- **Emoji removal (settings)**: Replaced all remaining emoji in settings labels,
+  org admin buttons, empty states, device icons, and manifesto section with inline
+  SVGs or clean text. No functional changes to any controls or flows.
+- **Blank page fix**: Moved `#loading-screen` from inside `#app` to a sibling
+  element so `replaceChildren()` cannot destroy it before `dismissSplash()` runs.
+  Wrapped `init()` in try-catch so splash is always dismissed on error, with
+  fallback to landing page. Bumped SW cache to `rocchat-v10` to force refresh.
+
 ---
-_Last updated: 2026-04-21_
+_Last updated: 2026-04-22_

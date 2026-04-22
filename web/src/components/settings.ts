@@ -61,33 +61,26 @@ export function renderSettings(container: HTMLElement) {
       </div>
       <div class="settings-view" id="settings-view">
 
-        <div class="settings-section profile-hero" style="padding:var(--sp-6) var(--sp-4);border-radius:20px;margin:var(--sp-3);position:relative;overflow:hidden;background:linear-gradient(135deg, rgba(212,175,55,0.22) 0%, rgba(20,147,160,0.18) 55%, rgba(0,0,0,0.05) 100%)">
-          <div aria-hidden="true" style="position:absolute;inset:0;pointer-events:none;opacity:0.08;display:flex;justify-content:space-between;align-items:center;padding:0 12px">
-            <span style="font-size:96px;line-height:1;transform:rotate(-16deg)">🕊️</span>
-            <span style="font-size:72px;line-height:1;transform:scaleX(-1) rotate(-16deg)">🕊️</span>
-          </div>
-          <div style="position:relative;display:flex;flex-direction:column;align-items:center;gap:var(--sp-3)">
-            <div id="profile-avatar-wrapper" role="button" tabindex="0" aria-label="Change profile photo" style="position:relative;cursor:pointer;padding:4px;border-radius:50%;background:conic-gradient(from 0deg, var(--roc-gold), #1493a0, var(--roc-gold))" title="Change profile photo">
-              <div class="avatar" id="profile-avatar" style="width:104px;height:104px;font-size:40px;line-height:104px;border:3px solid var(--bg-elevated)"></div>
-              <div style="position:absolute;bottom:4px;right:4px;width:34px;height:34px;border-radius:50%;background:var(--roc-gold);display:flex;align-items:center;justify-content:center;box-shadow:var(--shadow-md);border:2px solid var(--bg-elevated)">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+        <div class="settings-section profile-hero" style="padding:var(--sp-6) var(--sp-4);border-radius:var(--radius-xl)">
+          <div style="position:relative;display:flex;flex-direction:column;align-items:center;gap:var(--sp-3);padding-top:var(--sp-4)">
+            <div id="profile-avatar-wrapper" role="button" tabindex="0" aria-label="Change profile photo" style="position:relative;cursor:pointer;padding:3px;border-radius:50%;background:linear-gradient(135deg, var(--roc-gold), var(--turquoise), var(--roc-gold))" title="Change profile photo">
+              <div class="avatar" id="profile-avatar" style="width:96px;height:96px;font-size:36px;line-height:96px;border:3px solid var(--bg-card)"></div>
+              <div style="position:absolute;bottom:2px;right:2px;width:30px;height:30px;border-radius:50%;background:var(--roc-gold);display:flex;align-items:center;justify-content:center;box-shadow:var(--shadow-sm);border:2px solid var(--bg-card)">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--midnight-azure)" stroke-width="2.5"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
               </div>
               <input type="file" id="avatar-input" accept="image/jpeg,image/png,image/webp" style="display:none" />
             </div>
             <div style="text-align:center">
-              <div style="font-weight:700;font-size:var(--text-xl)" id="setting-display-name">Loading...</div>
-              <div style="color:var(--text-tertiary);font-size:var(--text-sm)" id="setting-username">@loading...</div>
-              <div role="button" tabindex="0" aria-label="Edit status" style="color:var(--text-secondary);font-size:var(--text-sm);cursor:pointer;margin-top:2px" id="setting-status" title="Click to edit status">Set a status...</div>
-            </div>
-            <div style="display:inline-flex;align-items:center;gap:6px;padding:5px 12px;border-radius:999px;background:rgba(212,175,55,0.12);border:1px solid rgba(212,175,55,0.4);color:var(--roc-gold);font-size:var(--text-xs);font-weight:600">
-              🕊️ Voice of Freedom 🇵🇸
+              <div style="font-weight:700;font-size:var(--text-xl);color:var(--text-primary)" id="setting-display-name">Loading...</div>
+              <div style="color:var(--text-tertiary);font-size:var(--text-sm);font-family:var(--font-mono)" id="setting-username">@loading...</div>
+              <div role="button" tabindex="0" aria-label="Edit status" style="color:var(--text-secondary);font-size:var(--text-xs);cursor:pointer;margin-top:4px;padding:4px 12px;border-radius:var(--radius-full);background:var(--bg-card-hover);transition:background var(--duration-fast)" id="setting-status" title="Click to edit status">Set a status...</div>
             </div>
             <div style="display:flex;gap:var(--sp-2);margin-top:var(--sp-1)">
-              <button class="btn-secondary" style="font-size:var(--text-xs);padding:var(--sp-1) var(--sp-3)" id="edit-name-btn">
-                <i data-lucide="pencil" style="width:12px;height:12px"></i> Edit Name
+              <button class="btn-secondary" style="font-size:var(--text-xs);padding:var(--sp-1) var(--sp-3);border-radius:var(--radius-full)" id="edit-name-btn">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-1px;margin-right:4px"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg>Edit
               </button>
-              <button class="btn-secondary" style="font-size:var(--text-xs);padding:var(--sp-1) var(--sp-3);color:var(--danger);border-color:var(--danger);display:none" id="remove-avatar-btn">
-                <i data-lucide="trash-2" style="width:12px;height:12px"></i> Remove Photo
+              <button class="btn-secondary" style="font-size:var(--text-xs);padding:var(--sp-1) var(--sp-3);border-radius:var(--radius-full);color:var(--danger);border-color:var(--danger);display:none" id="remove-avatar-btn">
+                Remove Photo
               </button>
             </div>
           </div>
@@ -99,7 +92,7 @@ export function renderSettings(container: HTMLElement) {
             <div id="my-qr-code" style="background:white;padding:12px;border-radius:16px;display:inline-block"></div>
             <div class="setting-desc" style="text-align:center">Others can scan this to add you on RocChat</div>
             <button class="btn-secondary" id="btn-scan-qr" style="font-size:var(--text-sm);padding:var(--sp-2) var(--sp-4)">
-              📷 Scan QR Code
+              Scan QR Code
             </button>
           </div>
         </div>
@@ -108,7 +101,7 @@ export function renderSettings(container: HTMLElement) {
           <h3>Privacy</h3>
           <div class="setting-row" style="background:linear-gradient(135deg,rgba(212,175,55,0.08),rgba(64,224,208,0.06));border-radius:var(--radius-lg);padding:var(--sp-3);margin-bottom:var(--sp-2)">
             <div>
-              <div class="setting-label" style="font-size:var(--text-base);font-weight:700">👻 Ghost Mode</div>
+              <div class="setting-label" style="font-size:var(--text-base);font-weight:700">Ghost Mode</div>
               <div class="setting-desc">Hide all activity: no read receipts, no typing, no online status, messages auto-expire 24h</div>
             </div>
             <label class="toggle">
@@ -278,7 +271,7 @@ export function renderSettings(container: HTMLElement) {
           <h3>Encryption</h3>
           <div class="setting-row">
             <div>
-              <div class="setting-label" style="color:var(--turquoise)">🔒 All communications are end-to-end encrypted</div>
+              <div class="setting-label" style="color:var(--turquoise)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-2px;margin-right:4px"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>All communications are end-to-end encrypted</div>
               <div class="setting-desc">
                 Using X25519 key exchange, AES-256-GCM encryption, Double Ratchet protocol.
                 Zero third-party crypto libraries.
@@ -460,43 +453,41 @@ export function renderSettings(container: HTMLElement) {
         </div>
 
         <div class="settings-section">
-          <h3>🏢 RocChat Business</h3>
+          <h3>RocChat Business</h3>
           <div id="business-section">
-            <div class="setting-row">
+            <div class="setting-row" style="flex-direction:column;align-items:stretch;gap:var(--sp-3)">
               <div>
                 <div class="setting-label">Organization Management</div>
                 <div class="setting-desc">Admin dashboard, team management, compliance tools, custom branding, SSO, API access and more.</div>
               </div>
-            </div>
-            <div id="business-content">
-              <div class="setting-row" style="flex-direction:column;gap:var(--sp-3)">
-                <div style="background:var(--bg-tertiary);border-radius:var(--radius-lg);padding:var(--sp-4);width:100%">
-                  <div style="font-weight:600;margin-bottom:var(--sp-2)">Business Plan — $3.99/user/month</div>
-                  <ul style="font-size:var(--text-sm);color:var(--text-secondary);list-style:none;padding:0;margin:0;display:grid;gap:var(--sp-1)">
-                    <li>🏢 Admin dashboard & user management</li>
-                    <li>🏢 Groups up to 5,000 members</li>
-                    <li>🏢 Organization directory</li>
-                    <li>🏢 Role-based access control</li>
-                    <li>🏢 Remote device wipe</li>
-                    <li>🏢 Compliance export & audit logs</li>
-                    <li>🏢 Message retention policies</li>
-                    <li>🏢 Custom branding</li>
-                    <li>🏢 SSO (SAML/OIDC)</li>
-                    <li>🏢 API & webhook access</li>
-                    <li>🏢 Priority support (24h SLA)</li>
-                  </ul>
-                  <div style="margin-top:var(--sp-3);font-size:var(--text-xs);color:var(--text-tertiary)">
-                    Volume: 5-25 users $3.99 · 26-100 $2.99 · 101-500 $1.99 · 500+ custom
-                  </div>
+              <div id="business-content" style="background:var(--bg-card-hover);border-radius:var(--radius-lg);padding:var(--sp-4);border:1px solid var(--border-weak)">
+                <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:var(--sp-3)">
+                  <span style="font-weight:700;font-size:var(--text-base)">Business Plan</span>
+                  <span style="font-family:var(--font-mono);color:var(--roc-gold);font-size:var(--text-sm)">$3.99<span style="font-size:var(--text-xs);color:var(--text-tertiary)">/user/mo</span></span>
                 </div>
-                <button class="btn-primary" id="upgrade-business-btn" style="width:100%">
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--sp-2);font-size:var(--text-xs);color:var(--text-secondary)">
+                  <div style="display:flex;align-items:center;gap:6px"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--turquoise)" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>Admin dashboard</div>
+                  <div style="display:flex;align-items:center;gap:6px"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--turquoise)" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>5,000-member groups</div>
+                  <div style="display:flex;align-items:center;gap:6px"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--turquoise)" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>Org directory</div>
+                  <div style="display:flex;align-items:center;gap:6px"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--turquoise)" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>RBAC</div>
+                  <div style="display:flex;align-items:center;gap:6px"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--turquoise)" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>Remote device wipe</div>
+                  <div style="display:flex;align-items:center;gap:6px"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--turquoise)" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>Compliance export</div>
+                  <div style="display:flex;align-items:center;gap:6px"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--turquoise)" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>SSO (SAML/OIDC)</div>
+                  <div style="display:flex;align-items:center;gap:6px"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--turquoise)" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>API &amp; webhooks</div>
+                  <div style="display:flex;align-items:center;gap:6px"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--turquoise)" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>Custom branding</div>
+                  <div style="display:flex;align-items:center;gap:6px"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--turquoise)" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>Priority support</div>
+                </div>
+                <div style="margin-top:var(--sp-3);font-size:var(--text-xs);color:var(--text-tertiary);font-family:var(--font-mono)">
+                  5–25 users $3.99 · 26–100 $2.99 · 101–500 $1.99 · 500+ custom
+                </div>
+                <button class="btn-primary" id="upgrade-business-btn" style="width:100%;margin-top:var(--sp-3)">
                   Upgrade to Business
                 </button>
               </div>
             </div>
-            <div id="business-dashboard" style="display:none">
+            <div id="business-dashboard" style="display:none;margin-top:var(--sp-3)">
               <div id="org-list"></div>
-              <button class="btn-secondary" id="create-org-btn" style="margin-top:var(--sp-2);font-size:var(--text-sm)">
+              <button class="btn-secondary" id="create-org-btn" style="margin-top:var(--sp-2);font-size:var(--text-sm);width:100%">
                 + Create Organization
               </button>
             </div>
@@ -507,19 +498,19 @@ export function renderSettings(container: HTMLElement) {
           <h3>Import Chat History</h3>
           <div class="setting-row">
             <div>
-              <div class="setting-label">📥 One-Click Migration Bridge</div>
+              <div class="setting-label">One-Click Migration Bridge</div>
               <div class="setting-desc">Drag & drop or select an export file from WhatsApp (.txt), Telegram (.json), or Signal (.json). Format is auto-detected. Messages are re-encrypted with your RocChat keys.</div>
             </div>
           </div>
           <div id="import-dropzone" style="border:2px dashed var(--border-norm);border-radius:var(--radius-lg);padding:var(--sp-6);text-align:center;cursor:pointer;margin-top:var(--sp-2);transition:border-color 0.2s,background 0.2s">
-            <div style="font-size:var(--text-xl);margin-bottom:var(--sp-2)">📂</div>
+            <div style="margin-bottom:var(--sp-2)"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="var(--text-tertiary)" stroke-width="1.5"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></div>
             <div style="font-size:var(--text-sm);color:var(--text-secondary)">Drop your chat export here or click to browse</div>
             <div style="font-size:var(--text-xs);color:var(--text-tertiary);margin-top:var(--sp-1)">Supports .txt, .json, .zip</div>
           </div>
           <div style="display:flex;gap:var(--sp-2);margin-top:var(--sp-3);flex-wrap:wrap">
-            <button class="btn-secondary import-btn" data-source="whatsapp" style="font-size:var(--text-sm)">📱 WhatsApp (.txt)</button>
-            <button class="btn-secondary import-btn" data-source="telegram" style="font-size:var(--text-sm)">✈️ Telegram (.json)</button>
-            <button class="btn-secondary import-btn" data-source="signal" style="font-size:var(--text-sm)">🔒 Signal (.json)</button>
+            <button class="btn-secondary import-btn" data-source="whatsapp" style="font-size:var(--text-sm)">WhatsApp (.txt)</button>
+            <button class="btn-secondary import-btn" data-source="telegram" style="font-size:var(--text-sm)">Telegram (.json)</button>
+            <button class="btn-secondary import-btn" data-source="signal" style="font-size:var(--text-sm)">Signal (.json)</button>
           </div>
           <input type="file" id="import-file-input" accept=".txt,.json,.zip" style="display:none">
           <div id="import-progress-container" style="display:none;margin-top:var(--sp-3)">
@@ -538,41 +529,53 @@ export function renderSettings(container: HTMLElement) {
           <h3>Support RocChat</h3>
           <div class="setting-row">
             <div>
-              <div class="setting-label">💛 All premium features are free forever</div>
+              <div class="setting-label">All premium features are free forever</div>
               <div class="setting-desc">RocChat is built on the belief that privacy shouldn't cost extra. Business features support team/enterprise needs. If you'd like to support development, donations are welcome.</div>
             </div>
           </div>
-          <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:var(--sp-2);margin-top:var(--sp-3)" id="donation-tiers">
-            <button class="btn-secondary donation-btn" data-amount="3" style="font-size:var(--text-sm);padding:var(--sp-2)">
-              ☕ $3<br><span style="font-size:var(--text-xs);color:var(--text-tertiary)">Buy Roc a Coffee</span>
+          <div class="donor-tier-grid" id="donation-tiers">
+            <button class="donor-tier-card donation-btn" data-amount="3">
+              <svg class="tier-icon" viewBox="0 0 32 32" fill="none"><path d="M16 2C14 8 12 14 11 20c-.5 3 0 6 2 8 1.5 1.5 4.5 1.5 6 0 2-2 2.5-5 2-8C20 14 18 8 16 2z" fill="#8B7355" opacity="0.85"/><path d="M16 4c-1 4-2.5 9-3.2 14" stroke="#A09070" stroke-width="0.6" fill="none"/></svg>
+              <span class="tier-name">Bronze Feather</span>
+              <span class="tier-price">$3</span>
             </button>
-            <button class="btn-secondary donation-btn" data-amount="5" style="font-size:var(--text-sm);padding:var(--sp-2)">
-              🪶 $5<br><span style="font-size:var(--text-xs);color:var(--text-tertiary)">Feather Supporter</span>
+            <button class="donor-tier-card donation-btn" data-amount="5">
+              <svg class="tier-icon" viewBox="0 0 32 32" fill="none"><path d="M16 2C14 8 12 14 11 20c-.5 3 0 6 2 8 1.5 1.5 4.5 1.5 6 0 2-2 2.5-5 2-8C20 14 18 8 16 2z" fill="url(#fa)"/><path d="M16 4c-1 4-2.5 9-3.2 14" stroke="#f59e0b" stroke-width="0.6" fill="none"/><defs><linearGradient id="fa" x1="50%" y1="0%" x2="50%" y2="100%"><stop offset="0%" stop-color="#d97706"/><stop offset="100%" stop-color="#92400e"/></linearGradient></defs></svg>
+              <span class="tier-name">Amber Feather</span>
+              <span class="tier-price">$5</span>
             </button>
-            <button class="btn-secondary donation-btn" data-amount="10" style="font-size:var(--text-sm);padding:var(--sp-2)">
-              🦅 $10<br><span style="font-size:var(--text-xs);color:var(--text-tertiary)">Wing Supporter</span>
+            <button class="donor-tier-card donation-btn" data-amount="10">
+              <svg class="tier-icon" viewBox="0 0 32 32" fill="none"><path d="M16 1C13.5 8 11 15 10 21c-.5 3.5.5 6.5 2.5 8 1.5 1.2 4.5 1.2 6 0 2-1.5 3-4.5 2.5-8C20 15 18.5 8 16 1z" fill="url(#fb)"/><path d="M16 3c-1.2 5-3 10-3.8 16" stroke="#fef3c7" stroke-width="0.5" fill="none" opacity="0.6"/><path d="M16 3c1.2 5 3 10 3.8 16" stroke="#fef3c7" stroke-width="0.3" fill="none" opacity="0.3"/><defs><linearGradient id="fb" x1="50%" y1="0%" x2="50%" y2="100%"><stop offset="0%" stop-color="#fbbf24"/><stop offset="100%" stop-color="#d97706"/></linearGradient></defs></svg>
+              <span class="tier-name">Golden Feather</span>
+              <span class="tier-price">$10</span>
             </button>
-            <button class="btn-secondary donation-btn" data-amount="25" style="font-size:var(--text-sm);padding:var(--sp-2)">
-              🏔️ $25<br><span style="font-size:var(--text-xs);color:var(--text-tertiary)">Mountain Guardian</span>
+            <button class="donor-tier-card donation-btn" data-amount="25">
+              <svg class="tier-icon" viewBox="0 0 32 32" fill="none"><path d="M16 0C13 8 10.5 16 9.5 22c-.5 3.5.5 6.5 3 8 1.8 1 4.2 1 6 0 2.5-1.5 3.5-4.5 3-8C20.5 16 19 8 16 0z" fill="url(#fc)"/><path d="M16 2c-1.5 6-3.5 12-4.2 18" stroke="#fef3c7" stroke-width="0.6" fill="none" opacity="0.7"/><circle cx="16" cy="6" r="2" fill="#fef3c7" opacity="0.25"/><defs><linearGradient id="fc" x1="50%" y1="0%" x2="50%" y2="100%"><stop offset="0%" stop-color="#fef3c7"/><stop offset="40%" stop-color="#f59e0b"/><stop offset="100%" stop-color="#b45309"/></linearGradient></defs></svg>
+              <span class="tier-name">Radiant Feather</span>
+              <span class="tier-price">$25</span>
             </button>
-            <button class="btn-secondary donation-btn" data-amount="50" style="font-size:var(--text-sm);padding:var(--sp-2)">
-              👑 $50<br><span style="font-size:var(--text-xs);color:var(--text-tertiary)">Roc Patron</span>
+            <button class="donor-tier-card donation-btn" data-amount="50">
+              <svg class="tier-icon" viewBox="0 0 32 32" fill="none"><path d="M16 0C13 8 10.5 16 9.5 22c-.5 3.5.5 6.5 3 8 1.8 1 4.2 1 6 0 2.5-1.5 3.5-4.5 3-8C20.5 16 19 8 16 0z" fill="url(#fd)"/><path d="M16 0C15 3 14 5.5 13.5 7.5c-.3 1 .2 2.2 1.2 2.5 1 .4 2.2 0 2.8-.8.5-.8 0-2.5-1.5-5.2z" fill="#40E0D0" opacity="0.85"/><path d="M16 2c-1.5 6-3.5 12-4.2 18" stroke="#fef3c7" stroke-width="0.6" fill="none" opacity="0.5"/><defs><linearGradient id="fd" x1="50%" y1="0%" x2="50%" y2="100%"><stop offset="0%" stop-color="#fbbf24"/><stop offset="100%" stop-color="#d97706"/></linearGradient></defs></svg>
+              <span class="tier-name">Patron Feather</span>
+              <span class="tier-price">$50</span>
             </button>
-            <button class="btn-secondary donation-btn" data-amount="custom" style="font-size:var(--text-sm);padding:var(--sp-2)">
-              💎 Custom<br><span style="font-size:var(--text-xs);color:var(--text-tertiary)">Your amount</span>
+            <button class="donor-tier-card donation-btn" data-amount="custom">
+              <svg class="tier-icon" viewBox="0 0 32 32" fill="none"><circle cx="16" cy="16" r="11" stroke="var(--roc-gold)" stroke-width="1.5" stroke-dasharray="3 2" fill="none" opacity="0.5"/><path d="M16 8v16M8 16h16" stroke="var(--roc-gold)" stroke-width="1.5" stroke-linecap="round"/></svg>
+              <span class="tier-name">Custom</span>
+              <span class="tier-price">Your amount</span>
             </button>
           </div>
           <div style="display:flex;gap:var(--sp-2);flex-wrap:wrap;margin-top:var(--sp-3)">
-            <button class="btn-secondary" id="donate-crypto-btn" style="font-size:var(--text-sm)">🪙 Donate With Crypto</button>
+            <button class="btn-secondary" id="donate-crypto-btn" style="font-size:var(--text-sm)">Donate With Crypto</button>
           </div>
           <div id="donor-badge-status" style="margin-top:var(--sp-3);padding:var(--sp-3);border-radius:var(--radius-lg);background:var(--bg-tertiary)">
             <div style="font-size:var(--text-sm);font-weight:600;margin-bottom:var(--sp-1)">Your Donor Badge</div>
             <div id="donor-badge-display" style="font-size:var(--text-xs);color:var(--text-tertiary)">Loading...</div>
           </div>
           <div style="margin-top:var(--sp-3);display:flex;gap:var(--sp-3);flex-wrap:wrap">
-            <a href="#/roc-bird" style="font-size:var(--text-xs);color:var(--turquoise);text-decoration:none">🪶 View Roc Bird Status</a>
-            <a href="#/transparency" style="font-size:var(--text-xs);color:var(--turquoise);text-decoration:none">📜 Transparency Report</a>
-            <a href="#/supporters" style="font-size:var(--text-xs);color:var(--turquoise);text-decoration:none">🪶 Supporters Wall</a>
+            <a href="#/roc-bird" style="font-size:var(--text-xs);color:var(--turquoise);text-decoration:none">Roc Bird Status</a>
+            <a href="#/transparency" style="font-size:var(--text-xs);color:var(--turquoise);text-decoration:none">Transparency Report</a>
+            <a href="#/supporters" style="font-size:var(--text-xs);color:var(--turquoise);text-decoration:none">Supporters Wall</a>
           </div>
         </div>
 
@@ -621,21 +624,21 @@ export function renderSettings(container: HTMLElement) {
         <div class="settings-section" id="settings-roc-client-mount"></div>
 
         <div class="settings-section" style="border:1px solid var(--roc-gold,#D4AF37);border-radius:var(--radius-lg);padding:var(--sp-4);background:rgba(212,175,55,0.05)">
-          <h3 style="color:var(--roc-gold,#D4AF37)">🪶 The Roc Family Manifesto</h3>
+          <h3 style="color:var(--roc-gold,#D4AF37)">The Roc Family Manifesto</h3>
           <div style="font-size:var(--text-sm);color:var(--text-secondary);line-height:1.7">
             <p><strong>We are the voice of freedom. We are the voice of the people.</strong></p>
             <p>The Roc Family ecosystem exists for one purpose: to give people secure, private communication without dependence on any corporation, government, or surveillance apparatus.</p>
             <p style="margin-top:var(--sp-2)"><strong>Our principles:</strong></p>
             <ul style="margin:var(--sp-2) 0;padding-left:var(--sp-4)">
-              <li>🔒 <strong>Zero third-party dependencies</strong> — No Google, no Apple services, no Stripe, no Cloudflare CAPTCHA, no corporate APIs. Every component is self-hosted or open-source.</li>
-              <li>🕊️ <strong>No complicity in oppression</strong> — We do not support, partner with, or depend on entities that participate in the oppression of people anywhere in the world.</li>
-              <li>✊ <strong>Privacy is a human right</strong> — End-to-end encryption by default. We cannot read your messages. We will never sell your data. There is no data to sell.</li>
-              <li>🌍 <strong>Free for everyone, forever</strong> — No paywalls, no premium tiers that gate security features. All features are free. Donations via cryptocurrency only — no corporate payment processors.</li>
-              <li>🛡️ <strong>Proof-of-work, not surveillance</strong> — We use mathematical proof-of-work instead of corporate CAPTCHAs that track you.</li>
-              <li>📡 <strong>Self-sovereign infrastructure</strong> — Self-hosted STUN/TURN servers, self-hosted push notifications, self-hosted fonts and icons. No phone call touches Google's servers.</li>
-              <li>🏴 <strong>Transparency</strong> — Open-source code, public Roc Bird status page, regular transparency reports. If we are ever compromised, you will know.</li>
+              <li><strong>Zero third-party dependencies</strong> — No Google, no Apple services, no Stripe, no Cloudflare CAPTCHA, no corporate APIs. Every component is self-hosted or open-source.</li>
+              <li><strong>No complicity in oppression</strong> — We do not support, partner with, or depend on entities that participate in the oppression of people anywhere in the world.</li>
+              <li><strong>Privacy is a human right</strong> — End-to-end encryption by default. We cannot read your messages. We will never sell your data. There is no data to sell.</li>
+              <li><strong>Free for everyone, forever</strong> — No paywalls, no premium tiers that gate security features. All features are free. Donations via cryptocurrency only — no corporate payment processors.</li>
+              <li><strong>Proof-of-work, not surveillance</strong> — We use mathematical proof-of-work instead of corporate CAPTCHAs that track you.</li>
+              <li><strong>Self-sovereign infrastructure</strong> — Self-hosted STUN/TURN servers, self-hosted push notifications, self-hosted fonts and icons. No phone call touches Google's servers.</li>
+              <li><strong>Transparency</strong> — Open-source code, public Roc Bird status page, regular transparency reports. If we are ever compromised, you will know.</li>
             </ul>
-            <p style="margin-top:var(--sp-2);font-style:italic;color:var(--roc-gold,#D4AF37)">Built with love, for the people. 🇵🇸</p>
+            <p style="margin-top:var(--sp-2);font-style:italic;color:var(--roc-gold,#D4AF37)">Built with love, for the people.</p>
           </div>
         </div>
 
@@ -1375,7 +1378,7 @@ export function renderSettings(container: HTMLElement) {
             if (link) {
               try { await navigator.clipboard.writeText(link); } catch { /* ignore */ }
               showToast('Invite link copied to clipboard!', 'success');
-              importStatus.textContent += ` | 📎 Invite link: ${link}`;
+              importStatus.textContent += ` | Invite link: ${link}`;
             }
           } catch { showToast('Could not generate invite link', 'error'); }
         }
@@ -1734,11 +1737,11 @@ async function loadDonorBadge() {
     const donor = (res.data as { tier?: string; recurring?: boolean; donor_since?: number | null });
     const tier = donor?.tier;
     const tierNames: Record<string, string> = {
-      coffee: '☕ Coffee — Bronze Feather',
-      feather: '🪶 Feather — Amber Feather',
-      wing: '🦅 Wing — Golden Feather',
-      mountain: '🏔️ Mountain — Radiant Feather',
-      patron: '👑 Patron — Turquoise-tipped Feather',
+      coffee: 'Coffee — Bronze Feather',
+      feather: 'Feather — Amber Feather',
+      wing: 'Wing — Golden Feather',
+      mountain: 'Mountain — Radiant Feather',
+      patron: 'Patron — Turquoise-tipped Feather',
     };
     if (tier && tierNames[tier]) {
       const userId = localStorage.getItem('rocchat_user_id') || '';
@@ -1844,7 +1847,7 @@ async function showScheduledMessages() {
     if (msgs.length === 0) {
       body.replaceChildren(parseHTML(`
         <div style="text-align:center;padding:var(--sp-8);color:var(--text-tertiary)">
-          <div style="font-size:48px;margin-bottom:var(--sp-3)">📋</div>
+          <div style="margin-bottom:var(--sp-3)"><svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="var(--text-tertiary)" stroke-width="1.5"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1" ry="1"/></svg></div>
           <p>No scheduled messages</p>
           <p style="font-size:var(--text-xs);margin-top:var(--sp-2)">Use the clock icon in the composer to schedule a message</p>
         </div>
@@ -1883,7 +1886,7 @@ async function showFoldersManager() {
     body.replaceChildren(parseHTML(`
       ${folders.length === 0 ? `
         <div style="text-align:center;padding:var(--sp-6);color:var(--text-tertiary)">
-          <div style="font-size:48px;margin-bottom:var(--sp-3)">📁</div>
+          <div style="margin-bottom:var(--sp-3)"><svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="var(--text-tertiary)" stroke-width="1.5"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></div>
           <p>No folders yet</p>
         </div>
       ` : folders.map(f => `
@@ -1914,7 +1917,7 @@ async function showFoldersManager() {
     body.querySelector('#overlay-create-folder')?.addEventListener('click', () => {
       const name = prompt('Folder name:');
       if (name && name.trim()) {
-        const icon = prompt('Folder icon (emoji):', '📁') || '📁';
+        const icon = prompt('Folder icon (optional):', '') || '';
         api.createChatFolder(name.trim(), icon).then(res => {
           if (res.ok) {
             showToast('Folder created');
@@ -1939,7 +1942,7 @@ async function showContactsManager() {
     body.replaceChildren(parseHTML(`
       ${contacts.length === 0 ? `
         <div style="text-align:center;padding:var(--sp-6);color:var(--text-tertiary)">
-          <div style="font-size:48px;margin-bottom:var(--sp-3)">👤</div>
+          <div style="margin-bottom:var(--sp-3)"><svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="var(--text-tertiary)" stroke-width="1.5"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg></div>
           <p>No saved contacts</p>
           <p style="font-size:var(--text-xs);margin-top:var(--sp-2)">Contacts are saved when you start conversations</p>
         </div>
@@ -2118,15 +2121,15 @@ async function showOrgDashboard(orgId: string) {
 
       <div style="display:grid;gap:var(--sp-2)">
         <button class="btn-secondary" id="org-add-member">+ Add Member</button>
-        <button class="btn-secondary" id="org-bulk-add">👥 Bulk Provision Users</button>
-        <button class="btn-secondary" id="org-sso">🔐 SSO Configuration</button>
-        <button class="btn-secondary" id="org-export">📊 Compliance Export</button>
-        <button class="btn-secondary" id="org-retention">⏱ Retention Policy</button>
-        <button class="btn-secondary" id="org-wipe" style="color:var(--danger);border-color:var(--danger)">🗑 Remote Device Wipe</button>
-        <button class="btn-secondary" id="org-directory">🔍 User Directory</button>
-        <button class="btn-secondary" id="org-api-keys">🔑 API Keys</button>
-        <button class="btn-secondary" id="org-webhooks">🔗 Webhooks</button>
-        <button class="btn-secondary" id="org-branding">🎨 Custom Branding</button>
+        <button class="btn-secondary" id="org-bulk-add">Bulk Provision Users</button>
+        <button class="btn-secondary" id="org-sso">SSO Configuration</button>
+        <button class="btn-secondary" id="org-export">Compliance Export</button>
+        <button class="btn-secondary" id="org-retention">Retention Policy</button>
+        <button class="btn-secondary" id="org-wipe" style="color:var(--danger);border-color:var(--danger)">Remote Device Wipe</button>
+        <button class="btn-secondary" id="org-directory">User Directory</button>
+        <button class="btn-secondary" id="org-api-keys">API Keys</button>
+        <button class="btn-secondary" id="org-webhooks">Webhooks</button>
+        <button class="btn-secondary" id="org-branding">Custom Branding</button>
       </div>
     `));
 
@@ -2320,7 +2323,7 @@ async function showOrgDashboard(orgId: string) {
         const res = await api.listApiKeys(orgId);
         const keys = (res.data || []) as Record<string, string>[];
         ob.replaceChildren(parseHTML(`
-          <h3 style="margin-bottom:var(--sp-3)">🔑 API Keys</h3>
+          <h3 style="margin-bottom:var(--sp-3)">API Keys</h3>
           <div style="display:grid;gap:var(--sp-2);margin-bottom:var(--sp-3)">
             ${keys.map((k: any) => `
               <div style="display:flex;justify-content:space-between;align-items:center;padding:var(--sp-2);background:var(--bg-tertiary);border-radius:8px">
@@ -2366,7 +2369,7 @@ async function showOrgDashboard(orgId: string) {
         const res = await api.listWebhooks(orgId);
         const hooks = (res.data || []) as Record<string, string>[];
         ob.replaceChildren(parseHTML(`
-          <h3 style="margin-bottom:var(--sp-3)">🔗 Webhooks</h3>
+          <h3 style="margin-bottom:var(--sp-3)">Webhooks</h3>
           <div style="display:grid;gap:var(--sp-2);margin-bottom:var(--sp-3)">
             ${hooks.map((h: any) => `
               <div style="display:flex;justify-content:space-between;align-items:center;padding:var(--sp-2);background:var(--bg-tertiary);border-radius:8px">
@@ -2411,7 +2414,7 @@ async function showOrgDashboard(orgId: string) {
       const currentColor = org.accent_color || '#c9a84c';
       const currentLogo = (org as any).logo_url || '';
       ob.replaceChildren(parseHTML(`
-        <h3 style="margin-bottom:var(--sp-3)">🎨 Custom Branding</h3>
+        <h3 style="margin-bottom:var(--sp-3)">Custom Branding</h3>
         <div style="display:grid;gap:var(--sp-3)">
           <div>
             <label class="setting-label" style="display:block;margin-bottom:4px">Accent Color</label>
@@ -2655,7 +2658,7 @@ export async function showAppLockScreen(onUnlock: () => void) {
   overlay.setAttribute('role', 'presentation');
   overlay.style.cssText = 'position:fixed;inset:0;background:var(--bg-primary);z-index:9999;display:flex;align-items:center;justify-content:center;flex-direction:column';
   overlay.replaceChildren(parseHTML(`<div role="dialog" aria-modal="true" aria-labelledby="app-lock-title" style="text-align:center;width:90%;max-width:300px">
-    <div style="font-size:48px;margin-bottom:var(--sp-4)">🔒</div>
+    <div style="margin-bottom:var(--sp-4)"><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="var(--roc-gold)" stroke-width="1.5"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></div>
     <h2 id="app-lock-title" style="color:var(--text-primary);margin-bottom:var(--sp-4)">RocChat Locked</h2>
     <label for="lock-pin-input" style="display:block;text-align:left;font-size:var(--text-sm);color:var(--text-secondary);margin-bottom:var(--sp-1)">PIN</label>
     <input type="password" inputmode="numeric" pattern="[0-9]*" id="lock-pin-input" maxlength="6" placeholder="Enter PIN" autocomplete="off" style="width:100%;padding:var(--sp-3);font-size:var(--text-lg);text-align:center;border:1px solid var(--border-color);border-radius:var(--radius);background:var(--bg-secondary);color:var(--text-primary);letter-spacing:8px;margin-bottom:var(--sp-4)" />
@@ -2741,7 +2744,7 @@ async function loadDevices() {
       return;
     }
     container.replaceChildren(parseHTML(devices.map((d) => {
-      const icon = d.platform === 'ios' ? '📱' : d.platform === 'android' ? '📱' : '💻';
+      const icon = d.platform === 'ios' ? '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-2px"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>' : d.platform === 'android' ? '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-2px"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>' : '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-2px"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>';
       const active = d.last_active ? new Date(d.last_active * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : 'Unknown';
       return `
         <div class="setting-row" style="align-items:center">

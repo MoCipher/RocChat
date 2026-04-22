@@ -273,9 +273,9 @@ export async function handleFeatures(
     return jsonResponse({ ok: true });
   }
 
-  // ── Warrant Canary ──
+  // ── Roc Bird Status ──
 
-  // GET /api/features/canary — Public warrant canary
+  // GET /api/features/canary — Public Roc Bird Status
   if (path === '/api/features/canary' && request.method === 'GET') {
     return jsonResponse({
       status: 'clear',

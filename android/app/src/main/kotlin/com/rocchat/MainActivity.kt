@@ -4,15 +4,28 @@ import android.os.Bundle
 import android.view.WindowManager
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.*
+import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -24,6 +37,7 @@ import com.rocchat.chat.MainScreen
 import com.rocchat.crypto.SecureStorage
 import com.rocchat.network.APIClient
 import com.rocchat.push.PushManager
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 class MainActivity : FragmentActivity() {
@@ -62,9 +76,18 @@ class MainActivity : FragmentActivity() {
                         BiometricHelper.isBiometricAvailable(this@MainActivity)
                     )
                 }
+                var showSplash by remember { mutableStateOf(true) }
 
-                // Restore token on launch and register push
-                LaunchedEffect(isAuthenticated) {
+                // Dismiss splash after 0.8s
+                LaunchedEffect(Unit) {
+                    delay(800)
+                    showSplash = false
+                }
+
+                Box(modifier = Modifier.fillMaxSize()) {
+                    // Main content underneath
+                    // Restore token on launch and register push
+                    LaunchedEffect(isAuthenticated) {
                     val token = SecureStorage.get(this@MainActivity, "session_token", "rocchat")
                     if (token != null) {
                         APIClient.sessionToken = token
@@ -157,6 +180,16 @@ class MainActivity : FragmentActivity() {
                         )
                     }
                 }
+
+                    // Splash overlay
+                    AnimatedVisibility(
+                        visible = showSplash,
+                        exit = fadeOut(animationSpec = tween(500)),
+                        modifier = Modifier.zIndex(999f)
+                    ) {
+                        RocSplashScreen()
+                    }
+                }
             }
         }
     }
@@ -188,6 +221,93 @@ fun BiometricLockScreen(onFallback: () -> Unit) {
             Spacer(Modifier.height(32.dp))
             TextButton(onClick = onFallback) {
                 Text("Use Passphrase Instead", color = RocColors.RocGold)
+            }
+        }
+    }
+}
+
+@Composable
+fun RocSplashScreen() {
+    val warmBg1 = Color(0xFF1A1410)
+    val warmBg2 = Color(0xFF0F0D0A)
+    val gold = Color(0xFFD4AF37)
+    val turquoise = Color(0xFF40E0D0)
+
+    // Spinner rotation
+    val infiniteTransition = rememberInfiniteTransition(label = "splash")
+    val spinAngle by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 360f,
+        animationSpec = infiniteRepeatable(animation = tween(800, easing = LinearEasing)),
+        label = "spin"
+    )
+    val ringScale by infiniteTransition.animateFloat(
+        initialValue = 1f,
+        targetValue = 1.08f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1500, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "ring"
+    )
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Brush.linearGradient(colors = listOf(warmBg1, warmBg2, warmBg1))),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            // Security rings + icon
+            Box(contentAlignment = Alignment.Center) {
+                Canvas(modifier = Modifier.size(170.dp)) {
+                    val center = Offset(size.width / 2, size.height / 2)
+                    // Ring 3
+                    drawCircle(color = gold.copy(alpha = 0.06f * ringScale), radius = 85.dp.toPx() * ringScale, center = center, style = Stroke(1.5f))
+                    // Ring 2
+                    drawCircle(color = gold.copy(alpha = 0.12f * ringScale), radius = 70.dp.toPx() * ringScale, center = center, style = Stroke(1.5f))
+                    // Ring 1
+                    drawCircle(color = gold.copy(alpha = 0.2f * ringScale), radius = 55.dp.toPx() * ringScale, center = center, style = Stroke(1.5f))
+                }
+                // Placeholder icon text (real app would use the SVG resource)
+                Text("R", fontSize = 42.sp, fontWeight = FontWeight.Bold, color = gold)
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            Text(
+                "RocChat",
+                fontSize = 28.sp,
+                fontWeight = FontWeight.Bold,
+                color = gold
+            )
+
+            Spacer(modifier = Modifier.height(4.dp))
+
+            Text(
+                "End-to-end encrypted",
+                fontSize = 13.sp,
+                fontFamily = FontFamily.Monospace,
+                color = turquoise
+            )
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            // Spinner
+            Canvas(
+                modifier = Modifier
+                    .size(24.dp)
+                    .rotate(spinAngle)
+            ) {
+                drawArc(
+                    color = gold,
+                    startAngle = 0f,
+                    sweepAngle = 252f,
+                    useCenter = false,
+                    style = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Round),
+                    topLeft = Offset.Zero,
+                    size = Size(size.width, size.height)
+                )
             }
         }
     }

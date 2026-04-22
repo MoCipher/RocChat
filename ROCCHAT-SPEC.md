@@ -288,7 +288,8 @@ Chat bubbles: radius-lg (12px) with one squared corner (2px)
 | Sidebar background | Dark (`#0D1117` / `#110E0C`) even in light mode |
 | Active nav item | `rgba(212, 175, 55, 0.2)` gold tint highlight |
 | Hover states | `rgba(212, 175, 55, 0.06)` subtle gold |
-| Loading screen | Animated Roc bird with security rings + gold gradient title text + ambient particles |
+| Splash / Loading screen | Fixed overlay (z-index 9999), warm charcoal gradient bg (`#1A1410 → #0F0D0A`), Roc bird icon with pulsing gold security rings, gold title, turquoise monospace subtitle, spinner. Min 800 ms display, fade-out transition (0.5 s). Consistent across web (CSS), iOS (SwiftUI `SplashView`), Android (Compose `RocSplashScreen`), desktop (Tauri wraps web). |
+| Landing page | Glassmorphism sticky nav (blur 16px, saturate 1.4), hero with radial gold glow + animated bird + beta badge pill, manifesto quote section, 8 feature cards (2×4 grid, hover lift), 4 trust stats, 6 security items with left gold border, 3 download cards, enhanced footer. IntersectionObserver scroll fade-in animations. Mobile: hamburger toggle, full-width CTAs, stacked columns. |
 | Login screen | Centered Roc bird icon + app name in gradient gold text |
 | Selection highlight | `rgba(212, 175, 55, 0.2)` |
 | Focus ring | `0 0 0 3px rgba(212, 175, 55, 0.2)` |
@@ -367,7 +368,7 @@ object RocColors {
 
 ### App Icon
 
-512×512, rx=112 rounded rect. Background: `#0D1117 → #161B22` gradient. Gold radial glow behind bird. Subtle gold inner border `rgba(212,175,55,0.15)`. Same Roc bird centered. Chat-specific overlay: small speech bubble or signal waves near the bird's beak in turquoise (#40E0D0) or gold (#D4AF37) at ~20% opacity.
+512×512, rx=112 rounded rect. Background: warm charcoal `#1A1410 → #0F0D0A` gradient (warm-toned, complements gold). Gold radial glow behind bird. Subtle gold inner border `rgba(212,175,55,0.15)`. Same Roc bird centered. Signal wave overlay: three concentric turquoise (#40E0D0) arc pairs emanating symmetrically from both sides of the bird, decreasing opacity outward (0.7 → 0.48 → 0.28). No speech bubble.
 
 ### Premium Badge — Golden Roc Wings
 
@@ -389,15 +390,18 @@ object RocColors {
 
 ### Donor Badges — Roc Feathers
 
-| Tier | Price | Feather | Color |
-|---|---|---|---|
-| ☕ Coffee | $3 | Single bronze feather (12px) | `#8B7355` |
-| 🪶 Feather | $5 | Single amber feather (14px) | `#d97706 → #92400e` |
-| 🦅 Wing | $10 | Golden feather (16px, shimmer) | `#fbbf24 → #d97706` |
-| 🏔️ Mountain | $25 | Radiant golden feather (18px, glow) | `#fef3c7 → #f59e0b → #b45309` |
-| 👑 Patron | $50 | Turquoise-tipped golden feather (20px) | Body: `#fbbf24 → #d97706`, Tip: `#40E0D0` |
+Custom SVG feather badges (not emoji). Each tier features a unique hand-crafted feather path with gradients:
 
-Recurring donors get a subtle ∞ loop at feather base. Badge display is togglable in settings.
+| Tier | Price | Badge Name | Design | Colors |
+|---|---|---|---|---|
+| Bronze | $3 | Bronze Feather | Teardrop feather, single midrib line | Solid `#8B7355`, midrib `#A09070` |
+| Amber | $5 | Amber Feather | Teardrop feather, midrib line | Gradient `#d97706 → #92400e`, midrib `#f59e0b` |
+| Golden | $10 | Golden Feather | Larger teardrop, dual midrib lines, shimmer | Gradient `#fbbf24 → #d97706`, midribs `#fef3c7` |
+| Radiant | $25 | Radiant Feather | Large teardrop, midrib + glow dot at tip | Gradient `#fef3c7 → #f59e0b → #b45309` |
+| Patron | $50 | Patron Feather | Large teardrop with turquoise tip overlay | Body: `#fbbf24 → #d97706`, Tip: `#40E0D0` (0.85 opacity) |
+| Custom | any | Plus icon | Dashed circle with centered plus | `var(--roc-gold)` |
+
+Recurring donors get a subtle ∞ loop at feather base. Badge display is togglable in settings. Feathers render as inline SVGs at 32px in the UI, 16–20px next to usernames.
 
 ---
 
@@ -753,6 +757,16 @@ Per-conversation settings:
 
 No stories. No bots. No AI. No payments. No shopping. No ads. Channels bring creators; everything else is just messaging done perfectly.
 
+#### Settings Tab — Design Spec
+
+Card-based layout with `border-radius: var(--radius-xl)`, `border: 1px solid var(--border-weak)`, `background: var(--bg-card)`. Section headers uppercase, `var(--text-sm)`, `letter-spacing: 0.06em`, tertiary color. Setting rows have hover states (`var(--bg-card-hover)`), `gap: var(--sp-3)`, rounded `var(--radius-md)`.
+
+**Profile hero**: Gradient top bar (`rgba(212,175,55,0.15) → rgba(64,224,208,0.08)`), avatar in gradient ring (`roc-gold → turquoise`), monospace username, status pill with background. Edit button uses inline SVG pencil (no Lucide dependency).
+
+**Business section**: Clean card with 2-column SVG-checkmark feature grid, monospace pricing, full-width CTA.
+
+**Scrollbar**: `scrollbar-width: thin; scrollbar-color: rgba(212,175,55,0.15) transparent` on all scrollable areas (settings, conversations, messages).
+
 ### 9.4 True Multi-Device E2E
 
 Each device is first-class. No primary device. No phone dependency. Add device via passphrase + 6-digit verification code from existing device. Revoke any device instantly. No SIM swap attack vector.
@@ -873,18 +887,18 @@ Everything in Premium, plus:
 
 In-app (Settings → Support RocChat):
 
-| Tier | Price | Badge |
-|---|---|---|
-| ☕ Buy Roc a Coffee | $3 | Single bronze feather |
-| 🪶 Feather Supporter | $5 | Single amber feather |
-| 🦅 Wing Supporter | $10 | Golden feather (shimmer) |
-| 🏔️ Mountain Guardian | $25 | Radiant golden feather (glow) |
-| 👑 Roc Patron | $50 | Turquoise-tipped golden feather |
-| 💎 Custom amount | $___  | Based on nearest tier |
+| Tier | Price | Badge Name | SVG Badge |
+|---|---|---|---|
+| Bronze | $3 | Bronze Feather | Custom SVG teardrop, `#8B7355` |
+| Amber | $5 | Amber Feather | Custom SVG teardrop, gradient `#d97706 → #92400e` |
+| Golden | $10 | Golden Feather | Custom SVG, shimmer, `#fbbf24 → #d97706` |
+| Radiant | $25 | Radiant Feather | Custom SVG, glow dot, `#fef3c7 → #f59e0b → #b45309` |
+| Patron | $50 | Patron Feather | Custom SVG, turquoise tip `#40E0D0` |
+| Custom | any | Plus icon | Dashed circle + plus |
 
-One-time or monthly recurring. Supporters get optional profile badge and optional name on public supporters wall.
+One-time or monthly recurring. Supporters get optional profile badge and optional name on public supporters wall. All badges are custom SVG paths — no emoji.
 
-Payment methods: Apple IAP (iOS), Google Play (Android), Stripe (web), Crypto (BTC, ETH, XMR).
+Payment methods: Cryptocurrency only (BTC, ETH, XMR). No corporate payment processors.
 
 Monthly transparency report published with aggregate revenue and infrastructure costs.
 

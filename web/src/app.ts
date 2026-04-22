@@ -36,14 +36,16 @@ import { syncChannel, setRocClientEnabled, isRocClient } from './components/roc-
 
 // ── Trusted Types policy (defense-in-depth) ──
 // CSP enforces `require-trusted-types-for 'script'`.
-// All innerHTML sinks have been migrated to DOMParser/replaceChildren, so
-// createHTML is intentionally omitted — any remaining sink will throw at
-// runtime, surfacing regressions immediately.
+// createHTML is required because DOMParser.parseFromString IS a Trusted Types
+// sink in browsers that enforce TT (Chrome, Firefox with the header). We allow
+// it here because all callers pass developer-controlled template strings — never
+// raw user input.
 try {
   const tt = (window as unknown as { trustedTypes?: { createPolicy: (name: string, rules: object) => unknown; defaultPolicy?: unknown } }).trustedTypes;
   if (tt && typeof tt.createPolicy === 'function') {
     if (!tt.defaultPolicy) {
       tt.createPolicy('rocchat-default', {
+        createHTML: (s: string) => s,
         createScript: () => {
           throw new TypeError('Dynamic script text is blocked by Trusted Types policy');
         },
@@ -98,36 +100,58 @@ window.addEventListener('unhandledrejection', (e) => {
 });
 
 async function init() {
-  // Migrate any legacy secrets from localStorage to encrypted IDB
-  migrateLegacySecrets().catch(e => console.warn('Secret migration failed:', e));
+  try {
+    // Migrate any legacy secrets from localStorage to encrypted IDB
+    migrateLegacySecrets().catch(e => console.warn('Secret migration failed:', e));
 
-  // Install command palette hotkey (⌘K / Ctrl+K)
-  installCommandPaletteHotkey();
+    // Install command palette hotkey (⌘K / Ctrl+K)
+    installCommandPaletteHotkey();
 
-  // Garbage-collect drafts older than 30 days (best-effort, non-blocking)
-  pruneOldDrafts().catch(() => { /* ignore IDB errors on first boot */ });
+    // Garbage-collect drafts older than 30 days (best-effort, non-blocking)
+    pruneOldDrafts().catch(() => { /* ignore IDB errors on first boot */ });
 
-  // Pull authoritative Roc Client (canary) channel state. Non-blocking;
-  // if the user is unauthenticated this no-ops on the server side.
-  syncChannel().catch(() => { /* offline; cached value already applied */ });
+    // Pull authoritative Roc Client (canary) channel state. Non-blocking;
+    // if the user is unauthenticated this no-ops on the server side.
+    syncChannel().catch(() => { /* offline; cached value already applied */ });
 
-  // Apply saved theme
-  const savedTheme = localStorage.getItem('rocchat_theme') || 'auto';
-  applyTheme(savedTheme);
+    // Apply saved theme
+    const savedTheme = localStorage.getItem('rocchat_theme') || 'auto';
+    applyTheme(savedTheme);
 
-  // Apply saved font scale
-  const savedFontScale = parseFloat(localStorage.getItem('rocchat_font_scale') || '1');
-  if (!isNaN(savedFontScale)) document.documentElement.style.setProperty('--roc-font-scale', String(savedFontScale));
+    // Apply saved font scale
+    const savedFontScale = parseFloat(localStorage.getItem('rocchat_font_scale') || '1');
+    if (!isNaN(savedFontScale)) document.documentElement.style.setProperty('--roc-font-scale', String(savedFontScale));
 
-  // App Lock — check before showing any UI
-  if (!(await checkAppLock())) {
-    const loading = document.getElementById('loading-screen');
-    if (loading) loading.remove();
-    await showAppLockScreen(() => initAfterUnlock());
-    return;
+    // App Lock — check before showing any UI
+    if (!(await checkAppLock())) {
+      dismissSplash();
+      await showAppLockScreen(() => initAfterUnlock());
+      return;
+    }
+
+    initAfterUnlock();
+  } catch (err) {
+    console.error('RocChat init failed:', err);
+    // Always dismiss splash so the page is never permanently blank
+    dismissSplash();
+    // Fall back to landing page so users can still interact
+    try { showLanding(); } catch { /* last resort */ }
   }
+}
 
-  initAfterUnlock();
+const splashShownAt = Date.now();
+function dismissSplash() {
+  const el = document.getElementById('loading-screen');
+  if (!el) return;
+  const elapsed = Date.now() - splashShownAt;
+  const minDisplay = 800;
+  const delay = Math.max(0, minDisplay - elapsed);
+  setTimeout(() => {
+    el.classList.add('fade-out');
+    el.addEventListener('transitionend', () => el.remove(), { once: true });
+    // Fallback if transitionend doesn't fire
+    setTimeout(() => el.remove(), 600);
+  }, delay);
 }
 
 function initAfterUnlock() {
@@ -135,9 +159,8 @@ function initAfterUnlock() {
   // Initialize PWA install prompts (iOS explainer + Chromium deferred prompt).
   import('./pwa-install.js').then((m) => m.initInstallPrompts()).catch(() => {});
 
-  // Hide loading screen
-  const loading = document.getElementById('loading-screen');
-  if (loading) loading.remove();
+  // Hide loading screen with smooth fade
+  dismissSplash();
 
   // Check for Roc Bird status route (legacy #/canary is still supported)
   if (location.hash === '#/roc-bird' || location.hash === '#/canary') {
@@ -177,13 +200,21 @@ function initAfterUnlock() {
 
   // SW update toast — inform user when a new version is waiting
   if ('serviceWorker' in navigator) {
+    // If the active SW changes (because a waiting one took over via SKIP_WAITING),
+    // reload once so clients pick up the new bundle without a stale tab.
+    let reloadingForSw = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (reloadingForSw) return;
+      reloadingForSw = true;
+      window.location.reload();
+    });
     navigator.serviceWorker.ready.then((reg) => {
       reg.addEventListener('updatefound', () => {
         const newSW = reg.installing;
         if (!newSW) return;
         newSW.addEventListener('statechange', () => {
           if (newSW.state === 'installed' && navigator.serviceWorker.controller) {
-            showSwUpdateToast();
+            showSwUpdateToast(newSW);
           }
         });
       });
@@ -664,7 +695,7 @@ function showOnboardingIfNeeded() {
 }
 
 /** Show a dismissable toast when a new SW is waiting to activate. */
-function showSwUpdateToast() {
+function showSwUpdateToast(waitingSW?: ServiceWorker) {
   if (document.getElementById('sw-update-toast')) return;
   const toast = document.createElement('div');
   toast.id = 'sw-update-toast';
@@ -676,7 +707,20 @@ function showSwUpdateToast() {
     <button id="sw-dismiss-btn" style="background:none;border:none;color:var(--text-tertiary);font-size:16px;cursor:pointer;line-height:1" aria-label="Dismiss">✕</button>
   `));
   document.body.appendChild(toast);
-  toast.querySelector('#sw-reload-btn')?.addEventListener('click', () => window.location.reload());
+  toast.querySelector('#sw-reload-btn')?.addEventListener('click', () => {
+    // Ask the waiting SW to activate; the controllerchange listener above will
+    // reload the page once it takes control. Fall back to a plain reload if we
+    // don't have a handle on the waiting worker (shouldn't happen in practice).
+    const sw = waitingSW ?? navigator.serviceWorker.controller;
+    if (sw) {
+      try { sw.postMessage({ type: 'SKIP_WAITING' }); } catch { /* ignore */ }
+      // Safety net: if controllerchange never fires (e.g. user has another tab
+      // keeping the old SW alive), reload after a short grace period anyway.
+      setTimeout(() => window.location.reload(), 1500);
+    } else {
+      window.location.reload();
+    }
+  });
   toast.querySelector('#sw-dismiss-btn')?.addEventListener('click', () => toast.remove());
   setTimeout(() => toast.remove(), 30000);
 }

@@ -10,7 +10,7 @@ import { parseHTML } from '../utils.js';
 const ROC_BIRD_SVG = `<svg viewBox="0 0 512 512" width="120" height="120">
   <defs>
     <linearGradient id="lbg" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#0D1117"/><stop offset="40%" stop-color="#161B22"/><stop offset="100%" stop-color="#0D1117"/>
+      <stop offset="0%" stop-color="#1A1410"/><stop offset="40%" stop-color="#0F0D0A"/><stop offset="100%" stop-color="#1A1410"/>
     </linearGradient>
     <radialGradient id="lglow" cx="50%" cy="40%" r="55%">
       <stop offset="0%" stop-color="#D4AF37" stop-opacity="0.2"/><stop offset="100%" stop-color="transparent"/>
@@ -31,7 +31,7 @@ const ROC_BIRD_SVG = `<svg viewBox="0 0 512 512" width="120" height="120">
       <stop offset="0%" stop-color="#fffbeb"/><stop offset="100%" stop-color="#fbbf24"/>
     </linearGradient>
     <filter id="lds" x="-5%" y="-5%" width="110%" height="110%">
-      <feDropShadow dx="0" dy="2" stdDeviation="6" flood-color="#0D1117" flood-opacity="0.5"/>
+      <feDropShadow dx="0" dy="2" stdDeviation="6" flood-color="#0F0D0A" flood-opacity="0.5"/>
     </filter>
   </defs>
   <rect width="512" height="512" rx="112" fill="url(#lbg)"/>
@@ -62,7 +62,7 @@ export function renderLanding(container: HTMLElement, onWebLogin: () => void) {
     <div class="landing">
       <nav class="landing-nav">
         <div class="landing-nav-brand">
-          ${ROC_BIRD_SVG.replace('width="120" height="120"', 'width="36" height="36"')}
+          ${ROC_BIRD_SVG.replace('width="120" height="120"', 'width="32" height="32"')}
           <span class="landing-nav-name">RocChat</span>
         </div>
         <div class="landing-nav-links">
@@ -70,10 +70,14 @@ export function renderLanding(container: HTMLElement, onWebLogin: () => void) {
           <a href="#security">Security</a>
           <a href="#download">Download</a>
         </div>
+        <button class="landing-nav-toggle" id="nav-toggle" aria-label="Toggle menu">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+        </button>
       </nav>
 
       <section class="landing-hero">
         <div class="landing-hero-bird">${ROC_BIRD_SVG}</div>
+        <div class="landing-hero-badge">v0.1.0 — Now in Beta</div>
         <h1 class="landing-hero-title">RocChat</h1>
         <p class="landing-hero-tagline">Messages. Calls. Nothing else.<br/>Everything encrypted.</p>
         <p class="landing-hero-sub">No phone number. No compromise.</p>
@@ -88,6 +92,8 @@ export function renderLanding(container: HTMLElement, onWebLogin: () => void) {
           </button>
         </div>
       </section>
+
+      <hr class="landing-divider" />
 
       <section class="landing-features" id="features">
         <h2 class="landing-section-title">Just messaging, done perfectly.</h2>
@@ -134,8 +140,29 @@ export function renderLanding(container: HTMLElement, onWebLogin: () => void) {
             <h3>Disappearing Messages</h3>
             <p>Messages, media, voice notes — set to auto-delete. Ghost Mode for maximum privacy.</p>
           </div>
+          <div class="landing-feature-card">
+            <div class="landing-feature-icon">
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="var(--turquoise)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-6.219-8.56"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+            </div>
+            <h3>Zero Third-Party Services</h3>
+            <p>No Google, no Firebase, no Stripe, no CDNs. Self-hosted fonts, push, TURN servers. Full sovereignty.</p>
+          </div>
+          <div class="landing-feature-card">
+            <div class="landing-feature-icon">
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="var(--turquoise)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+            </div>
+            <h3>Import from Anywhere</h3>
+            <p>One-click migration from WhatsApp, Telegram, Signal. Re-encrypts locally with your RocChat keys.</p>
+          </div>
         </div>
       </section>
+
+      <section class="landing-manifesto">
+        <blockquote>We are the voice of freedom. We give power back to the people. Privacy is not a feature — it is a human right.</blockquote>
+        <p class="landing-manifesto-author">— The Roc Family Manifesto</p>
+      </section>
+
+      <hr class="landing-divider" />
 
       <section class="landing-security" id="security">
         <h2 class="landing-section-title">Built for the paranoid.</h2>
@@ -185,9 +212,11 @@ export function renderLanding(container: HTMLElement, onWebLogin: () => void) {
         </div>
       </section>
 
+      <hr class="landing-divider" />
+
       <section class="landing-download" id="download">
         <h2 class="landing-section-title">Get RocChat</h2>
-        <p class="landing-download-sub">Available on every platform. Same account everywhere.</p>
+        <p class="landing-download-sub">Available on every platform. Same account everywhere. Same encryption.</p>
         <div class="landing-download-grid">
           <a class="landing-download-card" href="#" target="_blank" rel="noopener">
             <svg width="36" height="36" viewBox="0 0 24 24" fill="var(--text-primary)"><path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.8-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/></svg>
@@ -226,7 +255,14 @@ export function renderLanding(container: HTMLElement, onWebLogin: () => void) {
             <span class="landing-footer-sep">·</span>
             <a href="https://pass.mocipher.com" target="_blank" rel="noopener">RocPass</a>
           </div>
-          <p class="landing-footer-copy">Open source. Audited. Private by design.</p>
+          <div class="landing-footer-links">
+            <a href="https://github.com/MoCipher" target="_blank" rel="noopener">GitHub</a>
+            <span class="landing-footer-sep">·</span>
+            <a href="mailto:security@chat.mocipher.com">Security</a>
+            <span class="landing-footer-sep">·</span>
+            <a href="#features">Features</a>
+          </div>
+          <p class="landing-footer-copy">Open source. Audited. Private by design. No tracking, no ads, no compromise.</p>
         </div>
       </footer>
     </div>
@@ -246,5 +282,43 @@ export function renderLanding(container: HTMLElement, onWebLogin: () => void) {
         target?.scrollIntoView({ behavior: 'smooth' });
       }
     });
+  });
+
+  // Mobile hamburger toggle
+  const navToggle = container.querySelector('#nav-toggle');
+  const navLinks = container.querySelector('.landing-nav-links');
+  navToggle?.addEventListener('click', () => {
+    const open = navLinks?.classList.toggle('mobile-open');
+    if (navLinks) {
+      (navLinks as HTMLElement).style.display = open ? 'flex' : '';
+      (navLinks as HTMLElement).style.flexDirection = open ? 'column' : '';
+      (navLinks as HTMLElement).style.position = open ? 'absolute' : '';
+      (navLinks as HTMLElement).style.top = open ? '100%' : '';
+      (navLinks as HTMLElement).style.right = open ? '0' : '';
+      (navLinks as HTMLElement).style.background = open ? 'rgba(13,17,23,0.95)' : '';
+      (navLinks as HTMLElement).style.padding = open ? '16px 24px' : '';
+      (navLinks as HTMLElement).style.borderRadius = open ? '0 0 12px 12px' : '';
+      (navLinks as HTMLElement).style.backdropFilter = open ? 'blur(16px)' : '';
+      (navLinks as HTMLElement).style.gap = open ? '16px' : '';
+    }
+  });
+
+  // Intersection Observer — animate sections on scroll
+  const sections = container.querySelectorAll('.landing-feature-card, .landing-security-item, .landing-trust-stat, .landing-download-card');
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach((entry) => {
+      if (entry.isIntersecting) {
+        (entry.target as HTMLElement).style.opacity = '1';
+        (entry.target as HTMLElement).style.transform = 'translateY(0)';
+        observer.unobserve(entry.target);
+      }
+    });
+  }, { threshold: 0.1, rootMargin: '0px 0px -40px 0px' });
+
+  sections.forEach((el) => {
+    (el as HTMLElement).style.opacity = '0';
+    (el as HTMLElement).style.transform = 'translateY(24px)';
+    (el as HTMLElement).style.transition = 'opacity 0.6s ease-out, transform 0.6s ease-out';
+    observer.observe(el);
   });
 }

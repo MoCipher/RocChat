@@ -1,5 +1,5 @@
 /*
-  Content-Security-Policy: default-src 'none'; script-src 'self' 'sha256-gTG5vSCWOmVNMBDDi8OZwfcbru9xxKmsOcOsm484dkY=' 'sha256-K+pktKbvTMrIYLqNZ3pzsH2xW4Cwu5591NG/Yf1pPQw=' 'sha256-ZswfTY7H35rbv8WC7NXBoiC7WNu86vSzCDChNWwZZDM='; style-src 'self' 'unsafe-inline'; font-src 'self' data:; connect-src 'self' wss://chat.mocipher.com wss://rocchat-api.spoass.workers.dev https://chat.mocipher.com https://rocchat-api.spoass.workers.dev; img-src 'self' blob:; media-src 'self' blob:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; manifest-src 'self'; worker-src 'self'; object-src 'none'; require-trusted-types-for 'script'; trusted-types rocchat-default
+  Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; connect-src 'self' wss://chat.mocipher.com wss://rocchat-api.spoass.workers.dev https://chat.mocipher.com https://rocchat-api.spoass.workers.dev https://ntfy.roc.family; img-src 'self' data: blob:; media-src 'self' blob:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; manifest-src 'self'; worker-src 'self'; object-src 'none'; require-trusted-types-for 'script'; trusted-types rocchat-default sw-init
   X-Content-Type-Options: nosniff
   X-Frame-Options: DENY
   Referrer-Policy: strict-origin-when-cross-origin

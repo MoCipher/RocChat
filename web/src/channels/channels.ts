@@ -5,6 +5,7 @@
  */
 import * as api from '../api.js';
 import { escapeHtml, parseHTML } from '../utils.js';
+import { toBase64 } from '@rocchat/shared';
 
 interface Channel {
   id: string;
@@ -291,8 +292,9 @@ function showPostDialog(channelId: string, isScheduled: boolean, container: HTML
     const content = (overlay.querySelector('#post-content') as HTMLTextAreaElement).value.trim();
     if (!content) return;
 
-    // For simplicity, send as plaintext ciphertext (channels use sender keys in production)
-    const ciphertext = btoa(unescape(encodeURIComponent(content)));
+    // Channel posts are base64-encoded plaintext today; server-side sender-key
+    // encryption is tracked as a separate spec item and applied to all clients.
+    const ciphertext = toBase64(new TextEncoder().encode(content));
 
     if (isScheduled) {
       const timeInput = overlay.querySelector('#post-schedule-time') as HTMLInputElement;

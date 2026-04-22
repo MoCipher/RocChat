@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self' wss: https://rocchat-api.spoass.workers.dev https://ntfy.roc.family; worker-src 'self'; manifest-src 'self'; frame-ancestors 'none';" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' wss: https://rocchat-api.spoass.workers.dev https://ntfy.roc.family; worker-src 'self'; manifest-src 'self';" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content" />
   <meta name="theme-color" content="#D4AF37" />
   <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0D1117" />
@@ -40,25 +40,24 @@
 <body>
   <a class="skip-link" href="#app">Skip to content</a>
   <div class="offline-banner" id="offline-banner" role="alert">You are offline — messages will be queued</div>
-  <div id="app" role="main" aria-label="RocChat Application">
-    <!-- Loading screen -->
-    <div id="loading-screen" class="loading-screen">
-      <div class="loading-particles" aria-hidden="true">
-        <span class="particle"></span><span class="particle"></span><span class="particle"></span>
-        <span class="particle"></span><span class="particle"></span><span class="particle"></span>
-        <span class="particle"></span><span class="particle"></span>
-      </div>
-      <div class="loading-bird">
-        <div class="security-ring ring-1"></div>
-        <div class="security-ring ring-2"></div>
-        <div class="security-ring ring-3"></div>
-        <img src="/favicon.svg" width="80" height="80" alt="RocChat" />
-      </div>
-      <h1 class="loading-title">RocChat</h1>
-      <p class="loading-subtitle">End-to-end encrypted</p>
-      <div class="loading-spinner"></div>
+  <!-- Loading screen — outside #app so replaceChildren can't destroy it -->
+  <div id="loading-screen" class="loading-screen">
+    <div class="loading-particles" aria-hidden="true">
+      <span class="particle"></span><span class="particle"></span><span class="particle"></span>
+      <span class="particle"></span><span class="particle"></span><span class="particle"></span>
+      <span class="particle"></span><span class="particle"></span>
     </div>
+    <div class="loading-bird">
+      <div class="security-ring ring-1"></div>
+      <div class="security-ring ring-2"></div>
+      <div class="security-ring ring-3"></div>
+      <img src="/favicon.svg" width="80" height="80" alt="RocChat" />
+    </div>
+    <h1 class="loading-title">RocChat</h1>
+    <p class="loading-subtitle">End-to-end encrypted</p>
+    <div class="loading-spinner"></div>
   </div>
+  <div id="app" role="main" aria-label="RocChat Application"></div>
 
   <script type="module" src="/src/app.ts"></script>
   <script src="/sw-init.js"></script>

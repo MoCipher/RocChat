@@ -262,10 +262,17 @@ export default {
           return withCors(errorResponse('Not a member of this conversation', 403));
         }
 
-        // Route to Durable Object
+        // Route to Durable Object — rewrite URL to pass pre-validated identity.
+        // The router has already verified the ticket/token; the DO only needs
+        // userId + deviceId + a marker that auth was done upstream.
+        const wsDeviceId = url.searchParams.get('deviceId') || 'web';
+        const doUrl = new URL(request.url);
+        doUrl.searchParams.set('userId', wsSessionUserId);
+        doUrl.searchParams.set('deviceId', wsDeviceId);
+        doUrl.searchParams.set('routerAuthed', '1');
         const roomId = env.CHAT_ROOM.idFromName(conversationId);
         const room = env.CHAT_ROOM.get(roomId);
-        return room.fetch(request);
+        return room.fetch(new Request(doUrl.toString(), request));
       }
 
       // ── Authenticated routes ──

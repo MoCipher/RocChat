@@ -111,21 +111,27 @@ export class ChatRoom implements DurableObject {
   private async handleWebSocket(request: Request, url: URL): Promise<Response> {
     const userId = url.searchParams.get('userId');
     const deviceId = url.searchParams.get('deviceId');
-    const sessionToken = url.searchParams.get('token');
+    const routerAuthed = url.searchParams.get('routerAuthed') === '1';
 
-    if (!userId || !deviceId || !sessionToken) {
+    if (!userId || !deviceId) {
       return new Response('Missing auth params', { status: 400 });
     }
 
-    // Verify session token via KV (userId only — deviceId varies by platform)
-    const sessionData = await this.env.KV.get(`session:${sessionToken}`);
-    if (!sessionData) {
-      return new Response('Invalid session', { status: 401 });
-    }
-
-    const session = JSON.parse(sessionData) as { userId: string; deviceId: string };
-    if (session.userId !== userId) {
-      return new Response('Session mismatch', { status: 401 });
+    // If the router already validated auth (ticket or session token),
+    // skip the KV lookup here — trust the upstream check.
+    if (!routerAuthed) {
+      const sessionToken = url.searchParams.get('token');
+      if (!sessionToken) {
+        return new Response('Missing auth params', { status: 400 });
+      }
+      const sessionData = await this.env.KV.get(`session:${sessionToken}`);
+      if (!sessionData) {
+        return new Response('Invalid session', { status: 401 });
+      }
+      const session = JSON.parse(sessionData) as { userId: string; deviceId: string };
+      if (session.userId !== userId) {
+        return new Response('Session mismatch', { status: 401 });
+      }
     }
 
     const pair = new WebSocketPair();
@@ -143,7 +149,6 @@ export class ChatRoom implements DurableObject {
     this.state.acceptWebSocket(server, [clientKey]);
     server.serializeAttachment({
       userId, deviceId,
-      token: sessionToken,
       lastAuthCheck: Date.now(),
     });
 

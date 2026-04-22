@@ -66,6 +66,12 @@ export default {
       return withCors(apiError('CSRF_BLOCKED', 'Cross-origin request blocked'));
     }
 
+    // Global payload size guard — reject oversized bodies before any parsing.
+    if (request.method === 'POST' || request.method === 'PUT' || request.method === 'PATCH') {
+      const cl = parseInt(request.headers.get('content-length') || '0', 10);
+      if (cl > 10 * 1024 * 1024) return withCors(errorResponse('Payload too large', 413));
+    }
+
     try {
       // ── Public routes (no auth) ──
       if (path === '/api/auth/register' && request.method === 'POST') {

@@ -58,7 +58,7 @@ export function renderSettings(container: HTMLElement) {
             <span style="font-size:72px;line-height:1;transform:scaleX(-1) rotate(-16deg)">🕊️</span>
           </div>
           <div style="position:relative;display:flex;flex-direction:column;align-items:center;gap:var(--sp-3)">
-            <div id="profile-avatar-wrapper" style="position:relative;cursor:pointer;padding:4px;border-radius:50%;background:conic-gradient(from 0deg, var(--roc-gold), #1493a0, var(--roc-gold))" title="Change profile photo">
+            <div id="profile-avatar-wrapper" role="button" tabindex="0" aria-label="Change profile photo" style="position:relative;cursor:pointer;padding:4px;border-radius:50%;background:conic-gradient(from 0deg, var(--roc-gold), #1493a0, var(--roc-gold))" title="Change profile photo">
               <div class="avatar" id="profile-avatar" style="width:104px;height:104px;font-size:40px;line-height:104px;border:3px solid var(--bg-elevated)"></div>
               <div style="position:absolute;bottom:4px;right:4px;width:34px;height:34px;border-radius:50%;background:var(--roc-gold);display:flex;align-items:center;justify-content:center;box-shadow:var(--shadow-md);border:2px solid var(--bg-elevated)">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
@@ -68,7 +68,7 @@ export function renderSettings(container: HTMLElement) {
             <div style="text-align:center">
               <div style="font-weight:700;font-size:var(--text-xl)" id="setting-display-name">Loading...</div>
               <div style="color:var(--text-tertiary);font-size:var(--text-sm)" id="setting-username">@loading...</div>
-              <div style="color:var(--text-secondary);font-size:var(--text-sm);cursor:pointer;margin-top:2px" id="setting-status" title="Click to edit status">Set a status...</div>
+              <div role="button" tabindex="0" aria-label="Edit status" style="color:var(--text-secondary);font-size:var(--text-sm);cursor:pointer;margin-top:2px" id="setting-status" title="Click to edit status">Set a status...</div>
             </div>
             <div style="display:inline-flex;align-items:center;gap:6px;padding:5px 12px;border-radius:999px;background:rgba(212,175,55,0.12);border:1px solid rgba(212,175,55,0.4);color:var(--roc-gold);font-size:var(--text-xs);font-weight:600">
               🕊️ Voice of Freedom 🇵🇸

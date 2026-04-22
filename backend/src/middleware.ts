@@ -53,6 +53,7 @@ export async function rateLimit(
   let bucket: string;
   if (path.startsWith('/api/messages')) { limit = 60; window = 60; bucket = '/api/messages'; }
   else if (path === '/api/auth/login') { limit = 5; window = 300; bucket = '/api/auth/login'; }
+  else if (path === '/api/auth/login/user') { limit = 5; window = 300; bucket = '/api/auth/login/user'; }
   else if (path === '/api/auth/refresh') { limit = 30; window = 300; bucket = '/api/auth/refresh'; }
   // Recovery vault: tight bucket. Anyone with a stolen session token still
   // can't brute-force the BIP39 mnemonic against the encrypted blob, but we

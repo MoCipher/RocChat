@@ -326,6 +326,14 @@ window.addEventListener('offline', () => {
   document.getElementById('offline-banner')?.classList.add('visible');
 });
 
+// Warn before navigating away with messages still in the send queue.
+window.addEventListener('beforeunload', (e) => {
+  if (messageQueue.length > 0) {
+    e.preventDefault();
+    e.returnValue = 'You have unsent messages. Leave anyway?';
+  }
+});
+
 export async function renderChats(container: HTMLElement) {
   await hydratePlaintextCache();
   container.replaceChildren(parseHTML(`

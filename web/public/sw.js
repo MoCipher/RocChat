@@ -75,6 +75,11 @@ self.addEventListener('activate', (event) => {
   self.clients.claim();
 });
 
+// Allow clients to force-activate a waiting SW without a full page reload.
+self.addEventListener('message', (event) => {
+  if (event.data?.type === 'SKIP_WAITING') self.skipWaiting();
+});
+
 // Push notification display (for future web push support)
 self.addEventListener('push', (event) => {
   if (!event.data) return;

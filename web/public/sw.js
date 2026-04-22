@@ -1,4 +1,4 @@
-const CACHE_NAME = 'rocchat-v11';
+const CACHE_NAME = 'rocchat-v12';
 const SHELL_ASSETS = [
   '/',
   '/index.html',
@@ -86,18 +86,25 @@ self.addEventListener('push', (event) => {
   try {
     const data = event.data.json();
     event.waitUntil(
-      self.registration.showNotification(data.title || 'RocChat', {
-        body: data.body || 'New encrypted message',
-        icon: '/favicon.svg',
-        badge: '/favicon.svg',
-        tag: data.tag || 'message',
-        renotify: !!data.tag,
-        data: data.url ? { url: data.url } : undefined,
-        actions: [
-          { action: 'open', title: 'Open' },
-          { action: 'dismiss', title: 'Dismiss' },
-        ],
-      })
+      (async () => {
+        await self.registration.showNotification(data.title || 'RocChat', {
+          body: data.body || 'New encrypted message',
+          icon: '/icon-192.png',
+          badge: '/icon-192.png',
+          tag: data.tag || 'message',
+          renotify: !!data.tag,
+          data: data.url ? { url: data.url } : undefined,
+          actions: [
+            { action: 'open', title: 'Open' },
+            { action: 'dismiss', title: 'Dismiss' },
+          ],
+        });
+        // Update app badge count
+        if (self.navigator?.setAppBadge) {
+          const notifications = await self.registration.getNotifications();
+          self.navigator.setAppBadge(notifications.length).catch(() => {});
+        }
+      })()
     );
   } catch { /* ignore malformed push */ }
 });
@@ -105,6 +112,13 @@ self.addEventListener('push', (event) => {
 // Notification click — focus or open app
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
+  // Decrement badge count
+  if (self.navigator?.setAppBadge) {
+    self.registration.getNotifications().then(n => {
+      if (n.length > 0) self.navigator.setAppBadge(n.length).catch(() => {});
+      else self.navigator.clearAppBadge?.().catch(() => {});
+    }).catch(() => {});
+  }
   const url = event.notification.data?.url || '/';
   event.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clients) => {

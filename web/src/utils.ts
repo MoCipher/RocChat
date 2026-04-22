@@ -36,6 +36,11 @@ export function installAvatarFallback(): void {
  *
  * Usage: el.replaceChildren(parseHTML(`<div>...</div>`));
  */
+/** Trigger a short haptic vibration on mobile PWA. No-op on desktop. */
+export function haptic(ms: number | number[] = 10): void {
+  try { navigator.vibrate?.(ms); } catch { /* unsupported */ }
+}
+
 export function parseHTML(html: string): DocumentFragment {
   const doc = new DOMParser().parseFromString(html, 'text/html');
   const frag = document.createDocumentFragment();

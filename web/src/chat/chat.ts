@@ -6,7 +6,7 @@
 
 import * as api from '../api.js';
 import type { Conversation, Message } from '../api.js';
-import { escapeHtml, parseHTML } from '../utils.js';
+import { escapeHtml, parseHTML, haptic } from '../utils.js';
 import { showToast } from '../components/toast.js';
 import { encryptMessage, decryptMessage, getOrCreateSession } from '../crypto/session-manager.js';
 import { groupEncrypt, groupDecrypt, isGroupEncrypted, handleSenderKeyDistribution } from '../crypto/group-session-manager.js';
@@ -464,6 +464,7 @@ function attachPullToRefresh(el: HTMLElement | null) {
     const dy = (e.changedTouches[0]?.clientY ?? 0) - startY;
     if (dy > threshold && !refreshing) {
       refreshing = true;
+      haptic([10, 30, 10]);
       indicator.style.animation = 'rocchat-spin 0.8s linear infinite';
       try {
         const res = await api.getConversations();
@@ -1284,6 +1285,7 @@ async function sendMessageHandler() {
 
   const text = input.value.trim();
   if (!text) return;
+  haptic();
 
   // Prevent huge payloads from reaching the server
   if (text.length > 64 * 1024) {
@@ -2227,6 +2229,7 @@ function initSwipeActions(listEl: HTMLElement) {
       item.style.transition = 'transform 0.25s ease';
       if (currentX < -60) {
         // Snap open
+        haptic(5);
         item.style.transform = `translateX(-${MAX_SWIPE}px)`;
         item.dataset.swiped = 'true';
       } else {

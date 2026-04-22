@@ -157,7 +157,29 @@ function dismissSplash() {
   }, delay);
 }
 
+function initNetworkBanner() {
+  const banner = document.createElement('div');
+  banner.className = 'network-banner';
+  banner.setAttribute('role', 'status');
+  banner.setAttribute('aria-live', 'polite');
+  document.body.prepend(banner);
+
+  let hideTimer: ReturnType<typeof setTimeout> | null = null;
+  const show = (cls: string, text: string, autoHide = 0) => {
+    banner.className = 'network-banner ' + cls + ' visible';
+    banner.textContent = text;
+    if (hideTimer) clearTimeout(hideTimer);
+    if (autoHide > 0) hideTimer = setTimeout(() => { banner.classList.remove('visible'); }, autoHide);
+  };
+
+  window.addEventListener('offline', () => show('offline', '📡 No internet connection'));
+  window.addEventListener('online', () => show('online', '✓ Back online', 2000));
+}
+
 function initAfterUnlock() {
+
+  // Network connectivity banner
+  initNetworkBanner();
 
   // Initialize PWA install prompts (iOS explainer + Chromium deferred prompt).
   import('./pwa-install.js').then((m) => m.initInstallPrompts()).catch(() => {});

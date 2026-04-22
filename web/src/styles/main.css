@@ -3634,3 +3634,107 @@ html[data-channel="roc"] .top-bar::after {
   align-self: center;
   opacity: 0.9;
 }
+
+/* ── Network Status Banner ── */
+.network-banner {
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  z-index: 999;
+  padding: 6px 16px;
+  text-align: center;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  transition: transform 0.3s var(--ease-out), opacity 0.3s;
+  transform: translateY(-100%);
+  opacity: 0;
+  pointer-events: none;
+}
+.network-banner.visible {
+  transform: translateY(0);
+  opacity: 1;
+  pointer-events: auto;
+}
+.network-banner.offline {
+  background: var(--danger);
+  color: white;
+}
+.network-banner.reconnecting {
+  background: var(--warning, #f59e0b);
+  color: var(--midnight-azure);
+}
+.network-banner.online {
+  background: var(--success, #1EA672);
+  color: white;
+}
+
+/* ── Conversation open slide (mobile) ── */
+@keyframes chatViewSlideIn {
+  from { opacity: 0; transform: translateX(30px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+@media (max-width: 768px) {
+  .app-layout.has-conversation .chat-view {
+    animation: chatViewSlideIn 0.2s var(--ease-out);
+  }
+}
+
+/* ── Image lazy-load placeholder ── */
+.msg-img-wrapper {
+  position: relative;
+  overflow: hidden;
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  min-height: 60px;
+}
+.msg-img-wrapper img {
+  display: block;
+  width: 100%;
+  max-width: 320px;
+  border-radius: var(--radius-md);
+  transition: opacity 0.3s ease;
+}
+.msg-img-wrapper img[data-loading="true"] {
+  opacity: 0;
+}
+.msg-img-wrapper .img-placeholder {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(135deg, var(--border-weak), var(--bg-secondary));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+}
+
+/* ── Unread count pulse ── */
+@keyframes unreadPulse {
+  0%   { transform: scale(1); }
+  50%  { transform: scale(1.15); }
+  100% { transform: scale(1); }
+}
+.unread-badge.new {
+  animation: unreadPulse 0.4s var(--ease-out);
+}
+
+/* ── Conversation item active highlight ── */
+.conversation-item.active {
+  background: var(--primary-bg);
+  border-left: 3px solid var(--primary);
+}
+
+/* ── Smooth scroll for messages ── */
+.messages-area {
+  scroll-behavior: smooth;
+}
+
+/* ── Read receipt ticks ── */
+.msg-status {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 4px;
+  opacity: 0.6;
+}
+.msg-status.read { opacity: 1; color: var(--turquoise); }
+.msg-status svg { width: 14px; height: 14px; }

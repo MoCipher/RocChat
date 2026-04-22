@@ -72,6 +72,22 @@ export default {
       if (cl > 10 * 1024 * 1024) return withCors(errorResponse('Payload too large', 413));
     }
 
+    // Structured request logging (non-blocking; runs after response via waitUntil)
+    const reqStart = Date.now();
+    const logRequest = (status: number) => {
+      ctx.waitUntil(Promise.resolve().then(() => {
+        logEvent('info', 'http_request', {
+          method: request.method,
+          path,
+          status,
+          durationMs: Date.now() - reqStart,
+          ip: request.headers.get('CF-Connecting-IP') || undefined,
+          ua: request.headers.get('User-Agent')?.slice(0, 120) || undefined,
+          cf: (request as any).cf?.colo || undefined,
+        });
+      }));
+    };
+
     try {
       // ── Public routes (no auth) ──
       if (path === '/api/auth/register' && request.method === 'POST') {
@@ -816,6 +832,7 @@ export default {
         }));
       }
 
+      logRequest(404);
       return withCors(errorResponse('Not found', 404));
     } catch (err) {
       logEvent('error', 'request_error', {
@@ -823,6 +840,7 @@ export default {
         method: request.method,
         message: err instanceof Error ? err.message : String(err),
       });
+      logRequest(500);
       return withCors(errorResponse('Internal server error', 500));
     }
   },
@@ -934,17 +952,18 @@ function applyCors(response: Response, request?: Request): Response {
   const cors = corsHeaders(request);
   const headers = new Headers(response.headers);
   for (const [k, v] of Object.entries(cors)) headers.set(k, v);
-  // Security headers
+  // Security headers — synced with web _headers
   headers.set('X-Content-Type-Options', 'nosniff');
   headers.set('X-Frame-Options', 'DENY');
   headers.set('Referrer-Policy', 'strict-origin-when-cross-origin');
-  headers.set('Permissions-Policy', 'camera=(self), microphone=(self), geolocation=(), interest-cohort=(), browsing-topics=(), serial=(), usb=(), bluetooth=(), gamepad=(), magnetometer=(), accelerometer=(), gyroscope=(), payment=()');
+  headers.set('Permissions-Policy', 'camera=(self), microphone=(self), geolocation=(), interest-cohort=(), browsing-topics=(), serial=(), usb=(), bluetooth=(), gamepad=(), magnetometer=(), accelerometer=(), gyroscope=(), payment=(), publickey-credentials-create=(self), publickey-credentials-get=(self)');
   headers.set(
     'Content-Security-Policy',
-    "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; connect-src 'self' wss://chat.mocipher.com wss://rocchat-api.spoass.workers.dev https://rocchat-api.spoass.workers.dev; img-src 'self' data: blob:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; manifest-src 'self'; object-src 'none';",
+    "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; connect-src 'self' wss://chat.mocipher.com wss://rocchat-api.spoass.workers.dev https://chat.mocipher.com https://rocchat-api.spoass.workers.dev https://ntfy.roc.family; img-src 'self' data: blob:; media-src 'self' blob:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; manifest-src 'self'; worker-src 'self'; object-src 'none'; require-trusted-types-for 'script'; trusted-types default sw-init",
   );
   headers.set('Strict-Transport-Security', 'max-age=63072000; includeSubDomains; preload');
   headers.set('Cross-Origin-Opener-Policy', 'same-origin');
+  headers.set('Cross-Origin-Embedder-Policy', 'credentialless');
   headers.set('Cross-Origin-Resource-Policy', 'same-origin');
   headers.set('X-DNS-Prefetch-Control', 'off');
   headers.set('X-Permitted-Cross-Domain-Policies', 'none');

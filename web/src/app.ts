@@ -44,7 +44,7 @@ try {
   const tt = (window as unknown as { trustedTypes?: { createPolicy: (name: string, rules: object) => unknown; defaultPolicy?: unknown } }).trustedTypes;
   if (tt && typeof tt.createPolicy === 'function') {
     if (!tt.defaultPolicy) {
-      tt.createPolicy('rocchat-default', {
+      tt.createPolicy('default', {
         createHTML: (s: string) => s,
         createScript: () => {
           throw new TypeError('Dynamic script text is blocked by Trusted Types policy');

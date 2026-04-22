@@ -9,7 +9,7 @@
 
 // Self-hosted fonts (fontsource — no Google Fonts)
 import '@fontsource/montserrat/400.css';
-import { parseHTML } from './utils.js';
+import { parseHTML, installAvatarFallback } from './utils.js';
 import '@fontsource/montserrat/500.css';
 import '@fontsource/montserrat/600.css';
 import '@fontsource/montserrat/700.css';
@@ -60,6 +60,9 @@ try {
     }
   }
 } catch { /* trustedTypes unavailable */ }
+
+// Install global avatar fallback handler (replaces inline onerror blocked by CSP)
+installAvatarFallback();
 
 // SW queue replay requests auth at replay time; never persist bearer tokens in IDB.
 if ('serviceWorker' in navigator) {
@@ -434,10 +437,11 @@ async function showCanary() {
         <p style="color:var(--text-secondary,#aaa)">Loading Roc Bird status...</p>
       </div>
       <div style="text-align:center;margin-top:24px">
-        <a href="#/" style="color:var(--roc-gold,#D4AF37);text-decoration:none" onclick="location.hash='';location.reload()">← Back to RocChat</a>
+        <a href="#/" class="back-to-app" style="color:var(--roc-gold,#D4AF37);text-decoration:none">← Back to RocChat</a>
       </div>
     </div>
   `));
+  app.querySelector('.back-to-app')?.addEventListener('click', (e) => { e.preventDefault(); location.hash = ''; location.reload(); });
   try {
     const resp = await fetch('/api/features/canary');
     const data = await resp.json();
@@ -475,10 +479,11 @@ async function showTransparency() {
         <div style="border:1px solid var(--border-primary,#333);border-radius:12px;padding:20px;background:var(--bg-secondary,#1a1a2e);color:var(--text-secondary,#aaa)">Loading reports...</div>
       </div>
       <div style="text-align:center;margin-top:24px">
-        <a href="#/" style="color:var(--roc-gold,#D4AF37);text-decoration:none" onclick="location.hash='';location.reload()">← Back to RocChat</a>
+        <a href="#/" class="back-to-app" style="color:var(--roc-gold,#D4AF37);text-decoration:none">← Back to RocChat</a>
       </div>
     </div>
   `));
+  app.querySelector('.back-to-app')?.addEventListener('click', (e) => { e.preventDefault(); location.hash = ''; location.reload(); });
 
   try {
     const res = await getTransparencyReports();
@@ -521,10 +526,11 @@ async function showSupportersWall() {
         <div style="border:1px solid var(--border-primary,#333);border-radius:12px;padding:20px;background:var(--bg-secondary,#1a1a2e);color:var(--text-secondary,#aaa)">Loading supporters...</div>
       </div>
       <div style="text-align:center;margin-top:24px">
-        <a href="#/" style="color:var(--roc-gold,#D4AF37);text-decoration:none" onclick="location.hash='';location.reload()">← Back to RocChat</a>
+        <a href="#/" class="back-to-app" style="color:var(--roc-gold,#D4AF37);text-decoration:none">← Back to RocChat</a>
       </div>
     </div>
   `));
+  app.querySelector('.back-to-app')?.addEventListener('click', (e) => { e.preventDefault(); location.hash = ''; location.reload(); });
   try {
     const res = await getSupportersWall();
     const supporters = res.ok ? res.data.supporters : [];

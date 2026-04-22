@@ -2099,7 +2099,7 @@ function renderAvatar(name: string, avatarUrl?: string, userId?: string, size = 
   if (avatarUrl && userId) {
     const path = avatarUrl.startsWith('/api/') ? avatarUrl : `/api${avatarUrl}`;
     const sep = path.includes('?') ? '&' : '?';
-    return `<div class="avatar" style="position:relative;width:${size}px;height:${size}px;font-size:${fontSize}px;line-height:${size}px;overflow:visible;${borderStyle}"><img src="${path}${sep}uid=${encodeURIComponent(userId)}" alt="${escapeHtml(name)}" loading="lazy" decoding="async" style="width:100%;height:100%;object-fit:cover;border-radius:50%" onerror="this.replaceWith(document.createTextNode('${initials}'))" />${presenceDot}${badge}${tierBadge}</div>`;
+    return `<div class="avatar" style="position:relative;width:${size}px;height:${size}px;font-size:${fontSize}px;line-height:${size}px;overflow:visible;${borderStyle}"><img src="${path}${sep}uid=${encodeURIComponent(userId)}" alt="${escapeHtml(name)}" loading="lazy" decoding="async" style="width:100%;height:100%;object-fit:cover;border-radius:50%" data-fallback="${initials}" />${presenceDot}${badge}${tierBadge}</div>`;
   }
   return `<div class="avatar" style="position:relative;width:${size}px;height:${size}px;font-size:${fontSize}px;line-height:${size}px;overflow:visible;${borderStyle}">${initials}${presenceDot}${badge}${tierBadge}</div>`;
 }

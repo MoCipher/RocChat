@@ -64,7 +64,7 @@ export function renderSidebar(
   if (avatarUrl && uid) {
     const path = avatarUrl.startsWith('/api/') ? avatarUrl : `/api${avatarUrl}`;
     const sep = path.includes('?') ? '&' : '?';
-    profileContent = `<img class="sidebar-avatar" src="${path}${sep}uid=${encodeURIComponent(uid)}" alt="" loading="lazy" decoding="async" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'"><span class="sidebar-avatar-fallback" style="display:none">${initials}</span>`;
+    profileContent = `<img class="sidebar-avatar" src="${path}${sep}uid=${encodeURIComponent(uid)}" alt="" loading="lazy" decoding="async" data-fallback-show-next="true"><span class="sidebar-avatar-fallback" style="display:none">${initials}</span>`;
   } else {
     profileContent = `<span class="sidebar-avatar-fallback">${initials}</span>`;
   }

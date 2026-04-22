@@ -1953,7 +1953,7 @@ async function showContactsManager() {
         if (c.avatar_url) {
           const path = (c.avatar_url as string).startsWith('/api/') ? c.avatar_url : `/api${c.avatar_url}`;
           const sep = path.includes('?') ? '&' : '?';
-          avatarHtml = `<div class="avatar" style="width:40px;height:40px;font-size:14px"><img src="${path}${sep}uid=${encodeURIComponent(c.contact_id)}" loading="lazy" decoding="async" style="width:100%;height:100%;border-radius:50%;object-fit:cover" onerror="this.parentElement.textContent='${initials}'" /></div>`;
+          avatarHtml = `<div class="avatar" style="width:40px;height:40px;font-size:14px"><img src="${path}${sep}uid=${encodeURIComponent(c.contact_id)}" loading="lazy" decoding="async" style="width:100%;height:100%;border-radius:50%;object-fit:cover" data-fallback="${initials}" /></div>`;
         } else {
           avatarHtml = `<div class="avatar" style="width:40px;height:40px;font-size:14px">${initials}</div>`;
         }
@@ -2100,7 +2100,7 @@ async function showOrgDashboard(orgId: string) {
           if (m.avatar_url) {
             const path = (m.avatar_url as string).startsWith('/api/') ? m.avatar_url : `/api${m.avatar_url}`;
             const sep = path.includes('?') ? '&' : '?';
-            avatarHtml = `<div class="avatar" style="width:32px;height:32px;font-size:12px"><img src="${path}${sep}uid=${encodeURIComponent(m.user_id)}" loading="lazy" decoding="async" style="width:100%;height:100%;border-radius:50%;object-fit:cover" onerror="this.parentElement.textContent='${initials}'" /></div>`;
+            avatarHtml = `<div class="avatar" style="width:32px;height:32px;font-size:12px"><img src="${path}${sep}uid=${encodeURIComponent(m.user_id)}" loading="lazy" decoding="async" style="width:100%;height:100%;border-radius:50%;object-fit:cover" data-fallback="${initials}" /></div>`;
           } else {
             avatarHtml = `<div class="avatar" style="width:32px;height:32px;font-size:12px">${initials}</div>`;
           }

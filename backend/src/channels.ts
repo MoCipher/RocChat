@@ -240,6 +240,34 @@ export async function handleChannels(
     return jsonResponse({ community, channels: channels.results });
   }
 
+  // PATCH /api/communities/:id — update (owner/admin only)
+  if (communityMatch && request.method === 'PATCH') {
+    const commId = communityMatch[1];
+    const role = await env.DB.prepare(
+      `SELECT role FROM community_members WHERE community_id = ? AND user_id = ?`
+    ).bind(commId, session.userId).first<{ role: string }>();
+    if (!role || (role.role !== 'owner' && role.role !== 'admin')) {
+      return apiError('FORBIDDEN', 'Only owner/admin can update community');
+    }
+    const body = await request.json() as { name?: string; description?: string; is_public?: boolean };
+    if (body.name !== undefined && (body.name.length < 2 || body.name.length > 64)) {
+      return apiError('BAD_REQUEST', 'Name must be 2-64 characters');
+    }
+    if (body.description !== undefined && body.description.length > 200) {
+      return apiError('BAD_REQUEST', 'Description must be under 200 characters');
+    }
+    const sets: string[] = [];
+    const vals: (string | number)[] = [];
+    if (body.name !== undefined) { sets.push('name = ?'); vals.push(body.name); }
+    if (body.description !== undefined) { sets.push('description = ?'); vals.push(body.description); }
+    if (body.is_public !== undefined) { sets.push('is_public = ?'); vals.push(body.is_public ? 1 : 0); }
+    if (sets.length > 0) {
+      vals.push(commId);
+      await env.DB.prepare(`UPDATE communities SET ${sets.join(', ')} WHERE id = ?`).bind(...vals).run();
+    }
+    return jsonResponse({ ok: true });
+  }
+
   // POST /api/communities/:id/join
   const joinMatch = path.match(/^\/api\/communities\/([^/]+)\/join$/);
   if (joinMatch && request.method === 'POST') {

@@ -506,8 +506,35 @@ async function loadCommunities(query = '') {
                   });
                 });
 
+                const myRole = detail.data?.community?.my_role;
+
+                // Admin controls: add channel to community
+                if (myRole === 'owner' || myRole === 'admin') {
+                  const adminBar = document.createElement('div');
+                  adminBar.style.cssText = 'display:flex;gap:var(--sp-2);margin-top:var(--sp-2)';
+                  const addChBtn = document.createElement('button');
+                  addChBtn.className = 'btn-secondary';
+                  addChBtn.style.cssText = 'flex:1;padding:6px 14px;font-size:var(--fs-sm)';
+                  addChBtn.textContent = '+ Add Channel';
+                  addChBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    showCreateChannelForCommunity(id, channelsEl, list!.closest('.channels-view')?.parentElement as HTMLElement);
+                  });
+                  const editBtn = document.createElement('button');
+                  editBtn.className = 'btn-secondary';
+                  editBtn.style.cssText = 'padding:6px 14px;font-size:var(--fs-sm)';
+                  editBtn.textContent = '⚙ Settings';
+                  editBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    showCommunitySettings(id, detail.data!.community, list!.closest('.channels-view')?.parentElement as HTMLElement);
+                  });
+                  adminBar.appendChild(addChBtn);
+                  adminBar.appendChild(editBtn);
+                  channelsEl.appendChild(adminBar);
+                }
+
                 // Add join button if not a member
-                if (!detail.data?.role) {
+                if (!myRole) {
                   const joinBtn = document.createElement('button');
                   joinBtn.className = 'btn-primary';
                   joinBtn.style.cssText = 'margin-top:var(--sp-2);padding:6px 14px;font-size:var(--fs-sm);width:100%';
@@ -518,6 +545,18 @@ async function loadCommunities(query = '') {
                     if (r.ok) { joinBtn.textContent = '✓ Joined'; joinBtn.disabled = true; }
                   });
                   channelsEl.appendChild(joinBtn);
+                } else if (myRole === 'member') {
+                  const leaveBtn = document.createElement('button');
+                  leaveBtn.className = 'btn-secondary';
+                  leaveBtn.style.cssText = 'margin-top:var(--sp-2);padding:6px 14px;font-size:var(--fs-sm);width:100%;color:var(--danger)';
+                  leaveBtn.textContent = 'Leave Community';
+                  leaveBtn.addEventListener('click', async (e) => {
+                    e.stopPropagation();
+                    if (!confirm('Leave this community?')) return;
+                    const r = await api.req(`/communities/${id}/leave`, { method: 'DELETE' });
+                    if (r.ok) { leaveBtn.textContent = '✓ Left'; leaveBtn.disabled = true; }
+                  });
+                  channelsEl.appendChild(leaveBtn);
                 }
               } else {
                 channelsEl.replaceChildren(parseHTML('<div style="padding:var(--sp-2);color:var(--text-secondary);font-size:var(--fs-sm)">No channels in this community</div>'));
@@ -650,6 +689,119 @@ function showCreateCommunityDialog(container: HTMLElement) {
       renderDiscoverView(container);
     } else {
       alert('Failed to create community');
+    }
+  });
+}
+
+function showCreateChannelForCommunity(communityId: string, channelsEl: HTMLElement, container: HTMLElement) {
+  const existing = document.querySelector('.create-channel-overlay');
+  if (existing) existing.remove();
+
+  const overlay = document.createElement('div');
+  overlay.className = 'create-channel-overlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;z-index:9999';
+  overlay.replaceChildren(parseHTML(`
+    <div style="background:var(--bg-elevated);border-radius:var(--radius-xl);padding:var(--sp-6);width:400px;max-width:90vw;box-shadow:var(--shadow-xl)">
+      <h3 style="margin:0 0 var(--sp-4)">Add Channel to Community</h3>
+      <div style="display:flex;flex-direction:column;gap:var(--sp-3)">
+        <input id="comm-ch-name" type="text" placeholder="Channel name" maxlength="64"
+          style="padding:10px 14px;border-radius:var(--radius-md);border:1px solid var(--border-norm);background:var(--bg-input);color:var(--text-primary)" />
+        <input id="comm-ch-desc" type="text" placeholder="Description (optional)" maxlength="200"
+          style="padding:10px 14px;border-radius:var(--radius-md);border:1px solid var(--border-norm);background:var(--bg-input);color:var(--text-primary)" />
+        <div style="display:flex;gap:var(--sp-2);justify-content:flex-end;margin-top:var(--sp-2)">
+          <button id="comm-ch-cancel" class="btn-secondary" style="padding:8px 16px">Cancel</button>
+          <button id="comm-ch-create" class="btn-primary" style="padding:8px 16px">Create</button>
+        </div>
+      </div>
+    </div>
+  `));
+
+  document.body.appendChild(overlay);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+  document.getElementById('comm-ch-cancel')?.addEventListener('click', () => overlay.remove());
+
+  document.getElementById('comm-ch-create')?.addEventListener('click', async () => {
+    const name = (document.getElementById('comm-ch-name') as HTMLInputElement).value.trim();
+    const description = (document.getElementById('comm-ch-desc') as HTMLInputElement).value.trim();
+
+    if (!name || name.length < 2) {
+      alert('Channel name must be at least 2 characters');
+      return;
+    }
+
+    const res = await api.req('/channels', {
+      method: 'POST',
+      body: JSON.stringify({ name, description, community_id: communityId, is_public: true }),
+    });
+
+    if (res.ok) {
+      overlay.remove();
+      channelsEl.dataset.loaded = '';
+      channelsEl.style.display = 'none';
+      // Re-expand to reload
+      (channelsEl.previousElementSibling as HTMLElement)?.click();
+    } else {
+      alert('Failed to create channel');
+    }
+  });
+}
+
+function showCommunitySettings(communityId: string, community: any, container: HTMLElement) {
+  const existing = document.querySelector('.community-settings-overlay');
+  if (existing) existing.remove();
+
+  const overlay = document.createElement('div');
+  overlay.className = 'community-settings-overlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;z-index:9999';
+  overlay.replaceChildren(parseHTML(`
+    <div style="background:var(--bg-elevated);border-radius:var(--radius-xl);padding:var(--sp-6);width:440px;max-width:90vw;box-shadow:var(--shadow-xl)">
+      <h3 style="margin:0 0 var(--sp-4)">Community Settings</h3>
+      <div style="display:flex;flex-direction:column;gap:var(--sp-3)">
+        <div>
+          <label style="font-size:var(--fs-sm);color:var(--text-secondary);margin-bottom:4px;display:block">Name</label>
+          <input id="comm-edit-name" type="text" value="${community.name || ''}" maxlength="64"
+            style="padding:10px 14px;border-radius:var(--radius-md);border:1px solid var(--border-norm);background:var(--bg-input);color:var(--text-primary);width:100%" />
+        </div>
+        <div>
+          <label style="font-size:var(--fs-sm);color:var(--text-secondary);margin-bottom:4px;display:block">Description</label>
+          <input id="comm-edit-desc" type="text" value="${community.description || ''}" maxlength="200"
+            style="padding:10px 14px;border-radius:var(--radius-md);border:1px solid var(--border-norm);background:var(--bg-input);color:var(--text-primary);width:100%" />
+        </div>
+        <div style="padding:var(--sp-3);background:var(--bg-secondary);border-radius:var(--radius-md)">
+          <div style="font-size:var(--fs-sm);color:var(--text-secondary)">Members: <strong style="color:var(--text-primary)">${community.member_count || 0}</strong></div>
+          <div style="font-size:var(--fs-sm);color:var(--text-secondary);margin-top:4px">Created: <strong style="color:var(--text-primary)">${community.created_at ? new Date(community.created_at * 1000).toLocaleDateString() : 'Unknown'}</strong></div>
+        </div>
+        <div style="display:flex;gap:var(--sp-2);justify-content:flex-end;margin-top:var(--sp-2)">
+          <button id="comm-edit-cancel" class="btn-secondary" style="padding:8px 16px">Cancel</button>
+          <button id="comm-edit-save" class="btn-primary" style="padding:8px 16px">Save Changes</button>
+        </div>
+      </div>
+    </div>
+  `));
+
+  document.body.appendChild(overlay);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+  document.getElementById('comm-edit-cancel')?.addEventListener('click', () => overlay.remove());
+
+  document.getElementById('comm-edit-save')?.addEventListener('click', async () => {
+    const name = (document.getElementById('comm-edit-name') as HTMLInputElement).value.trim();
+    const description = (document.getElementById('comm-edit-desc') as HTMLInputElement).value.trim();
+
+    if (!name || name.length < 2) {
+      alert('Community name must be at least 2 characters');
+      return;
+    }
+
+    const res = await api.req(`/communities/${communityId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ name, description }),
+    });
+
+    if (res.ok) {
+      overlay.remove();
+      renderDiscoverView(container);
+    } else {
+      alert('Failed to update community');
     }
   });
 }

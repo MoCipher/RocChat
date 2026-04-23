@@ -57,7 +57,10 @@ function renderDiscoverView(container: HTMLElement) {
         <div style="text-align:center;padding:var(--sp-8);color:var(--text-secondary)">Loading channels...</div>
       </div>
 
-      <h3 style="margin-top:var(--sp-6);font-size:var(--fs-xl);font-weight:600">Communities</h3>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-top:var(--sp-6)">
+        <h3 style="margin:0;font-size:var(--fs-xl);font-weight:600">Communities</h3>
+        <button id="create-community-btn" class="btn-secondary" style="padding:8px 16px;font-size:var(--fs-sm)">+ New Community</button>
+      </div>
       <div id="communities-list" style="display:flex;flex-direction:column;gap:var(--sp-3);margin-top:var(--sp-3)">
         <div style="text-align:center;padding:var(--sp-4);color:var(--text-secondary)">Loading communities...</div>
       </div>
@@ -81,6 +84,10 @@ function renderDiscoverView(container: HTMLElement) {
 
   document.getElementById('create-channel-btn')?.addEventListener('click', () => {
     showCreateChannelDialog(container);
+  });
+
+  document.getElementById('create-community-btn')?.addEventListener('click', () => {
+    showCreateCommunityDialog(container);
   });
 }
 
@@ -588,6 +595,61 @@ function showCreateChannelDialog(container: HTMLElement) {
       renderDiscoverView(container);
     } else {
       alert('Failed to create channel');
+    }
+  });
+}
+
+function showCreateCommunityDialog(container: HTMLElement) {
+  const existing = document.querySelector('.create-community-overlay');
+  if (existing) existing.remove();
+
+  const overlay = document.createElement('div');
+  overlay.className = 'create-community-overlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;z-index:9999';
+  overlay.replaceChildren(parseHTML(`
+    <div style="background:var(--bg-elevated);border-radius:var(--radius-xl);padding:var(--sp-6);width:440px;max-width:90vw;box-shadow:var(--shadow-xl)">
+      <h3 style="margin:0 0 var(--sp-4)">Create Community</h3>
+      <p style="font-size:var(--fs-sm);color:var(--text-secondary);margin:0 0 var(--sp-4)">Communities group multiple channels under one namespace.</p>
+      <div style="display:flex;flex-direction:column;gap:var(--sp-3)">
+        <input id="new-comm-name" type="text" placeholder="Community name" maxlength="64"
+          style="padding:10px 14px;border-radius:var(--radius-md);border:1px solid var(--border-norm);background:var(--bg-input);color:var(--text-primary)" />
+        <input id="new-comm-desc" type="text" placeholder="Description (optional)" maxlength="200"
+          style="padding:10px 14px;border-radius:var(--radius-md);border:1px solid var(--border-norm);background:var(--bg-input);color:var(--text-primary)" />
+        <label style="display:flex;align-items:center;gap:var(--sp-2);font-size:var(--fs-sm);color:var(--text-secondary)">
+          <input id="new-comm-public" type="checkbox" checked /> Public (discoverable)
+        </label>
+        <div style="display:flex;gap:var(--sp-2);justify-content:flex-end;margin-top:var(--sp-2)">
+          <button id="new-comm-cancel" class="btn-secondary" style="padding:8px 16px">Cancel</button>
+          <button id="new-comm-create" class="btn-primary" style="padding:8px 16px">Create</button>
+        </div>
+      </div>
+    </div>
+  `));
+
+  document.body.appendChild(overlay);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+  document.getElementById('new-comm-cancel')?.addEventListener('click', () => overlay.remove());
+
+  document.getElementById('new-comm-create')?.addEventListener('click', async () => {
+    const name = (document.getElementById('new-comm-name') as HTMLInputElement).value.trim();
+    const description = (document.getElementById('new-comm-desc') as HTMLInputElement).value.trim();
+    const is_public = (document.getElementById('new-comm-public') as HTMLInputElement).checked;
+
+    if (!name || name.length < 2) {
+      alert('Community name must be at least 2 characters');
+      return;
+    }
+
+    const res = await api.req('/communities', {
+      method: 'POST',
+      body: JSON.stringify({ name, description, is_public }),
+    });
+
+    if (res.ok) {
+      overlay.remove();
+      renderDiscoverView(container);
+    } else {
+      alert('Failed to create community');
     }
   });
 }

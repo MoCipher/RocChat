@@ -201,6 +201,13 @@ function initAfterUnlock() {
     return;
   }
 
+  // Unknown hash route → show 404
+  const knownHashes = ['', '#', '#/', '#/roc-bird', '#/canary', '#/transparency', '#/supporters'];
+  if (location.hash && !knownHashes.includes(location.hash)) {
+    show404();
+    return;
+  }
+
   const token = getToken();
 
   if (!token) {
@@ -304,6 +311,19 @@ function initAfterUnlock() {
   const urlAction = searchParams.get('action');
   if (urlAction === 'open-file') handleOpenFileAction();
   else if (urlAction === 'share') handleShareAction();
+}
+
+function show404() {
+  dismissSplash();
+  const app = document.getElementById('app')!;
+  app.replaceChildren(parseHTML(`
+    <div style="min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:var(--sp-6);background:var(--midnight-azure)">
+      <div style="font-size:72px;margin-bottom:var(--sp-4)">🔒</div>
+      <h1 style="font-size:var(--fs-3xl);font-weight:700;color:var(--roc-gold,#D4AF37);margin:0">404</h1>
+      <p style="color:var(--text-secondary);margin:var(--sp-3) 0 var(--sp-6);font-size:var(--fs-lg)">Page not found</p>
+      <a href="/" style="display:inline-flex;align-items:center;gap:8px;padding:12px 24px;background:var(--roc-gold,#D4AF37);color:var(--midnight-azure,#0a1628);border-radius:var(--radius-lg);font-weight:600;text-decoration:none;transition:opacity 0.2s">← Back to RocChat</a>
+    </div>
+  `));
 }
 
 function showLanding() {

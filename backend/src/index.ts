@@ -934,7 +934,7 @@ function constantTimeEqual(a: string, b: string): boolean {
 
 function corsHeaders(request?: Request): HeadersInit {
   const origin = request?.headers.get('Origin') || '';
-  const allowed = ['https://chat.mocipher.com', 'https://rocchat-8x7.pages.dev', 'http://localhost:5173'];
+  const allowed = ['https://chat.mocipher.com', 'https://rocchat-8x7.pages.dev', 'http://localhost:5173', 'tauri://localhost', 'https://tauri.localhost'];
   // Only return CORS headers for known origins — unknown origins get no Access-Control-Allow-Origin
   if (!allowed.includes(origin)) {
     return { 'Vary': 'Origin' };

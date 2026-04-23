@@ -26,9 +26,13 @@ import { renderQrLogin } from './auth/qr-login.js';
 import { renderAuth } from './auth/auth.js';
 import { renderSidebar, type Tab } from './components/sidebar.js';
 import { renderChats } from './chat/chat.js';
-import { renderCalls } from './calls/calls.js';
-import { renderChannels } from './channels/channels.js';
-import { renderSettings, applyTheme, checkAppLock, showAppLockScreen } from './components/settings.js';
+// Lazy-loaded tabs (Calls, Channels, Settings) — dynamic import for code splitting
+const lazyRenderCalls = () => import('./calls/calls.js').then(m => m.renderCalls);
+const lazyRenderChannels = () => import('./channels/channels.js').then(m => m.renderChannels);
+const lazyRenderSettings = () => import('./components/settings.js').then(m => m.renderSettings);
+
+// Eagerly loaded for app-lock and theme (needed before tab render)
+import { applyTheme, checkAppLock, showAppLockScreen } from './components/settings.js';
 import { getToken, getPreKeyCount, uploadPreKeys, getMe, registerPushToken, getTransparencyReports, getSupportersWall } from './api.js';
 import { migrateLegacySecrets, pruneOldDrafts } from './crypto/secure-store.js';
 import { installCommandPaletteHotkey, registerPaletteCommand } from './components/cmdk.js';
@@ -364,13 +368,13 @@ function renderApp() {
       renderChats(main);
       break;
     case 'calls':
-      renderCalls(main);
+      lazyRenderCalls().then(fn => fn(main));
       break;
     case 'channels':
-      renderChannels(main);
+      lazyRenderChannels().then(fn => fn(main));
       break;
     case 'settings':
-      renderSettings(main);
+      lazyRenderSettings().then(fn => fn(main));
       break;
   }
 

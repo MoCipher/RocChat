@@ -30,6 +30,8 @@ const ALLOWED_ORIGINS = new Set([
   'https://chat.mocipher.com',
   'https://rocchat-8x7.pages.dev',
   'http://localhost:5173',
+  'tauri://localhost',
+  'https://tauri.localhost',
 ]);
 
 export function isOriginAllowed(request: Request): boolean {

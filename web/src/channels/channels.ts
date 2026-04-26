@@ -5,7 +5,19 @@
  */
 import * as api from '../api.js';
 import { escapeHtml, parseHTML } from '../utils.js';
-import { toBase64 } from '@rocchat/shared';
+import { toBase64, fromBase64, decode } from '@rocchat/shared';
+
+function tryDecodePost(b64: string): string {
+  try {
+    const bytes = fromBase64(b64);
+    const text = decode(bytes);
+    // If decode produced replacement chars or control bytes, treat as encrypted
+    if (/[\x00-\x08\x0B\x0C\x0E-\x1F\uFFFD]/.test(text)) return '';
+    return text;
+  } catch {
+    return '';
+  }
+}
 
 interface Channel {
   id: string;
@@ -247,7 +259,7 @@ async function loadChannelPosts(channelId: string, isAdmin: boolean) {
             <button class="pin-post-btn btn-secondary" data-msg-id="${msg.id}" style="padding:2px 8px;font-size:var(--fs-xs)" title="Pin this post">📌</button>
           </div>` : ''}
         </div>
-        <div style="font-size:var(--fs-base);color:var(--text-primary);word-break:break-word">${msg.ciphertext.length > 100 ? '[Encrypted post]' : '[Encrypted]'}</div>
+        <div style="font-size:var(--fs-base);color:var(--text-primary);word-break:break-word;white-space:pre-wrap">${(() => { const t = tryDecodePost(msg.ciphertext); return t ? escapeHtml(t.length > 1000 ? t.slice(0, 1000) + '…' : t) : '<span style="color:var(--text-tertiary)">[Encrypted post]</span>'; })()}</div>
       </div>
     `).join('')));
 
@@ -358,7 +370,7 @@ function showScheduledPosts(channelId: string) {
           <span style="font-size:var(--fs-sm);color:var(--text-secondary)">⏰ ${new Date(p.scheduled_at * 1000).toLocaleString()}</span>
           <button class="cancel-sched btn-secondary" data-id="${p.id}" style="padding:2px 8px;font-size:var(--fs-xs);color:var(--danger)">Cancel</button>
         </div>
-        <div style="margin-top:4px;font-size:var(--fs-sm);color:var(--text-primary)">[Encrypted content]</div>
+        <div style="margin-top:4px;font-size:var(--fs-sm);color:var(--text-primary);white-space:pre-wrap">${(() => { const t = tryDecodePost(p.ciphertext); return t ? escapeHtml(t.length > 280 ? t.slice(0, 280) + '…' : t) : '<span style="color:var(--text-tertiary)">[Encrypted]</span>'; })()}</div>
       </div>
     `).join('')));
 

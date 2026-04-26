@@ -232,6 +232,13 @@ export function renderLanding(container: HTMLElement, onWebLogin: () => void) {
               <span class="landing-download-store">Google Play</span>
             </div>
           </a>
+          <a class="landing-download-card" href="https://github.com/MoCipher/RocChat/releases/latest" target="_blank" rel="noopener">
+            <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="var(--text-primary)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="22" x2="16" y2="22"/><line x1="12" y1="18" x2="12" y2="22"/></svg>
+            <div>
+              <span class="landing-download-label">DESKTOP APP</span>
+              <span class="landing-download-store">Mac · Win · Linux</span>
+            </div>
+          </a>
           <button class="landing-download-card" id="web-login-btn">
             <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="var(--text-primary)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
             <div>

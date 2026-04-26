@@ -581,14 +581,25 @@ private fun ChannelDetailScreen(channelId: String, channelName: String, onBack: 
                         scheduledPosts.forEach { p ->
                             val ts = p.optLong("scheduled_at", 0)
                             val id = p.optString("id", "")
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(df.format(Date(ts * 1000)), style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
-                                IconButton(onClick = {
-                                    scope.launch {
-                                        apiDelete("/api/channels/$channelId/scheduled/$id")
-                                        scheduledPosts = scheduledPosts.filter { it.optString("id") != id }
-                                    }
-                                }) { Icon(Icons.Default.Delete, "Cancel", tint = MaterialTheme.colorScheme.error) }
+                            val preview = decodeChannelPostBody(p)
+                            Column {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(df.format(Date(ts * 1000)), style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
+                                    IconButton(onClick = {
+                                        scope.launch {
+                                            apiDelete("/api/channels/$channelId/scheduled/$id")
+                                            scheduledPosts = scheduledPosts.filter { it.optString("id") != id }
+                                        }
+                                    }) { Icon(Icons.Default.Delete, "Cancel", tint = MaterialTheme.colorScheme.error) }
+                                }
+                                if (preview.isNotEmpty()) {
+                                    Text(
+                                        preview.take(140) + if (preview.length > 140) "…" else "",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 2,
+                                    )
+                                }
                             }
                         }
                     }

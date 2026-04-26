@@ -320,6 +320,11 @@ struct ChannelDetailView: View {
     /// post is E2E (`ratchet_header.cv == 1`) we don't have native unwrap yet
     /// so we show a placeholder. Web/desktop see the full content.
     private func decodeChannelPostBody(_ post: [String: Any]) -> String {
+        return ChannelDetailView.decodeScheduledPreview(post)
+    }
+
+    /// Static helper for decoding both feed posts and scheduled-post previews.
+    static func decodeScheduledPreview(_ post: [String: Any]) -> String {
         let ratchetHeader = post["ratchet_header"] as? String ?? ""
         if !ratchetHeader.isEmpty,
            let hData = ratchetHeader.data(using: .utf8),
@@ -329,7 +334,6 @@ struct ChannelDetailView: View {
         }
         let ct = post["ciphertext"] as? String ?? ""
         if let data = Data(base64Encoded: ct), let s = String(data: data, encoding: .utf8) {
-            // Reject control chars / replacement glyphs
             if s.unicodeScalars.contains(where: { ($0.value < 0x20 && $0.value != 0x09 && $0.value != 0x0A && $0.value != 0x0D) || $0.value == 0xFFFD }) {
                 return "[Encrypted post]"
             }
@@ -512,14 +516,20 @@ struct ChannelScheduledListView: View {
                     ForEach(Array(posts.enumerated()), id: \.offset) { _, post in
                         let id = post["id"] as? String ?? ""
                         let ts = post["scheduled_at"] as? Int ?? 0
-                        HStack {
-                            VStack(alignment: .leading) {
-                                Text(Date(timeIntervalSince1970: TimeInterval(ts)), style: .date).font(.caption)
-                                Text(Date(timeIntervalSince1970: TimeInterval(ts)), style: .time).font(.caption2).foregroundStyle(.secondary)
+                        let preview = ChannelDetailView.decodeScheduledPreview(post)
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack {
+                                VStack(alignment: .leading) {
+                                    Text(Date(timeIntervalSince1970: TimeInterval(ts)), style: .date).font(.caption)
+                                    Text(Date(timeIntervalSince1970: TimeInterval(ts)), style: .time).font(.caption2).foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                Button(role: .destructive) { Task { await cancel(id) } } label: {
+                                    Image(systemName: "trash").font(.caption)
+                                }
                             }
-                            Spacer()
-                            Button(role: .destructive) { Task { await cancel(id) } } label: {
-                                Image(systemName: "trash").font(.caption)
+                            if !preview.isEmpty {
+                                Text(preview).font(.caption).lineLimit(2).foregroundStyle(.secondary)
                             }
                         }
                     }

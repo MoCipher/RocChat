@@ -227,6 +227,19 @@ export function renderAuth(container: HTMLElement, onSuccess: () => void) {
             localStorage.setItem('rocchat_spk_pub', res.data.signed_pre_key_public);
           }
 
+          // Restore identity DH keypair if present in the encrypted blob.
+          // Without this, a fresh device login regenerates a new identity DH
+          // key locally, breaking E2E sessions and channel ECIES decryption.
+          if (keys.identityDHPrivateKey && keys.identityDHPublicKey) {
+            await putSecretString(
+              'rocchat_identity_dh',
+              JSON.stringify({
+                pub: toBase64(keys.identityDHPublicKey),
+                priv: toBase64(keys.identityDHPrivateKey),
+              }),
+            );
+          }
+
           // Cache key material for X3DH responder
           setKeyMaterial({
             signedPreKeyPrivate: keys.signedPreKeyPrivateKey,
@@ -272,10 +285,11 @@ export function renderAuth(container: HTMLElement, onSuccess: () => void) {
 
       // Generate crypto keys
       const bundle = await generateKeyBundle();
-      const encryptedKeys = await encryptPrivateKeys(vaultKey, bundle);
 
-      // Generate identity DH key for X3DH
+      // Generate identity DH key for X3DH and channel ECIES wrap.
+      // Bundle it into the encrypted vault so a fresh device login restores it.
       const identityDHKeyPair = await generateX25519KeyPair();
+      const encryptedKeys = await encryptPrivateKeys(vaultKey, bundle, identityDHKeyPair);
 
       const res = await api.register({
         username,

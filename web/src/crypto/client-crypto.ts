@@ -77,26 +77,39 @@ export async function generateKeyBundle(): Promise<LocalKeyBundle> {
 
 /**
  * Encrypt private keys with vault key for server storage.
+ *
+ * Optionally includes the X25519 identity DH keypair (used by X3DH and the
+ * channel-key ECIES wrap). Including it here means a fresh device login
+ * can fully restore E2E identity from password alone — without it, the
+ * user would lose access to all existing E2E sessions and channel keys.
  */
 export async function encryptPrivateKeys(
   vaultKey: Uint8Array,
   bundle: LocalKeyBundle,
+  identityDH?: { publicKey: Uint8Array; privateKey: Uint8Array },
 ): Promise<string> {
-  const payload = JSON.stringify({
+  const payload: Record<string, unknown> = {
     identityPrivateKey: toBase64(bundle.identityKeyPair.privateKey),
     signedPreKeyPrivateKey: toBase64(bundle.signedPreKey.keyPair.privateKey),
     oneTimePreKeys: bundle.oneTimePreKeys.map((k) => ({
       id: k.id,
       privateKey: toBase64(k.keyPair.privateKey),
     })),
-  });
-
-  const encrypted = await aesGcmEncrypt(encode(payload), vaultKey);
+  };
+  if (identityDH) {
+    payload.identityDHPublicKey = toBase64(identityDH.publicKey);
+    payload.identityDHPrivateKey = toBase64(identityDH.privateKey);
+  }
+  const encrypted = await aesGcmEncrypt(encode(JSON.stringify(payload)), vaultKey);
   return toBase64(concat(encrypted.iv, encrypted.ciphertext, encrypted.tag));
 }
 
 /**
  * Decrypt private keys from server using vault key.
+ *
+ * `identityDHPublicKey` / `identityDHPrivateKey` may be undefined for
+ * accounts registered before multi-device key recovery shipped — those
+ * accounts are still single-device-bound for E2E sessions.
  */
 export async function decryptPrivateKeys(
   vaultKey: Uint8Array,
@@ -105,6 +118,8 @@ export async function decryptPrivateKeys(
   identityPrivateKey: Uint8Array;
   signedPreKeyPrivateKey: Uint8Array;
   oneTimePreKeys: { id: number; privateKey: Uint8Array }[];
+  identityDHPublicKey?: Uint8Array;
+  identityDHPrivateKey?: Uint8Array;
 }> {
   const raw = fromBase64(encryptedBlob);
   // Format: iv (12) || ciphertext || tag (16)
@@ -121,6 +136,8 @@ export async function decryptPrivateKeys(
       id: k.id,
       privateKey: fromBase64(k.privateKey),
     })),
+    identityDHPublicKey: data.identityDHPublicKey ? fromBase64(data.identityDHPublicKey) : undefined,
+    identityDHPrivateKey: data.identityDHPrivateKey ? fromBase64(data.identityDHPrivateKey) : undefined,
   };
 }
 

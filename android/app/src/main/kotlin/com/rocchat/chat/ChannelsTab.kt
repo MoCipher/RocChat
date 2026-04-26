@@ -348,6 +348,7 @@ private fun ChannelDetailScreen(channelId: String, channelName: String, onBack: 
     var isSubscribed by remember { mutableStateOf(false) }
     var subscriberCount by remember { mutableStateOf(0) }
     var pinnedPostId by remember { mutableStateOf<String?>(null) }
+    var posts by remember { mutableStateOf<List<JSONObject>>(emptyList()) }
     var showPostDialog by remember { mutableStateOf(false) }
     var showScheduleDialog by remember { mutableStateOf(false) }
     var showAnalytics by remember { mutableStateOf(false) }
@@ -364,6 +365,15 @@ private fun ChannelDetailScreen(channelId: String, channelName: String, onBack: 
             isSubscribed = role.isNotEmpty()
             subscriberCount = ch.optInt("subscriber_count", 0)
             pinnedPostId = ch.optString("pinned_post_id", "").ifEmpty { null }
+            // Load post feed
+            val msgs = apiGetJson("/api/messages/$channelId?limit=50")
+            val arr = msgs?.optJSONArray("messages")
+            posts = if (arr != null) (0 until arr.length()).map { arr.getJSONObject(it) } else emptyList()
+            // Mark posts as read for analytics (best-effort)
+            for (p in posts) {
+                val id = p.optString("id", "")
+                if (id.isNotEmpty()) scope.launch { apiPost("/api/channels/$channelId/read/$id") }
+            }
         }
     }
 
@@ -425,6 +435,27 @@ private fun ChannelDetailScreen(channelId: String, channelName: String, onBack: 
                             }
                         }
                     }
+                }
+            }
+
+            // Posts feed
+            if (posts.isNotEmpty()) {
+                item {
+                    Text("Posts", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                }
+                items(posts) { post ->
+                    Card(modifier = Modifier.fillMaxWidth()) {
+                        Column(Modifier.padding(12.dp)) {
+                            val ts = post.optString("created_at", "")
+                            Text(formatPostTime(ts), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Spacer(Modifier.height(4.dp))
+                            Text(decodeChannelPostBody(post), style = MaterialTheme.typography.bodyMedium)
+                        }
+                    }
+                }
+            } else if (isSubscribed) {
+                item {
+                    Text("No posts yet", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
 
@@ -647,3 +678,39 @@ private fun apiPostBody(path: String, body: String): Boolean {
     conn.outputStream.write(body.toByteArray())
     return conn.responseCode == 200
 }
+
+/**
+ * Decode a channel post body. Returns the legacy base64 plaintext if the post
+ * was published before E2E shipped; returns a placeholder for E2E posts (cv:1
+ * in ratchet_header) since native unwrap is a future task.
+ */
+private fun decodeChannelPostBody(post: JSONObject): String {
+    val ratchetHeader = post.optString("ratchet_header", "")
+    if (ratchetHeader.isNotEmpty()) {
+        try {
+            val h = JSONObject(ratchetHeader)
+            if (h.optInt("cv", 0) == 1) return "[Encrypted post — open on web/desktop]"
+        } catch (_: Exception) { /* not E2E metadata, treat as legacy */ }
+    }
+    val ct = post.optString("ciphertext", "")
+    return try {
+        val bytes = android.util.Base64.decode(ct, android.util.Base64.DEFAULT)
+        val s = String(bytes, Charsets.UTF_8)
+        // Reject control chars / replacement glyphs
+        if (s.any { it.code < 0x20 && it != '\t' && it != '\n' && it != '\r' || it.code == 0xFFFD }) {
+            "[Encrypted post]"
+        } else s
+    } catch (_: Exception) { "[Encrypted post]" }
+}
+
+private fun formatPostTime(iso: String): String = try {
+    val parser = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.US).apply {
+        timeZone = java.util.TimeZone.getTimeZone("UTC")
+    }
+    val cleaned = iso.substringBefore('.').substringBefore('Z').substringBefore('+')
+    val date = parser.parse(cleaned)
+    if (date != null) {
+        val display = SimpleDateFormat("MMM d, HH:mm", Locale.getDefault())
+        display.format(date)
+    } else iso
+} catch (_: Exception) { iso }

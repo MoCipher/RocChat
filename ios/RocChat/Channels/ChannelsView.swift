@@ -191,6 +191,7 @@ struct ChannelDetailView: View {
     @State private var showAnalytics = false
     @State private var showScheduledList = false
     @State private var showNewPost = false
+    @State private var posts: [[String: Any]] = []
 
     var body: some View {
         List {
@@ -230,6 +231,27 @@ struct ChannelDetailView: View {
                         }
                     }
                 }
+            }
+
+            // Posts feed
+            if !posts.isEmpty {
+                Section("Posts") {
+                    ForEach(Array(posts.enumerated()), id: \.offset) { _, post in
+                        let ts = post["created_at"] as? String ?? ""
+                        let body = decodeChannelPostBody(post)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(formatPostTime(ts))
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                            Text(body)
+                                .font(.body)
+                                .lineLimit(20)
+                        }
+                        .padding(.vertical, 4)
+                    }
+                }
+            } else if isSubscribed {
+                Section { Text("No posts yet").font(.caption).foregroundStyle(.secondary) }
             }
 
             if isAdmin {
@@ -277,6 +299,54 @@ struct ChannelDetailView: View {
         isSubscribed = role != nil
         subscriberCount = ch["subscriber_count"] as? Int ?? 0
         pinnedPostId = ch["pinned_post_id"] as? String
+        await loadPosts()
+    }
+
+    @MainActor
+    private func loadPosts() async {
+        guard let data = await apiRequest(path: "/api/messages/\(channelId)?limit=50", method: "GET"),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let arr = json["messages"] as? [[String: Any]] else { return }
+        posts = arr
+        // Mark as read for analytics (best-effort)
+        for msg in arr {
+            if let id = msg["id"] as? String {
+                Task.detached { _ = await self.apiRequest(path: "/api/channels/\(self.channelId)/read/\(id)", method: "POST") }
+            }
+        }
+    }
+
+    /// Decode a channel post body. Tries legacy base64 plaintext first; if the
+    /// post is E2E (`ratchet_header.cv == 1`) we don't have native unwrap yet
+    /// so we show a placeholder. Web/desktop see the full content.
+    private func decodeChannelPostBody(_ post: [String: Any]) -> String {
+        let ratchetHeader = post["ratchet_header"] as? String ?? ""
+        if !ratchetHeader.isEmpty,
+           let hData = ratchetHeader.data(using: .utf8),
+           let hJson = try? JSONSerialization.jsonObject(with: hData) as? [String: Any],
+           let cv = hJson["cv"] as? Int, cv == 1 {
+            return "[Encrypted post — open on web/desktop]"
+        }
+        let ct = post["ciphertext"] as? String ?? ""
+        if let data = Data(base64Encoded: ct), let s = String(data: data, encoding: .utf8) {
+            // Reject control chars / replacement glyphs
+            if s.unicodeScalars.contains(where: { ($0.value < 0x20 && $0.value != 0x09 && $0.value != 0x0A && $0.value != 0x0D) || $0.value == 0xFFFD }) {
+                return "[Encrypted post]"
+            }
+            return s
+        }
+        return "[Encrypted post]"
+    }
+
+    private func formatPostTime(_ iso: String) -> String {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let d = f.date(from: iso) ?? ISO8601DateFormatter().date(from: iso) {
+            let rel = RelativeDateTimeFormatter()
+            rel.unitsStyle = .short
+            return rel.localizedString(for: d, relativeTo: Date())
+        }
+        return iso
     }
 
     private func subscribe() async {

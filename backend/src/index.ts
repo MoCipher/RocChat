@@ -858,6 +858,7 @@ interface MaintenanceSummary {
   used_prekeys_deleted: number;
   stale_rate_log_deleted: number;
   scheduled_messages_sent: number;
+  scheduled_channel_posts_sent: number;
   retention_orgs_processed: number;
   retention_messages_deleted: number;
 }
@@ -889,6 +890,61 @@ async function runMaintenanceTasks(env: Env): Promise<MaintenanceSummary> {
     scheduledMessagesSent += Number(markSentRes.meta?.changes || 0);
   }
 
+  // Publish channel scheduled posts that are due. These go through the
+  // canonical `messages.encrypted` JSON column so getMessages parses them
+  // identically to regular admin posts; broadcast via the channel's DO.
+  const dueChannelPosts = await env.DB.prepare(
+    `SELECT id, channel_id, author_id, ciphertext, iv, ratchet_header
+     FROM channel_scheduled_posts
+     WHERE status = 'pending' AND scheduled_at <= unixepoch() LIMIT 50`
+  ).all();
+  const dueChannelRows = dueChannelPosts.results as Array<{
+    id: string;
+    channel_id: string;
+    author_id: string;
+    ciphertext: string;
+    iv: string;
+    ratchet_header: string;
+  }>;
+  let scheduledChannelPostsSent = 0;
+  for (const p of dueChannelRows) {
+    const msgId = crypto.randomUUID();
+    const encrypted = JSON.stringify({
+      ciphertext: p.ciphertext,
+      iv: p.iv || '',
+      tag: '',
+      ratchet_header: p.ratchet_header || '',
+      message_type: 'text',
+    });
+    await env.DB.prepare(
+      'INSERT INTO messages (id, conversation_id, sender_id, encrypted, server_timestamp) VALUES (?, ?, ?, ?, unixepoch())'
+    ).bind(msgId, p.channel_id, p.author_id, encrypted).run();
+    await env.DB.prepare(
+      `UPDATE channel_scheduled_posts SET status = 'published' WHERE id = ?`
+    ).bind(p.id).run();
+    // Broadcast to live subscribers via the channel's Durable Object
+    try {
+      const roomId = env.CHAT_ROOM.idFromName(p.channel_id);
+      const room = env.CHAT_ROOM.get(roomId);
+      await room.fetch(new Request('https://internal/broadcast', {
+        method: 'POST',
+        body: JSON.stringify({
+          type: 'new_message',
+          payload: {
+            id: msgId,
+            conversation_id: p.channel_id,
+            sender_id: p.author_id,
+            message_type: 'text',
+            ciphertext: p.ciphertext,
+            iv: p.iv,
+            ratchet_header: p.ratchet_header,
+          },
+        }),
+      }));
+    } catch { /* best-effort; subscribers will pick it up on next fetch */ }
+    scheduledChannelPostsSent += 1;
+  }
+
   // Auto-delete messages per retention policies.
   const policies = await env.DB.prepare(
     'SELECT org_id, max_age_days FROM retention_policies WHERE auto_delete = 1'
@@ -918,6 +974,7 @@ async function runMaintenanceTasks(env: Env): Promise<MaintenanceSummary> {
     used_prekeys_deleted: Number(preKeysRes.meta?.changes || 0),
     stale_rate_log_deleted: Number(rateLogRes.meta?.changes || 0),
     scheduled_messages_sent: scheduledMessagesSent,
+    scheduled_channel_posts_sent: scheduledChannelPostsSent,
     retention_orgs_processed: retentionOrgsProcessed,
     retention_messages_deleted: retentionMessagesDeleted,
   };

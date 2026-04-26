@@ -487,6 +487,17 @@ export function rotateSignedPreKey(body: { id: number; publicKey: string; signat
   return req('/keys/signed', { method: 'PUT', body: JSON.stringify(body) });
 }
 
+/**
+ * Replace the server-stored encrypted private-keys blob. Used when the client
+ * needs to migrate the in-vault representation (e.g. adding identity DH key).
+ */
+export function updateEncryptedBundle(encryptedKeys: string) {
+  return req<{ ok: boolean }>('/keys/encrypted-bundle', {
+    method: 'PUT',
+    body: JSON.stringify({ encrypted_keys: encryptedKeys }),
+  });
+}
+
 export function health() {
   return req('/health');
 }

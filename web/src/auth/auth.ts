@@ -238,6 +238,46 @@ export function renderAuth(container: HTMLElement, onSuccess: () => void) {
                 priv: toBase64(keys.identityDHPrivateKey),
               }),
             );
+          } else {
+            // Legacy account migration: the encrypted vault predates multi-device
+            // recovery. If we have a local identity DH (we do, because this device
+            // was used to register or has been logged in once before this fix),
+            // re-encrypt the bundle with that DH key inside and push it to the
+            // server. After this runs once, future device logins for this user
+            // can fully restore E2E identity from password alone.
+            try {
+              const { getIdentityDHKeyPair } = await import('../crypto/session-manager.js');
+              const dh = await getIdentityDHKeyPair();
+              const reEncrypted = await encryptPrivateKeys(
+                vaultKey,
+                {
+                  identityKeyPair: {
+                    publicKey: fromBase64(res.data.identity_key),
+                    privateKey: keys.identityPrivateKey,
+                  },
+                  signedPreKey: {
+                    id: 0,
+                    keyPair: {
+                      publicKey: res.data.signed_pre_key_public
+                        ? fromBase64(res.data.signed_pre_key_public)
+                        : new Uint8Array(),
+                      privateKey: keys.signedPreKeyPrivateKey,
+                    },
+                    signature: new Uint8Array(),
+                  },
+                  oneTimePreKeys: keys.oneTimePreKeys.map((k) => ({
+                    id: k.id,
+                    keyPair: { publicKey: new Uint8Array(), privateKey: k.privateKey },
+                  })),
+                },
+                dh,
+              );
+              await api.updateEncryptedBundle(reEncrypted);
+              await putSecretString('rocchat_keys', reEncrypted);
+            } catch {
+              /* migration is best-effort — failure is non-fatal because the
+                 user's local identity DH still works on this device */
+            }
           }
 
           // Cache key material for X3DH responder

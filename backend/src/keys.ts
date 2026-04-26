@@ -49,6 +49,23 @@ export async function handleKeys(
     return jsonResponse({ refill: false });
   }
 
+  // PUT /api/keys/encrypted-bundle — replace this user's encrypted private-keys
+  // blob (the AES-GCM-wrapped vault holding identity priv, SPK priv, OPK privs,
+  // and now identity DH priv). Used to migrate legacy accounts to multi-device
+  // E2E without a full re-registration. The blob is opaque to the server.
+  if (path === '/api/keys/encrypted-bundle' && request.method === 'PUT') {
+    const body = (await request.json()) as { encrypted_keys?: string };
+    const blob = body.encrypted_keys;
+    if (!blob || typeof blob !== 'string') return errorResponse('Missing encrypted_keys', 400);
+    // Sanity cap so this isn't abused as cheap KV-style storage. The real bundle
+    // is well under 32 KB even with 100 OPKs.
+    if (blob.length > 64 * 1024) return errorResponse('Encrypted bundle too large', 413);
+    await env.DB.prepare(
+      'UPDATE users SET identity_private_encrypted = ? WHERE id = ?',
+    ).bind(blob, session.userId).run();
+    return jsonResponse({ ok: true });
+  }
+
   return errorResponse('Not found', 404);
 }
 

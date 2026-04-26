@@ -6,8 +6,17 @@
 import * as api from '../api.js';
 import { escapeHtml, parseHTML } from '../utils.js';
 import { toBase64, fromBase64, decode } from '@rocchat/shared';
+import {
+  generateAndUploadChannelKey,
+  getChannelKey,
+  distributeChannelKeyToPending,
+  encryptPost,
+  decryptPost,
+  parsePostHeader,
+} from '../crypto/channel-keys.js';
 
-function tryDecodePost(b64: string): string {
+/** Legacy plaintext fallback (pre-E2E channels stored base64-encoded UTF-8). */
+function tryDecodeLegacyPost(b64: string): string {
   try {
     const bytes = fromBase64(b64);
     const text = decode(bytes);
@@ -17,6 +26,22 @@ function tryDecodePost(b64: string): string {
   } catch {
     return '';
   }
+}
+
+/** Render a post body, preferring E2E decryption with fallback to legacy plaintext. */
+async function renderPostBody(
+  channelId: string,
+  ciphertext: string,
+  iv: string,
+  ratchetHeader: string | null | undefined,
+): Promise<string> {
+  const meta = parsePostHeader(ratchetHeader);
+  if (meta && meta.cv === 1 && meta.tag) {
+    const plain = await decryptPost(channelId, ciphertext, iv, meta.tag, meta.v || 1);
+    if (plain !== null) return plain;
+    return ''; // E2E post but no key yet — caller shows placeholder
+  }
+  return tryDecodeLegacyPost(ciphertext);
 }
 
 interface Channel {
@@ -243,25 +268,38 @@ async function loadChannelPosts(channelId: string, isAdmin: boolean) {
   const postsEl = document.getElementById('channel-posts');
   if (!postsEl) return;
 
+  // Best-effort: ensure we have the channel key cached locally.
+  await getChannelKey(channelId).catch(() => null);
+  // Admins push the channel key out to any new subscribers.
+  if (isAdmin) distributeChannelKeyToPending(channelId).catch(() => {});
+
   try {
     // Load recent messages for this channel
-    const res = await api.req<{ messages: Array<{ id: string; sender_id: string; ciphertext: string; message_type: string; created_at: number }> }>(`/messages/${channelId}?limit=50`, { method: 'GET' });
+    const res = await api.req<{ messages: Array<{ id: string; sender_id: string; ciphertext: string; iv?: string; ratchet_header?: string; message_type: string; created_at: number | string }> }>(`/messages/${channelId}?limit=50`, { method: 'GET' });
     if (!res.ok || !res.data?.messages?.length) {
       postsEl.replaceChildren(parseHTML(`<div style="text-align:center;padding:var(--sp-6);color:var(--text-secondary)">No posts yet</div>`));
       return;
     }
 
-    postsEl.replaceChildren(parseHTML(res.data.messages.map(msg => `
-      <div class="channel-post" data-id="${msg.id}" style="padding:var(--sp-4);border-radius:var(--radius-lg);border:1px solid var(--border-weak);background:var(--bg-card)">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--sp-2)">
-          <span style="font-size:var(--fs-xs);color:var(--text-tertiary)">${new Date(msg.created_at * 1000).toLocaleString()}</span>
-          ${isAdmin ? `<div style="display:flex;gap:4px">
-            <button class="pin-post-btn btn-secondary" data-msg-id="${msg.id}" style="padding:2px 8px;font-size:var(--fs-xs)" title="Pin this post">📌</button>
-          </div>` : ''}
-        </div>
-        <div style="font-size:var(--fs-base);color:var(--text-primary);word-break:break-word;white-space:pre-wrap">${(() => { const t = tryDecodePost(msg.ciphertext); return t ? escapeHtml(t.length > 1000 ? t.slice(0, 1000) + '…' : t) : '<span style="color:var(--text-tertiary)">[Encrypted post]</span>'; })()}</div>
-      </div>
-    `).join('')));
+    // Decrypt all posts in parallel (each call is self-contained)
+    const rendered = await Promise.all(res.data.messages.map(async (msg) => {
+      const body = await renderPostBody(channelId, msg.ciphertext, msg.iv || '', msg.ratchet_header);
+      const ts = typeof msg.created_at === 'number' ? msg.created_at * 1000 : Date.parse(msg.created_at);
+      const display = body
+        ? escapeHtml(body.length > 1000 ? body.slice(0, 1000) + '…' : body)
+        : '<span style="color:var(--text-tertiary)">[Encrypted post — key not yet received]</span>';
+      return `
+        <div class="channel-post" data-id="${msg.id}" style="padding:var(--sp-4);border-radius:var(--radius-lg);border:1px solid var(--border-weak);background:var(--bg-card)">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--sp-2)">
+            <span style="font-size:var(--fs-xs);color:var(--text-tertiary)">${new Date(ts).toLocaleString()}</span>
+            ${isAdmin ? `<div style="display:flex;gap:4px">
+              <button class="pin-post-btn btn-secondary" data-msg-id="${msg.id}" style="padding:2px 8px;font-size:var(--fs-xs)" title="Pin this post">📌</button>
+            </div>` : ''}
+          </div>
+          <div style="font-size:var(--fs-base);color:var(--text-primary);word-break:break-word;white-space:pre-wrap">${display}</div>
+        </div>`;
+    }));
+    postsEl.replaceChildren(parseHTML(rendered.join('')));
 
     // Mark posts as read
     for (const msg of res.data.messages) {
@@ -311,9 +349,36 @@ function showPostDialog(channelId: string, isScheduled: boolean, container: HTML
     const content = (overlay.querySelector('#post-content') as HTMLTextAreaElement).value.trim();
     if (!content) return;
 
-    // Channel posts are base64-encoded plaintext today; server-side sender-key
-    // encryption is tracked as a separate spec item and applied to all clients.
-    const ciphertext = toBase64(new TextEncoder().encode(content));
+    // E2E: encrypt with the channel symmetric key. Falls back to base64
+    // plaintext if the key isn't available (e.g. legacy channel created
+    // before E2E shipped — admin's first post will still go through).
+    let ciphertext: string;
+    let iv: string;
+    let ratchetHeader: string;
+    try {
+      // Make sure we have a channel key (auto-creates self-envelope if missing
+      // and we're an admin). If we still don't have one, fall back to base64.
+      let key = await getChannelKey(channelId);
+      if (!key) {
+        // We're an admin with no key yet — create one and distribute on next render.
+        try { await generateAndUploadChannelKey(channelId); key = await getChannelKey(channelId); }
+        catch { key = null; }
+      }
+      if (key) {
+        const enc = await encryptPost(channelId, content);
+        ciphertext = enc.ciphertext;
+        iv = enc.iv;
+        ratchetHeader = JSON.stringify({ cv: 1, v: enc.key_version, tag: enc.tag });
+      } else {
+        ciphertext = toBase64(new TextEncoder().encode(content));
+        iv = '';
+        ratchetHeader = '{}';
+      }
+    } catch {
+      ciphertext = toBase64(new TextEncoder().encode(content));
+      iv = '';
+      ratchetHeader = '{}';
+    }
 
     if (isScheduled) {
       const timeInput = overlay.querySelector('#post-schedule-time') as HTMLInputElement;
@@ -321,7 +386,7 @@ function showPostDialog(channelId: string, isScheduled: boolean, container: HTML
       const scheduledAt = Math.floor(new Date(timeInput.value).getTime() / 1000);
       const r = await api.req(`/channels/${channelId}/schedule`, {
         method: 'POST',
-        body: JSON.stringify({ ciphertext, iv: '', scheduled_at: scheduledAt }),
+        body: JSON.stringify({ ciphertext, iv, ratchet_header: ratchetHeader, scheduled_at: scheduledAt }),
       });
       if (r.ok) {
         overlay.remove();
@@ -330,7 +395,7 @@ function showPostDialog(channelId: string, isScheduled: boolean, container: HTML
     } else {
       const r = await api.req(`/channels/${channelId}/post`, {
         method: 'POST',
-        body: JSON.stringify({ ciphertext, iv: '', ratchet_header: '{}', message_type: 'text' }),
+        body: JSON.stringify({ ciphertext, iv, ratchet_header: ratchetHeader, message_type: 'text' }),
       });
       if (r.ok) {
         overlay.remove();
@@ -358,21 +423,27 @@ function showScheduledPosts(channelId: string) {
   overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
   overlay.querySelector('#sched-close')?.addEventListener('click', () => overlay.remove());
 
-  api.req<{ posts: Array<{ id: string; ciphertext: string; scheduled_at: number; created_at: number }> }>(`/channels/${channelId}/scheduled`, { method: 'GET' }).then(r => {
+  api.req<{ posts: Array<{ id: string; ciphertext: string; iv?: string; ratchet_header?: string; scheduled_at: number; created_at: number }> }>(`/channels/${channelId}/scheduled`, { method: 'GET' }).then(async r => {
     const list = overlay.querySelector('#sched-list')!;
     if (!r.data?.posts?.length) {
       list.replaceChildren(parseHTML(`<div style="text-align:center;color:var(--text-secondary)">No scheduled posts</div>`));
       return;
     }
-    list.replaceChildren(parseHTML(r.data.posts.map(p => `
-      <div style="padding:var(--sp-3);border:1px solid var(--border-weak);border-radius:var(--radius-md);background:var(--bg-card)">
-        <div style="display:flex;justify-content:space-between;align-items:center">
-          <span style="font-size:var(--fs-sm);color:var(--text-secondary)">⏰ ${new Date(p.scheduled_at * 1000).toLocaleString()}</span>
-          <button class="cancel-sched btn-secondary" data-id="${p.id}" style="padding:2px 8px;font-size:var(--fs-xs);color:var(--danger)">Cancel</button>
-        </div>
-        <div style="margin-top:4px;font-size:var(--fs-sm);color:var(--text-primary);white-space:pre-wrap">${(() => { const t = tryDecodePost(p.ciphertext); return t ? escapeHtml(t.length > 280 ? t.slice(0, 280) + '…' : t) : '<span style="color:var(--text-tertiary)">[Encrypted]</span>'; })()}</div>
-      </div>
-    `).join('')));
+    const rendered = await Promise.all(r.data.posts.map(async (p) => {
+      const body = await renderPostBody(channelId, p.ciphertext, p.iv || '', p.ratchet_header);
+      const display = body
+        ? escapeHtml(body.length > 280 ? body.slice(0, 280) + '…' : body)
+        : '<span style="color:var(--text-tertiary)">[Encrypted]</span>';
+      return `
+        <div style="padding:var(--sp-3);border:1px solid var(--border-weak);border-radius:var(--radius-md);background:var(--bg-card)">
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <span style="font-size:var(--fs-sm);color:var(--text-secondary)">⏰ ${new Date(p.scheduled_at * 1000).toLocaleString()}</span>
+            <button class="cancel-sched btn-secondary" data-id="${p.id}" style="padding:2px 8px;font-size:var(--fs-xs);color:var(--danger)">Cancel</button>
+          </div>
+          <div style="margin-top:4px;font-size:var(--fs-sm);color:var(--text-primary);white-space:pre-wrap">${display}</div>
+        </div>`;
+    }));
+    list.replaceChildren(parseHTML(rendered.join('')));
 
     list.querySelectorAll('.cancel-sched').forEach(btn => {
       btn.addEventListener('click', async () => {
@@ -642,6 +713,12 @@ function showCreateChannelDialog(container: HTMLElement) {
     });
 
     if (res.ok) {
+      // Generate the E2E channel key for this new channel and upload self-envelope.
+      // Best-effort — if it fails, posts will fall back to legacy plaintext.
+      const channelId = (res.data as { channel_id?: string } | undefined)?.channel_id;
+      if (channelId) {
+        try { await generateAndUploadChannelKey(channelId); } catch { /* fallback to legacy */ }
+      }
       overlay.remove();
       renderDiscoverView(container);
     } else {
@@ -747,6 +824,10 @@ function showCreateChannelForCommunity(communityId: string, channelsEl: HTMLElem
     });
 
     if (res.ok) {
+      const channelId = (res.data as { channel_id?: string } | undefined)?.channel_id;
+      if (channelId) {
+        try { await generateAndUploadChannelKey(channelId); } catch { /* fallback to legacy */ }
+      }
       overlay.remove();
       channelsEl.dataset.loaded = '';
       channelsEl.style.display = 'none';

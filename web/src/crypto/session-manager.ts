@@ -164,7 +164,7 @@ let cachedIdentityDHKeyPair: X25519KeyPair | null = null;
  * In production X3DH, the identity key may be converted from Ed25519,
  * but for simplicity we generate a separate X25519 key and persist it.
  */
-async function getIdentityDHKeyPair(): Promise<X25519KeyPair> {
+export async function getIdentityDHKeyPair(): Promise<X25519KeyPair> {
   if (cachedIdentityDHKeyPair) return cachedIdentityDHKeyPair;
 
   // Try secure-store first, then fall back to localStorage for migration

@@ -307,7 +307,18 @@ struct ChannelDetailView: View {
         guard let data = await apiRequest(path: "/api/messages/\(channelId)?limit=50", method: "GET"),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let arr = json["messages"] as? [[String: Any]] else { return }
-        posts = arr
+
+        // Decode each post body asynchronously. E2E posts need an async unwrap;
+        // legacy posts decode synchronously inline. Build a `decoded_body` field
+        // on each post dictionary so the SwiftUI render path can stay synchronous.
+        var resolved: [[String: Any]] = []
+        for var msg in arr {
+            let body = await ChannelDetailView.resolvePostBody(channelId: channelId, post: msg)
+            msg["__decoded_body"] = body
+            resolved.append(msg)
+        }
+        posts = resolved
+
         // Mark as read for analytics (best-effort)
         for msg in arr {
             if let id = msg["id"] as? String {
@@ -316,21 +327,43 @@ struct ChannelDetailView: View {
         }
     }
 
-    /// Decode a channel post body. Tries legacy base64 plaintext first; if the
-    /// post is E2E (`ratchet_header.cv == 1`) we don't have native unwrap yet
-    /// so we show a placeholder. Web/desktop see the full content.
+    /// Decode a channel post body. Uses the cached `__decoded_body` field
+    /// produced by `loadPosts`; falls back to the legacy synchronous path
+    /// for scheduled-post previews where async resolution isn't available.
     private func decodeChannelPostBody(_ post: [String: Any]) -> String {
+        if let cached = post["__decoded_body"] as? String { return cached }
         return ChannelDetailView.decodeScheduledPreview(post)
     }
 
-    /// Static helper for decoding both feed posts and scheduled-post previews.
+    /// Async resolver: tries E2E unwrap first, falls back to legacy base64.
+    static func resolvePostBody(channelId: String, post: [String: Any]) async -> String {
+        let ratchetHeader = post["ratchet_header"] as? String ?? ""
+        if !ratchetHeader.isEmpty,
+           let hData = ratchetHeader.data(using: .utf8),
+           let hJson = try? JSONSerialization.jsonObject(with: hData) as? [String: Any],
+           let cv = hJson["cv"] as? Int, cv == 1 {
+            // E2E post — try native unwrap
+            let ct = post["ciphertext"] as? String ?? ""
+            let iv = post["iv"] as? String ?? ""
+            if let plaintext = await ChannelCrypto.decryptPost(
+                channelId: channelId, ciphertextB64: ct, ivB64: iv, ratchetHeader: ratchetHeader,
+            ) {
+                return plaintext
+            }
+            return "[Encrypted post — key not yet received]"
+        }
+        // Legacy base64 plaintext path
+        return decodeScheduledPreview(post)
+    }
+
+    /// Synchronous helper for legacy base64 plaintext (scheduled-post previews).
     static func decodeScheduledPreview(_ post: [String: Any]) -> String {
         let ratchetHeader = post["ratchet_header"] as? String ?? ""
         if !ratchetHeader.isEmpty,
            let hData = ratchetHeader.data(using: .utf8),
            let hJson = try? JSONSerialization.jsonObject(with: hData) as? [String: Any],
            let cv = hJson["cv"] as? Int, cv == 1 {
-            return "[Encrypted post — open on web/desktop]"
+            return "[Encrypted post — key not yet received]"
         }
         let ct = post["ciphertext"] as? String ?? ""
         if let data = Data(base64Encoded: ct), let s = String(data: data, encoding: .utf8) {

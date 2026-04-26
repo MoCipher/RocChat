@@ -356,6 +356,7 @@ private fun ChannelDetailScreen(channelId: String, channelName: String, onBack: 
     val scope = rememberCoroutineScope()
     val df = remember { SimpleDateFormat("MMM d, HH:mm", Locale.getDefault()) }
 
+    val context = LocalContext.current
     fun loadChannel() {
         scope.launch {
             val json = apiGetJson("/api/channels/$channelId")
@@ -368,7 +369,24 @@ private fun ChannelDetailScreen(channelId: String, channelName: String, onBack: 
             // Load post feed
             val msgs = apiGetJson("/api/messages/$channelId?limit=50")
             val arr = msgs?.optJSONArray("messages")
-            posts = if (arr != null) (0 until arr.length()).map { arr.getJSONObject(it) } else emptyList()
+            val rawPosts = if (arr != null) (0 until arr.length()).map { arr.getJSONObject(it) } else emptyList()
+            // Pre-resolve E2E body for each post so render path stays synchronous
+            for (p in rawPosts) {
+                val ratchetHeader = p.optString("ratchet_header", "")
+                if (ratchetHeader.isNotEmpty()) {
+                    try {
+                        val h = JSONObject(ratchetHeader)
+                        if (h.optInt("cv", 0) == 1) {
+                            val ct = p.optString("ciphertext", "")
+                            val iv = p.optString("iv", "")
+                            val plaintext = ChannelKeys.decryptPost(context, channelId, ct, iv, ratchetHeader)
+                            if (plaintext != null) p.put("__decoded_body", plaintext)
+                            else p.put("__decoded_body", "[Encrypted post — key not yet received]")
+                        }
+                    } catch (_: Exception) { /* legacy plaintext */ }
+                }
+            }
+            posts = rawPosts
             // Mark posts as read for analytics (best-effort)
             for (p in posts) {
                 val id = p.optString("id", "")
@@ -691,16 +709,19 @@ private fun apiPostBody(path: String, body: String): Boolean {
 }
 
 /**
- * Decode a channel post body. Returns the legacy base64 plaintext if the post
- * was published before E2E shipped; returns a placeholder for E2E posts (cv:1
- * in ratchet_header) since native unwrap is a future task.
+ * Decode a channel post body. Uses the `__decoded_body` field already
+ * populated by `loadChannel` (which performs E2E unwrap via ChannelKeys);
+ * falls back to legacy base64 plaintext for posts without E2E metadata.
  */
 private fun decodeChannelPostBody(post: JSONObject): String {
+    val cached = post.optString("__decoded_body", "")
+    if (cached.isNotEmpty()) return cached
+
     val ratchetHeader = post.optString("ratchet_header", "")
     if (ratchetHeader.isNotEmpty()) {
         try {
             val h = JSONObject(ratchetHeader)
-            if (h.optInt("cv", 0) == 1) return "[Encrypted post — open on web/desktop]"
+            if (h.optInt("cv", 0) == 1) return "[Encrypted post — key not yet received]"
         } catch (_: Exception) { /* not E2E metadata, treat as legacy */ }
     }
     val ct = post.optString("ciphertext", "")

@@ -455,6 +455,10 @@ Additional plaintext leaks and cross-platform inconsistencies eliminated:
   allowing robust decryption of iOS-originated `encryptedSignaling` payloads.
 - Fixed ICE server auth token lookup on web calls to use the active
   session-scoped token source, preventing unauthenticated ICE fetch failures.
+- Web call WebSocket endpoints (conversation + inbox) now resolve to the
+  current origin host (`location.host`) instead of a hardcoded worker domain,
+  preventing cross-origin signaling split where callers/callees connect to
+  different backends.
 
 ### Business feature removal
 - Removed Business-tier backend/API entrypoints and client surfaces from active

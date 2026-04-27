@@ -2806,17 +2806,29 @@ function tryParseGif(text: string): { type: string; url: string; preview?: strin
 
 async function startCall(conv: Conversation, callType: 'voice' | 'video') {
   const { startOutgoingCall } = await import('../calls/calls.js');
+  const { connectInbox, getInboxWs } = await import('../inbox-ws.js');
   const userId = localStorage.getItem('rocchat_user_id') || '';
   const recipient = conv.members.find((m) => m.user_id !== userId);
-  if (!recipient || !state.ws) return;
-  startOutgoingCall(conv.id, recipient.user_id, recipient.display_name || recipient.username, callType, state.ws);
+  if (!recipient) return;
+  // Calls should work even when conversation WS is not connected yet.
+  const ws = state.ws || getInboxWs() || await connectInbox();
+  if (!ws || ws.readyState !== WebSocket.OPEN) {
+    showToast('Realtime connection unavailable. Please wait and try again.', 'error');
+    return;
+  }
+  startOutgoingCall(conv.id, recipient.user_id, recipient.display_name || recipient.username, callType, ws);
 }
 
 async function startGroupCallFromChat(conv: Conversation) {
   const { startGroupCall } = await import('../calls/calls.js');
-  if (!state.ws) return;
+  const { connectInbox, getInboxWs } = await import('../inbox-ws.js');
+  const ws = state.ws || getInboxWs() || await connectInbox();
+  if (!ws || ws.readyState !== WebSocket.OPEN) {
+    showToast('Realtime connection unavailable. Please wait and try again.', 'error');
+    return;
+  }
   const memberIds = conv.members.map((m) => m.user_id);
-  startGroupCall(conv.id, 'voice', state.ws, memberIds);
+  startGroupCall(conv.id, 'voice', ws, memberIds);
 }
 
 // ── Voice & Video note recording ──

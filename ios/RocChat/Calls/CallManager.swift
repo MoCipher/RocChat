@@ -12,7 +12,7 @@
  */
 
 import Foundation
-import AVFoundation
+@preconcurrency import AVFoundation
 import CryptoKit
 import Combine
 import UIKit
@@ -593,17 +593,21 @@ class CallManager: ObservableObject {
         guard session.canAddOutput(output) else { return }
         session.addOutput(output)
         if let conn = output.connection(with: .video) {
-            conn.videoOrientation = .portrait
+            if #available(iOS 17.0, *) {
+                conn.videoRotationAngle = 90
+            } else {
+                conn.videoOrientation = .portrait
+            }
             if device.position == .front { conn.isVideoMirrored = true }
         }
         videoCapture = session
         videoOutput = output
-        videoQueue.async { session.startRunning() }
+        session.startRunning()
     }
 
     private func stopVideoStreaming() {
         if let session = videoCapture {
-            videoQueue.async { session.stopRunning() }
+            session.stopRunning()
         }
         videoCapture = nil
         videoOutput = nil

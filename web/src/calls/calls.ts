@@ -291,6 +291,9 @@ export async function startOutgoingCall(
   const { getInboxWs } = await import('../inbox-ws.js');
   const inbox = getInboxWs();
   const signalWs = inbox || ws;
+  if (!signalWs || signalWs.readyState !== WebSocket.OPEN) {
+    throw new Error('No active signaling websocket');
+  }
   Object.assign(callState, {
     callId: randomId(), conversationId, remoteUserId, remoteName, callType,
     status: 'outgoing', ws: signalWs,
@@ -310,8 +313,10 @@ export async function startOutgoingCall(
 export async function handleIncomingCallOffer(payload: Record<string, unknown>, conversationId: string | null, ws: WebSocket | null) {
   // Resolve conversationId from payload if not passed (inbox-WS path).
   const convId = conversationId || (payload.conversationId as string | undefined) || '';
-  if (callState.status !== 'idle' || !ws) {
-    ws?.send(JSON.stringify({ type: 'call_end', payload: { callId: payload.callId, reason: 'busy', targetUserId: payload.fromUserId, conversationId: convId }}));
+  const { getInboxWs } = await import('../inbox-ws.js');
+  const signalWs = ws || getInboxWs() || callState.ws;
+  if (callState.status !== 'idle' || !signalWs || signalWs.readyState !== WebSocket.OPEN) {
+    signalWs?.send(JSON.stringify({ type: 'call_end', payload: { callId: payload.callId, reason: 'busy', targetUserId: payload.fromUserId, conversationId: convId }}));
     return;
   }
   const decrypted = await decryptSignaling(payload, convId);
@@ -321,7 +326,7 @@ export async function handleIncomingCallOffer(payload: Record<string, unknown>, 
     remoteUserId: decrypted.fromUserId || payload.fromUserId,
     remoteName: ((decrypted.fromUserId || payload.fromUserId) as string).slice(0, 8),
     callType: (decrypted.callType as 'voice' | 'video') || 'voice',
-    status: 'incoming', ws,
+    status: 'incoming', ws: signalWs,
     pendingSdp: (decrypted.sdp as string | undefined) ?? null,
   });
   showCallOverlay();

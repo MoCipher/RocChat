@@ -459,6 +459,9 @@ Additional plaintext leaks and cross-platform inconsistencies eliminated:
   (`rocchat-api.spoass.workers.dev`) for conversation and inbox signaling.
   This avoids relying on front-end proxy paths that may not support WebSocket
   upgrade semantics in all environments.
+- Web call start/incoming handlers now hard-fail with visible UX feedback when
+  no signaling socket is open, and prefer inbox WS fallback when conversation
+  WS is unavailable. This removes silent no-op call button behavior.
 
 ### Business feature removal
 - Removed Business-tier backend/API entrypoints and client surfaces from active

@@ -4645,7 +4645,7 @@ struct SettingsView: View {
                 let encrypted = sealedBox.combined!.base64EncodedString()
 
                 // Upload
-                try await APIClient.shared.postRaw("/devices/key-transfer/bundle", body: [
+                _ = try await APIClient.shared.postRaw("/devices/key-transfer/bundle", body: [
                     "requestId": requestId,
                     "encryptedBundle": encrypted,
                     "ephemeralPub": myEphPub

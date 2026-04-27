@@ -619,6 +619,9 @@ Web and iOS clients use the dedicated Worker WS host for signaling
 (`wss://rocchat-api.spoass.workers.dev`) to ensure reliable WebSocket upgrade
 behavior for both conversation and user-inbox channels.
 
+If a signaling socket is not yet open, clients must present explicit user
+feedback (not silent failure) and retry via inbox WS fallback where possible.
+
 ```
 signal_msg = DoubleRatchet.encrypt({
   type: "call_offer",

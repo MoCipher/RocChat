@@ -1,10 +1,18 @@
 /**
  * RocChat Web — Link Preview Rendering
  *
- * Detects URLs in plaintext messages, fetches preview metadata via the
- * backend unfurler (which caches in KV for 24h), and renders a compact
- * card beneath the message bubble. Results are cached per-session in
- * memory to avoid re-fetching when the message list re-renders.
+ * Detects URLs in plaintext messages, fetches preview metadata, and
+ * renders a compact card beneath the message bubble.
+ *
+ * Two modes (controlled by localStorage "rocchat_link_preview_mode"):
+ *   "server"  (default) — Uses the backend unfurler (/api/link-preview).
+ *                          Hides the user's IP from the target site, but
+ *                          the RocChat server learns the URL.
+ *   "client"            — Fetches directly from the client via a CORS
+ *                          proxy-free <meta> scrape. The RocChat server
+ *                          never sees the URL, but the target site sees
+ *                          the user's IP.
+ *   "disabled"          — No link previews at all (maximum privacy).
  */
 
 import * as api from '../api.js';
@@ -15,19 +23,70 @@ const inflight = new Map<string, Promise<api.LinkPreview | null>>();
 
 const URL_RE = /\bhttps?:\/\/[^\s<>"']+/gi;
 
+export type LinkPreviewMode = 'server' | 'client' | 'disabled';
+
+export function getLinkPreviewMode(): LinkPreviewMode {
+  const v = localStorage.getItem('rocchat_link_preview_mode');
+  if (v === 'client' || v === 'disabled') return v;
+  return 'server';
+}
+
+export function setLinkPreviewMode(mode: LinkPreviewMode): void {
+  localStorage.setItem('rocchat_link_preview_mode', mode);
+  memCache.clear();
+}
+
 export function extractFirstUrl(text: string): string | null {
   const m = text.match(URL_RE);
   return m ? m[0] : null;
 }
 
+async function fetchPreviewClient(url: string): Promise<api.LinkPreview | null> {
+  try {
+    const res = await fetch(url, {
+      mode: 'cors',
+      credentials: 'omit',
+      headers: { 'Accept': 'text/html' },
+      redirect: 'follow',
+    });
+    if (!res.ok) return null;
+    const text = await res.text();
+    const doc = new DOMParser().parseFromString(text, 'text/html');
+    const og = (name: string) =>
+      doc.querySelector(`meta[property="${name}"]`)?.getAttribute('content') ||
+      doc.querySelector(`meta[name="${name}"]`)?.getAttribute('content') || '';
+    const title = og('og:title') || doc.querySelector('title')?.textContent?.trim() || '';
+    if (!title) return null;
+    let host: string;
+    try { host = new URL(url).hostname; } catch { host = ''; }
+    return {
+      url,
+      title,
+      description: og('og:description') || og('description'),
+      image: og('og:image'),
+      site_name: og('og:site_name') || host,
+    };
+  } catch {
+    return null;
+  }
+}
+
 export async function fetchPreview(url: string): Promise<api.LinkPreview | null> {
+  const mode = getLinkPreviewMode();
+  if (mode === 'disabled') return null;
+
   if (memCache.has(url)) return memCache.get(url) ?? null;
   const existing = inflight.get(url);
   if (existing) return existing;
   const p = (async () => {
     try {
-      const r = await api.getLinkPreview(url);
-      const data = r.ok ? r.data : null;
+      let data: api.LinkPreview | null;
+      if (mode === 'client') {
+        data = await fetchPreviewClient(url);
+      } else {
+        const r = await api.getLinkPreview(url);
+        data = r.ok ? r.data : null;
+      }
       memCache.set(url, data);
       return data;
     } catch {

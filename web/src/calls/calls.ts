@@ -73,7 +73,8 @@ async function deriveSafetyWord(userId1: string, userId2: string): Promise<strin
 async function getIceServers(): Promise<RTCIceServer[]> {
   if (cachedIceServers && Date.now() - iceServersFetchedAt < 5 * 60_000) return cachedIceServers;
   try {
-    const token = localStorage.getItem('rocchat_token');
+    const { getToken } = await import('../api.js');
+    const token = getToken();
     const res = await fetch('/api/calls/ice-servers', {
       headers: token ? { Authorization: `Bearer ${token}` } : {},
     });
@@ -93,20 +94,24 @@ async function getIceServers(): Promise<RTCIceServer[]> {
 
 async function encryptSignaling(payload: Record<string, unknown>): Promise<Record<string, unknown>> {
   const { targetUserId, callId, ...sensitiveData } = payload;
-  if (!callState.conversationId || !callState.remoteUserId) return payload;
-  try {
-    const encrypted = await encryptMessage(
-      callState.conversationId,
-      callState.remoteUserId,
-      JSON.stringify(sensitiveData),
-    );
-    // conversationId rides in cleartext so the recipient can find the
-    // pairwise ratchet session even when the message arrives over the
-    // user-inbox WS (which is not conversation-scoped).
-    return { callId, targetUserId, conversationId: callState.conversationId, encryptedSignaling: encrypted };
-  } catch {
-    return payload;
+  if (!callState.conversationId || !callState.remoteUserId) {
+    throw new Error('Cannot send signaling without an established conversation');
   }
+  const encrypted = await encryptMessage(
+    callState.conversationId,
+    callState.remoteUserId,
+    JSON.stringify(sensitiveData),
+  );
+  const enc = encrypted as unknown as Record<string, unknown>;
+  const headerObj = enc.x3dh ? { ...encrypted.header, x3dh: enc.x3dh } : encrypted.header;
+  return {
+    callId, targetUserId, conversationId: callState.conversationId,
+    encryptedSignaling: {
+      ciphertext: encrypted.ciphertext,
+      iv: encrypted.iv,
+      ratchet_header: JSON.stringify(headerObj),
+    },
+  };
 }
 
 async function decryptSignaling(
@@ -119,7 +124,24 @@ async function decryptSignaling(
     || callState.conversationId;
   if (!convId) return payload;
   try {
-    const decrypted = await decryptMessage(convId, payload.encryptedSignaling as any);
+    const encSig = payload.encryptedSignaling as Record<string, unknown>;
+    let header: unknown;
+    if (typeof encSig.ratchet_header === 'string') {
+      header = JSON.parse(encSig.ratchet_header);
+    } else if (encSig.header) {
+      header = encSig.header;
+    }
+    const headerRec = header as Record<string, unknown> | undefined;
+    const tag = (encSig.tag as string | undefined)
+      || (headerRec?.tag as string | undefined)
+      || '';
+    const encrypted = {
+      header: header as { dhPublicKey: string; pn: number; n: number },
+      ciphertext: encSig.ciphertext as string,
+      iv: encSig.iv as string,
+      tag,
+    };
+    const decrypted = await decryptMessage(convId, encrypted);
     const data = JSON.parse(decrypted);
     return {
       ...data,
@@ -138,19 +160,19 @@ async function encryptGroupSignaling(
   payload: Record<string, unknown>, convId: string, members?: string[],
 ): Promise<Record<string, unknown>> {
   const { targetUserId, callId, ...sensitiveData } = payload;
-  try {
-    if (targetUserId && typeof targetUserId === 'string') {
-      // Targeted signal (offer/answer/ice) → pairwise encrypt
-      const encrypted = await encryptMessage(convId, targetUserId, JSON.stringify(sensitiveData));
-      return { callId, targetUserId, encryptedSignaling: encrypted };
-    }
-    if (members?.length) {
-      // Broadcast signal (start/join/leave) → sender keys
-      const encrypted = await groupEncrypt(convId, members.map(m => ({ user_id: m })), JSON.stringify(sensitiveData));
-      return { callId, encryptedGroupSignaling: encrypted };
-    }
-  } catch { /* fall through */ }
-  return payload;
+  if (targetUserId && typeof targetUserId === 'string') {
+    const encrypted = await encryptMessage(convId, targetUserId, JSON.stringify(sensitiveData));
+    const enc = encrypted as unknown as Record<string, unknown>;
+    const headerObj = enc.x3dh ? { ...encrypted.header, x3dh: enc.x3dh } : encrypted.header;
+    return { callId, targetUserId, encryptedSignaling: {
+      ciphertext: encrypted.ciphertext, iv: encrypted.iv, ratchet_header: JSON.stringify(headerObj),
+    } };
+  }
+  if (members?.length) {
+    const encrypted = await groupEncrypt(convId, members.map(m => ({ user_id: m })), JSON.stringify(sensitiveData));
+    return { callId, encryptedGroupSignaling: encrypted };
+  }
+  throw new Error('Cannot send group signaling without members or target');
 }
 
 async function decryptGroupSignaling(
@@ -158,7 +180,21 @@ async function decryptGroupSignaling(
 ): Promise<Record<string, unknown>> {
   try {
     if (payload.encryptedSignaling) {
-      const decrypted = await decryptMessage(convId, payload.encryptedSignaling as any);
+      const encSig = payload.encryptedSignaling as Record<string, unknown>;
+      let header: unknown;
+      if (typeof encSig.ratchet_header === 'string') {
+        header = JSON.parse(encSig.ratchet_header);
+      } else if (encSig.header) {
+        header = encSig.header;
+      }
+      const headerRec = header as Record<string, unknown> | undefined;
+      const encrypted = {
+        header: header as { dhPublicKey: string; pn: number; n: number },
+        ciphertext: encSig.ciphertext as string,
+        iv: encSig.iv as string,
+        tag: (encSig.tag as string | undefined) || (headerRec?.tag as string | undefined) || '',
+      };
+      const decrypted = await decryptMessage(convId, encrypted);
       return { ...JSON.parse(decrypted), callId: payload.callId, targetUserId: payload.targetUserId, fromUserId: payload.fromUserId };
     }
     if (payload.encryptedGroupSignaling) {

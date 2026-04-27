@@ -13,7 +13,6 @@ import { handleContacts } from './contacts.js';
 import { handleMedia } from './media.js';
 import { handleQrAuth } from './qr-auth.js';
 import { handlePush } from './push.js';
-import { handleBusiness } from './business.js';
 import { handleFeatures } from './features.js';
 import { handleLinkPreview } from './link-preview.js';
 import { handleGroups } from './groups.js';
@@ -462,11 +461,6 @@ export default {
         return withCors(await handlePush(request, env, session, url));
       }
 
-      // Business features (paid — org management, compliance, etc.)
-      if (path.startsWith('/api/business')) {
-        return withCors(await handleBusiness(request, env, session, url));
-      }
-
       // Premium features (free — scheduled msgs, folders, contacts)
       if (path.startsWith('/api/features')) {
         return withCors(await handleFeatures(request, env, session, url));
@@ -494,11 +488,8 @@ export default {
       // Crypto Donation — the only payment method. No Stripe. No Apple. No Google.
       // RocChat accepts crypto donations only — fully decentralized, no middlemen.
       if (path === '/api/billing/crypto/checkout' && request.method === 'POST') {
-        const body = await request.json() as { type?: 'donation' | 'business'; amount?: number; recurring?: boolean };
-        const checkoutType = body.type === 'business' ? 'business' : 'donation';
-        const amountUsdCents = checkoutType === 'business'
-          ? 399
-          : Math.min(Math.max(Math.round((body.amount || 5) * 100), 100), 250000);
+        const body = await request.json() as { amount?: number; recurring?: boolean };
+        const amountUsdCents = Math.min(Math.max(Math.round((body.amount || 5) * 100), 100), 250000);
 
         const rate = Math.max(parseFloat(env.CRYPTO_USDC_RATE || '1'), 0.000001);
         const amountCrypto = (amountUsdCents / 100 / rate).toFixed(6);
@@ -508,11 +499,11 @@ export default {
         await env.DB.prepare(
           `INSERT INTO crypto_checkout_intents (id, user_id, checkout_type, amount_usd_cents, crypto_symbol, amount_crypto, wallet_address, recurring)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-        ).bind(intentId, session.userId, checkoutType, amountUsdCents, 'USDC', amountCrypto, walletAddress, body.recurring ? 1 : 0).run();
+        ).bind(intentId, session.userId, 'donation', amountUsdCents, 'USDC', amountCrypto, walletAddress, body.recurring ? 1 : 0).run();
 
         return withCors(jsonResponse({
           id: intentId,
-          checkout_type: checkoutType,
+          checkout_type: 'donation',
           amount_usd_cents: amountUsdCents,
           crypto_symbol: 'USDC',
           amount_crypto: amountCrypto,
@@ -535,13 +526,9 @@ export default {
           `UPDATE crypto_checkout_intents SET status = 'confirmed', tx_hash = ?, confirmed_at = unixepoch() WHERE id = ?`
         ).bind(body.tx_hash, body.intent_id).run();
 
-        if (intent.checkout_type === 'business') {
-          await env.DB.prepare(`UPDATE users SET account_tier = 'business' WHERE id = ?`).bind(session.userId).run();
-        } else {
-          await env.DB.prepare(
-            `UPDATE users SET donor_tier = ?, donor_recurring = ?, donor_since = COALESCE(donor_since, unixepoch()) WHERE id = ?`
-          ).bind(intent.recurring ? 'wing' : 'feather', intent.recurring ? 1 : 0, session.userId).run();
-        }
+        await env.DB.prepare(
+          `UPDATE users SET donor_tier = ?, donor_recurring = ?, donor_since = COALESCE(donor_since, unixepoch()) WHERE id = ?`
+        ).bind(intent.recurring ? 'wing' : 'feather', intent.recurring ? 1 : 0, session.userId).run();
 
         return withCors(jsonResponse({ ok: true }));
       }
@@ -623,8 +610,9 @@ export default {
           return withCors(errorResponse('Avatar too large (max 5MB)', 413));
         }
         const ct = request.headers.get('content-type') || '';
-        if (!ct.startsWith('image/')) {
-          return withCors(errorResponse('Only image files are accepted', 415));
+        // Accept both plain images (legacy) and encrypted blobs (E2E)
+        if (!ct.startsWith('image/') && ct !== 'application/octet-stream') {
+          return withCors(errorResponse('Only image files or encrypted blobs accepted', 415));
         }
         const body = request.body;
         if (!body) return withCors(errorResponse('Empty body', 400));

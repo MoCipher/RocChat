@@ -488,35 +488,31 @@ object SessionManager {
             ctData = ciphertext.fromB64()
             ivData = iv.fromB64()
             headerJson = JSONObject(ratchetHeaderStr)
-        } catch (_: Exception) {
-            return ciphertext // Not encrypted
+        } catch (e: Exception) {
+            throw IllegalArgumentException("Invalid encrypted payload", e)
         }
 
         val header: RatchetHeader
         try {
             header = RatchetHeader.fromJSON(headerJson)
-        } catch (_: Exception) {
-            return ciphertext
+        } catch (e: Exception) {
+            throw IllegalArgumentException("Invalid ratchet header", e)
         }
 
-        val tagB64 = header.tag ?: return ciphertext
+        val tagB64 = header.tag ?: throw IllegalArgumentException("Missing authentication tag")
         val tagData: ByteArray
-        try { tagData = tagB64.fromB64() } catch (_: Exception) { return ciphertext }
+        try { tagData = tagB64.fromB64() } catch (e: Exception) { throw IllegalArgumentException("Invalid tag encoding", e) }
 
         var state: RatchetState? = cache[conversationId] ?: loadState(context, conversationId)
         if (state == null && header.x3dh != null) {
             state = handleX3DHResponder(header.x3dh)
         }
-        if (state == null) return ciphertext
+        if (state == null) throw IllegalStateException("No session for conversation $conversationId")
 
-        return try {
-            val decrypted = CryptoPrimitives.ratchetDecrypt(state, ctData, ivData, tagData, header)
-            cache[conversationId] = state
-            saveState(context, conversationId, state)
-            String(decrypted)
-        } catch (_: Exception) {
-            ciphertext
-        }
+        val decrypted = CryptoPrimitives.ratchetDecrypt(state, ctData, ivData, tagData, header)
+        cache[conversationId] = state
+        saveState(context, conversationId, state)
+        return String(decrypted)
     }
 
     fun clearAllSessions(context: Context) {

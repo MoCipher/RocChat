@@ -505,8 +505,9 @@ object CallManager {
                 if (!InboxWebSocket.send(msg)) {
                     ws?.send(msg.toString())
                 }
-            } catch (_: Exception) {
-                sendSignal(type, extra)
+            } catch (e: Exception) {
+                android.util.Log.e("CallManager", "Encrypted signaling failed, dropping signal", e)
+                return@launch
             }
         }
     }

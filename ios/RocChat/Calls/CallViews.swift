@@ -81,8 +81,8 @@ struct CallOverlay: View {
                     // Encryption badge
                     HStack(spacing: 4) {
                         Image(systemName: "lock.fill").font(.caption2)
-                        Text("DTLS-SRTP encrypted")
-                            .font(.custom("JetBrains Mono", size: 10))
+                        Text("End-to-end encrypted")
+                            .font(.caption2.monospaced())
                     }
                     .foregroundColor(.turquoise)
                     .padding(.bottom, 20)
@@ -243,8 +243,8 @@ struct CallsHistoryView: View {
                 .padding(.horizontal)
             HStack(spacing: 4) {
                 Image(systemName: "lock.fill").font(.caption2)
-                Text("DTLS-SRTP + E2E signaling + verification")
-                    .font(.custom("JetBrains Mono", size: 10))
+                Text("E2E encrypted · AES-256-GCM")
+                    .font(.caption2.monospaced())
             }
             .foregroundColor(.turquoise)
             Spacer()
@@ -343,7 +343,7 @@ struct CallDiagnosticsView: View {
         HStack {
             Text(label).foregroundColor(.secondary)
             Spacer()
-            Text(value).font(.custom("JetBrains Mono", size: 13))
+            Text(value).font(.footnote.monospaced())
         }
     }
 

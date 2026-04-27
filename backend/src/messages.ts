@@ -477,13 +477,8 @@ async function sendMessage(request: Request, env: Env, session: Session): Promis
   ).bind(conversationId, session.userId).all<{ user_id: string }>();
 
   if (otherMembers.results?.length) {
-    const sender = await env.DB.prepare('SELECT display_name FROM users WHERE id = ?')
-      .bind(session.userId).first<{ display_name: string }>();
-    const senderName = sender?.display_name || 'Someone';
-
-    // Fire-and-forget push to all other members
     for (const m of otherMembers.results) {
-      sendPushNotification(env, m.user_id, senderName, session.userId, priority).catch(() => {});
+      sendPushNotification(env, m.user_id, undefined, session.userId, priority).catch(() => {});
     }
   }
 

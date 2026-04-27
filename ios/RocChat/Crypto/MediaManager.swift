@@ -50,7 +50,7 @@ class MediaManager {
     // MARK: - Upload
 
     /// Encrypt and upload a file. Returns metadata to include in the message payload.
-    func upload(data: Data, filename: String, mime: String) async throws -> EncryptedMedia {
+    func upload(data: Data, filename: String, mime: String, conversationId: String) async throws -> EncryptedMedia {
         // Sniff MIME from magic bytes to override generic/unknown types
         let detectedMime = (mime == "application/octet-stream" || mime.isEmpty)
             ? MediaManager.sniffMime(data: data, filename: filename)
@@ -70,6 +70,9 @@ class MediaManager {
         let respData = try await api.uploadBinary("/media/upload", data: encrypted, headers: [
             "Content-Type": "application/octet-stream",
             "Content-Length": "\(encrypted.count)",
+            "x-conversation-id": conversationId,
+            "x-encrypted-filename": encryptProfileField(filename),
+            "x-encrypted-mimetype": encryptProfileField(detectedMime),
         ])
 
         guard let json = try JSONSerialization.jsonObject(with: respData) as? [String: Any],

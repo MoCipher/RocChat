@@ -354,6 +354,7 @@ private fun ChannelDetailScreen(channelId: String, channelName: String, onBack: 
     var showAnalytics by remember { mutableStateOf(false) }
     var showScheduledList by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    val channelSnackbar = remember { SnackbarHostState() }
     val df = remember { SimpleDateFormat("MMM d, HH:mm", Locale.getDefault()) }
 
     val context = LocalContext.current
@@ -398,6 +399,7 @@ private fun ChannelDetailScreen(channelId: String, channelName: String, onBack: 
     LaunchedEffect(channelId) { loadChannel() }
 
     Scaffold(
+        snackbarHost = { SnackbarHost(channelSnackbar) },
         topBar = {
             TopAppBar(
                 title = { Text(channelName) },
@@ -461,7 +463,7 @@ private fun ChannelDetailScreen(channelId: String, channelName: String, onBack: 
                 item {
                     Text("Posts", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                 }
-                items(posts) { post ->
+                items(posts, key = { it.optString("id", it.hashCode().toString()) }) { post ->
                     Card(modifier = Modifier.fillMaxWidth()) {
                         Column(Modifier.padding(12.dp)) {
                             val ts = post.optString("created_at", "")
@@ -530,14 +532,7 @@ private fun ChannelDetailScreen(channelId: String, channelName: String, onBack: 
             confirmButton = {
                 TextButton(onClick = {
                     scope.launch {
-                        // Try the E2E path first: top up envelopes for any new
-                        // subscribers, then encrypt with the channel symmetric
-                        // key and submit {ciphertext, iv, ratchet_header}
-                        // matching the web/iOS wire format. Fall back to legacy
-                        // base64-plaintext if no channel key is available.
-                        var ciphertext = android.util.Base64.encodeToString(
-                            content.toByteArray(), android.util.Base64.NO_WRAP,
-                        )
+                        var ciphertext: String? = null
                         var iv = ""
                         var ratchetHeader = "{}"
                         kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
@@ -547,6 +542,10 @@ private fun ChannelDetailScreen(channelId: String, channelName: String, onBack: 
                                 iv = enc.ivB64
                                 ratchetHeader = enc.ratchetHeaderJson
                             }
+                        }
+                        if (ciphertext == null) {
+                            channelSnackbar.showSnackbar("Channel key not available — cannot post")
+                            return@launch
                         }
                         if (isScheduled) {
                             val schedAt = (System.currentTimeMillis() / 1000) + 3600

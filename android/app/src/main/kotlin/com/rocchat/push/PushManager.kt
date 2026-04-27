@@ -50,11 +50,11 @@ object PushManager {
         }
     }
 
-    fun showMessageNotification(context: Context, senderName: String, notificationId: Int = System.currentTimeMillis().toInt()) {
+    fun showMessageNotification(context: Context, @Suppress("UNUSED_PARAMETER") _senderName: String = "", notificationId: Int = System.currentTimeMillis().toInt()) {
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_dialog_email)
             .setContentTitle("RocChat")
-            .setContentText("New message from $senderName")
+            .setContentText("New message")
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setAutoCancel(true)
             .build()

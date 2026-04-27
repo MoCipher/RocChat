@@ -428,18 +428,18 @@ class SessionManager {
         guard let ctData = Data(base64Encoded: ciphertext),
               let ivData = Data(base64Encoded: iv),
               let headerData = ratchetHeaderStr.data(using: .utf8) else {
-            return ciphertext // Not encrypted, return as-is (legacy plaintext)
+            return "[Unable to decrypt]"
         }
 
         let header: RatchetHeader
         do {
             header = try JSONDecoder().decode(RatchetHeader.self, from: headerData)
         } catch {
-            return ciphertext // Not a valid ratchet header, likely plaintext
+            return "[Unable to decrypt]"
         }
 
         guard let tagB64 = header.tag, let tagData = Data(base64Encoded: tagB64) else {
-            return ciphertext // No tag, likely plaintext
+            return "[Unable to decrypt]"
         }
 
         var state: RatchetState
@@ -451,7 +451,7 @@ class SessionManager {
             // First message with X3DH header — create responder session
             state = try handleX3DHResponder(x3dh)
         } else {
-            return ciphertext // No session and no X3DH header
+            return "[Unable to decrypt]"
         }
 
         let decrypted = try ratchetDecrypt(&state, ciphertext: ctData, iv: ivData, tag: tagData, header: header)

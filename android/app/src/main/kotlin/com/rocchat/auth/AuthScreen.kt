@@ -207,9 +207,25 @@ fun AuthScreen(onSuccess: () -> Unit) {
                                     // Encrypt SPK private with vault key before sending
                                     val encryptedSpkPriv = RocCrypto.aesGcmEncrypt(vaultKey, signedPreKp.first)
 
+                                    // E2E encrypt display name before sending to server
+                                    val encDisplayName: String = try {
+                                        val mac = javax.crypto.Mac.getInstance("HmacSHA256")
+                                        mac.init(javax.crypto.spec.SecretKeySpec(ByteArray(32), "HmacSHA256"))
+                                        val prk = mac.doFinal(vaultKey)
+                                        val expandMac = javax.crypto.Mac.getInstance("HmacSHA256")
+                                        expandMac.init(javax.crypto.spec.SecretKeySpec(prk, "HmacSHA256"))
+                                        val info = "rocchat:profile:encrypt"
+                                        val keyBytes = expandMac.doFinal(info.toByteArray() + byteArrayOf(0x01)).copyOf(32)
+                                        val iv = ByteArray(12).also { java.security.SecureRandom().nextBytes(it) }
+                                        val cipher = javax.crypto.Cipher.getInstance("AES/GCM/NoPadding")
+                                        cipher.init(javax.crypto.Cipher.ENCRYPT_MODE, javax.crypto.spec.SecretKeySpec(keyBytes, "AES"), javax.crypto.spec.GCMParameterSpec(128, iv))
+                                        val ct = cipher.doFinal(displayName.trim().toByteArray())
+                                        Base64.encodeToString(iv + ct, Base64.NO_WRAP)
+                                    } catch (_: Exception) { displayName.trim() }
+
                                     val regResult = APIClient.register(
                                         username = cleanUsername,
-                                        displayName = displayName.trim(),
+                                        displayName = encDisplayName,
                                         authHash = authHashB64,
                                         salt = Base64.encodeToString(salt, Base64.NO_WRAP),
                                         identityKey = Base64.encodeToString(identityKp.second, Base64.NO_WRAP),
@@ -235,6 +251,8 @@ fun AuthScreen(onSuccess: () -> Unit) {
                                             .remove("refresh_token")
                                             .apply()
                                     }
+                                    // Persist vault key for profile/group-meta encryption
+                                    SecureStorage.set(context, "rocchat_vault_key", Base64.encodeToString(vaultKey, Base64.NO_WRAP))
                                     // Cache key material for E2E session manager
                                     SessionManager.identityDHPublic = identityDHKp.second
                                     SessionManager.identityDHPrivate = identityDHKp.first
@@ -255,6 +273,9 @@ fun AuthScreen(onSuccess: () -> Unit) {
                                         .remove("session_token")
                                         .remove("refresh_token")
                                         .apply()
+                                    // Persist vault key for profile/group-meta encryption
+                                    val loginVaultKey = RocCrypto.deriveVaultKey(passphrase, salt)
+                                    SecureStorage.set(context, "rocchat_vault_key", Base64.encodeToString(loginVaultKey, Base64.NO_WRAP))
                                     SessionManager.loadCachedKeyMaterial(context)
                                     onSuccess()
                                 }

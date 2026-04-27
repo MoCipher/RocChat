@@ -24,6 +24,7 @@ import {
 } from '../crypto/recovery-phrase.js';
 import { setKeyMaterial } from '../crypto/session-manager.js';
 import { putSecretString } from '../crypto/secure-store.js';
+import { encryptProfileField } from '../crypto/profile-crypto.js';
 
 export function renderAuth(container: HTMLElement, onSuccess: () => void) {
   let mode: 'login' | 'register' = 'login';
@@ -230,6 +231,7 @@ export function renderAuth(container: HTMLElement, onSuccess: () => void) {
 
       // Decrypt keys with vault key
       const vaultKey = await deriveVaultKey(passphrase, salt);
+      await putSecretString('rocchat_vault_key', toBase64(vaultKey));
       if (res.data.encrypted_keys) {
         try {
           const keys = await decryptPrivateKeys(vaultKey, res.data.encrypted_keys);
@@ -337,6 +339,7 @@ export function renderAuth(container: HTMLElement, onSuccess: () => void) {
       const authSalt = new TextEncoder().encode(`rocchat:${username}`);
       const authHash = await deriveAuthHash(passphrase, authSalt);
       const vaultKey = await deriveVaultKey(passphrase, authSalt);
+      await putSecretString('rocchat_vault_key', toBase64(vaultKey));
 
       // Generate crypto keys
       const bundle = await generateKeyBundle();
@@ -346,9 +349,11 @@ export function renderAuth(container: HTMLElement, onSuccess: () => void) {
       const identityDHKeyPair = await generateX25519KeyPair();
       const encryptedKeys = await encryptPrivateKeys(vaultKey, bundle, identityDHKeyPair);
 
+      const encryptedDisplayName = await encryptProfileField(displayName);
+
       const res = await api.register({
         username,
-        display_name: displayName,
+        display_name: encryptedDisplayName,
         auth_hash: toBase64(authHash),
         salt: toBase64(salt),
         identity_key: toBase64(bundle.identityKeyPair.publicKey),

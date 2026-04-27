@@ -33,20 +33,49 @@ final class InboxWebSocket {
     /// Open the inbox WebSocket. Idempotent.
     func connect() {
         if let t = task, t.state == .running { return }
-        guard
-            let userId = UserDefaults.standard.string(forKey: "rocchat_user_id"),
-            let token = SecureStorage.shared.get(forKey: "session_token")
-                ?? UserDefaults.standard.string(forKey: "sessionToken")
+        guard let userId = UserDefaults.standard.string(forKey: "user_id")
         else { return }
 
         manuallyClosed = false
-        let urlStr = "wss://rocchat-api.spoass.workers.dev/api/ws/user/\(userId)?userId=\(userId)&deviceId=ios&token=\(token)"
-        guard let url = URL(string: urlStr) else { return }
+        Task {
+            guard let ticket = await fetchWsTicket() else {
+                scheduleReconnect()
+                return
+            }
+            guard let wsBase = APIClient.shared.websocketBaseURL else {
+                scheduleReconnect()
+                return
+            }
+            guard var components = URLComponents(
+                url: wsBase.appendingPathComponent("api/ws/user/\(userId)"),
+                resolvingAgainstBaseURL: false
+            ) else {
+                scheduleReconnect()
+                return
+            }
+            components.queryItems = [
+                URLQueryItem(name: "userId", value: userId),
+                URLQueryItem(name: "deviceId", value: "ios"),
+                URLQueryItem(name: "ticket", value: ticket),
+            ]
+            guard let url = components.url else { return }
 
-        let t = APIClient.shared.webSocketTask(with: url)
-        self.task = t
-        t.resume()
-        receive(task: t)
+            let t = APIClient.shared.webSocketTask(with: url)
+            self.task = t
+            t.resume()
+            receive(task: t)
+        }
+    }
+
+    private func fetchWsTicket() async -> String? {
+        for _ in 0..<2 {
+            if let data = try? await APIClient.shared.postRaw("/ws/ticket", body: [:]),
+               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let ticket = json["ticket"] as? String {
+                return ticket
+            }
+        }
+        return nil
     }
 
     /// Send a JSON message over the inbox. Returns true if the WS was

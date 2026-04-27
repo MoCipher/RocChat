@@ -36,6 +36,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -65,6 +66,12 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.keyframes
+import androidx.compose.animation.core.rememberInfiniteTransition
 import coil.compose.SubcomposeAsyncImage
 import coil.request.ImageRequest
 import androidx.compose.ui.graphics.asImageBitmap
@@ -76,6 +83,7 @@ import com.google.zxing.common.HybridBinarizer
 import com.rocchat.calls.CallManager
 import com.rocchat.calls.CallOverlay
 import com.rocchat.calls.CallsHistoryTab
+import com.rocchat.crypto.GroupSessionManager
 import com.rocchat.crypto.SessionManager
 import com.rocchat.network.APIClient
 import com.rocchat.network.NativeWebSocket
@@ -89,14 +97,27 @@ import java.text.SimpleDateFormat
 import java.util.*
 import java.security.MessageDigest
 import javax.crypto.Cipher
+import javax.crypto.Mac
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
+import com.rocchat.crypto.SecureStorage
 
 // ── Encrypted metadata helpers (typing, presence, read receipts) ──
 // Key: SHA256(identityKey + ":meta:" + conversationId) → AES-GCM-256
 // Format: base64(iv) + "." + base64(ciphertext+tag) — matches web/iOS encryptMeta()
 
 private fun getMetaKeyBytes(context: Context, conversationId: String): ByteArray {
+    val vkB64 = SecureStorage.get(context, "rocchat_vault_key")
+    if (vkB64 != null) {
+        val vk = android.util.Base64.decode(vkB64, android.util.Base64.NO_WRAP)
+        val info = "rocchat:meta:$conversationId"
+        val mac = javax.crypto.Mac.getInstance("HmacSHA256")
+        mac.init(javax.crypto.spec.SecretKeySpec(ByteArray(32), "HmacSHA256"))
+        val prk = mac.doFinal(vk)
+        val expandMac = javax.crypto.Mac.getInstance("HmacSHA256")
+        expandMac.init(javax.crypto.spec.SecretKeySpec(prk, "HmacSHA256"))
+        return expandMac.doFinal(info.toByteArray() + byteArrayOf(0x01)).copyOf(32)
+    }
     val prefs = context.getSharedPreferences("rocchat", Context.MODE_PRIVATE)
     val idKey = prefs.getString("identity_pub", conversationId) ?: conversationId
     val raw = "$idKey:meta:$conversationId".toByteArray(Charsets.UTF_8)
@@ -132,14 +153,41 @@ private fun decryptMeta(context: Context, conversationId: String, payload: Strin
     } catch (_: Exception) { null }
 }
 
-// Profile field encryption: SHA256(identityKey + ":profile:encrypt") → AES-GCM-256
-private fun encryptProfileField(context: Context, value: String): String {
+// Profile field encryption: HKDF(vaultKey, "rocchat:profile:encrypt") → AES-GCM-256
+// Vault key is passphrase-derived and NEVER leaves the device, so the
+// server cannot derive this key.
+internal fun hkdfProfileKey(ikm: ByteArray, info: String): ByteArray {
+    val mac = Mac.getInstance("HmacSHA256")
+    mac.init(SecretKeySpec(ByteArray(32), "HmacSHA256"))
+    val prk = mac.doFinal(ikm)
+    val expandMac = Mac.getInstance("HmacSHA256")
+    expandMac.init(SecretKeySpec(prk, "HmacSHA256"))
+    expandMac.update(info.toByteArray(Charsets.UTF_8))
+    expandMac.update(byteArrayOf(1))
+    return expandMac.doFinal()
+}
+
+internal fun profileEncryptionKey(context: Context): SecretKeySpec {
+    val vkB64 = SecureStorage.get(context, "rocchat_vault_key")
+    if (vkB64 != null) {
+        val vk = android.util.Base64.decode(vkB64, android.util.Base64.NO_WRAP)
+        val keyBytes = hkdfProfileKey(vk, "rocchat:profile:encrypt")
+        return SecretKeySpec(keyBytes, "AES")
+    }
+    return legacyProfileKey(context)
+}
+
+internal fun legacyProfileKey(context: Context): SecretKeySpec {
+    val prefs = context.getSharedPreferences("rocchat", Context.MODE_PRIVATE)
+    val idKey = prefs.getString("identity_pub", "default") ?: "default"
+    val keyBytes = MessageDigest.getInstance("SHA-256").digest("$idKey:profile:encrypt".toByteArray(Charsets.UTF_8))
+    return SecretKeySpec(keyBytes, "AES")
+}
+
+internal fun encryptProfileField(context: Context, value: String): String {
     if (value.isEmpty()) return value
     return try {
-        val prefs = context.getSharedPreferences("rocchat", Context.MODE_PRIVATE)
-        val idKey = prefs.getString("identity_pub", "default") ?: "default"
-        val keyBytes = MessageDigest.getInstance("SHA-256").digest("$idKey:profile:encrypt".toByteArray(Charsets.UTF_8))
-        val key = SecretKeySpec(keyBytes, "AES")
+        val key = profileEncryptionKey(context)
         val iv = ByteArray(12).also { java.security.SecureRandom().nextBytes(it) }
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(Cipher.ENCRYPT_MODE, key, GCMParameterSpec(128, iv))
@@ -157,13 +205,18 @@ private fun decryptProfileField(context: Context, value: String): String {
         val iv = android.util.Base64.decode(parts[0], android.util.Base64.DEFAULT)
         val ct = android.util.Base64.decode(parts[1], android.util.Base64.DEFAULT)
         if (iv.size != 12 || ct.size < 16) return value
-        val prefs = context.getSharedPreferences("rocchat", Context.MODE_PRIVATE)
-        val idKey = prefs.getString("identity_pub", "default") ?: "default"
-        val keyBytes = MessageDigest.getInstance("SHA-256").digest("$idKey:profile:encrypt".toByteArray(Charsets.UTF_8))
-        val key = SecretKeySpec(keyBytes, "AES")
+        // Try vault-derived key first, then legacy for backward compat
+        val key = profileEncryptionKey(context)
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-        cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(128, iv))
-        String(cipher.doFinal(ct), Charsets.UTF_8)
+        try {
+            cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(128, iv))
+            return String(cipher.doFinal(ct), Charsets.UTF_8)
+        } catch (_: Exception) {
+            val legacy = legacyProfileKey(context)
+            val legacyCipher = Cipher.getInstance("AES/GCM/NoPadding")
+            legacyCipher.init(Cipher.DECRYPT_MODE, legacy, GCMParameterSpec(128, iv))
+            return String(legacyCipher.doFinal(ct), Charsets.UTF_8)
+        }
     } catch (_: Exception) { value }
 }
 
@@ -188,52 +241,44 @@ fun MainScreen(onLogout: () -> Unit) {
         return
     }
 
+    val snackbarHostState = remember { SnackbarHostState() }
+    val navItemColors = NavigationBarItemDefaults.colors(
+        selectedIconColor = RocColors.RocGold,
+        selectedTextColor = RocColors.RocGold,
+        indicatorColor = RocColors.RocGold.copy(alpha = 0.12f),
+    )
+
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         bottomBar = {
             NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
                 NavigationBarItem(
                     selected = selectedTab == 0,
                     onClick = { selectedTab = 0 },
-                    icon = { Icon(Icons.Default.Email, contentDescription = "Chats") },
+                    icon = { Icon(Icons.AutoMirrored.Filled.Chat, contentDescription = "Chats") },
                     label = { Text("Chats") },
-                    colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = RocColors.RocGold,
-                        selectedTextColor = RocColors.RocGold,
-                        indicatorColor = RocColors.RocGold.copy(alpha = 0.12f),
-                    ),
+                    colors = navItemColors,
                 )
                 NavigationBarItem(
                     selected = selectedTab == 1,
                     onClick = { selectedTab = 1 },
                     icon = { Icon(Icons.Default.Phone, contentDescription = "Calls") },
                     label = { Text("Calls") },
-                    colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = RocColors.RocGold,
-                        selectedTextColor = RocColors.RocGold,
-                        indicatorColor = RocColors.RocGold.copy(alpha = 0.12f),
-                    ),
+                    colors = navItemColors,
                 )
                 NavigationBarItem(
                     selected = selectedTab == 2,
                     onClick = { selectedTab = 2 },
                     icon = { Icon(Icons.Default.Campaign, contentDescription = "Channels") },
                     label = { Text("Channels") },
-                    colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = RocColors.RocGold,
-                        selectedTextColor = RocColors.RocGold,
-                        indicatorColor = RocColors.RocGold.copy(alpha = 0.12f),
-                    ),
+                    colors = navItemColors,
                 )
                 NavigationBarItem(
                     selected = selectedTab == 3,
                     onClick = { selectedTab = 3 },
                     icon = { Icon(Icons.Default.Person, contentDescription = "Profile") },
                     label = { Text("Profile") },
-                    colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = RocColors.RocGold,
-                        selectedTextColor = RocColors.RocGold,
-                        indicatorColor = RocColors.RocGold.copy(alpha = 0.12f),
-                    ),
+                    colors = navItemColors,
                 )
             }
         },
@@ -246,13 +291,14 @@ fun MainScreen(onLogout: () -> Unit) {
                         openConversationName = name
                         openRecipientUserId = recipientId
                     },
+                    snackbarHostState = snackbarHostState,
                 )
                 1 -> CallsHistoryTab()
                 2 -> ChannelsTab()
                 3 -> SettingsTab(onLogout = onLogout)
             }
-            // Call overlay on top of everything
-            CallOverlay()        }
+            CallOverlay()
+        }
     }
 }
 
@@ -339,7 +385,7 @@ private fun mediaTypePreview(type: String?): String = when (type) {
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
-fun ChatsTab(onOpenConversation: (String, String, String) -> Unit) {
+fun ChatsTab(onOpenConversation: (String, String, String) -> Unit, snackbarHostState: SnackbarHostState = remember { SnackbarHostState() }) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var conversations by remember { mutableStateOf<List<APIClient.Conversation>>(emptyList()) }
@@ -360,7 +406,9 @@ fun ChatsTab(onOpenConversation: (String, String, String) -> Unit) {
     LaunchedEffect(Unit) {
         try {
             conversations = APIClient.getConversations()
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            snackbarHostState.showSnackbar("Failed to load conversations")
+        }
         try {
             val arr = APIClient.getArray("/features/folders")
             val fList = mutableListOf<Triple<String, String, String>>()
@@ -451,9 +499,9 @@ fun ChatsTab(onOpenConversation: (String, String, String) -> Unit) {
                     Spacer(Modifier.height(12.dp))
                     Text("No conversations yet", fontWeight = FontWeight.SemiBold)
                     Spacer(Modifier.height(8.dp))
-                    Text("Start a new conversation to begin messaging securely.", color = RocColors.TextSecondary, fontSize = 14.sp)
+                    Text("Start a new conversation to begin messaging securely.", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium)
                     Spacer(Modifier.height(12.dp))
-                    Text("🔒 End-to-end encrypted", color = RocColors.Turquoise, fontSize = 12.sp)
+                    Text("🔒 End-to-end encrypted", color = RocColors.Turquoise, style = MaterialTheme.typography.labelSmall)
                 }
             }
         } else {
@@ -481,7 +529,9 @@ fun ChatsTab(onOpenConversation: (String, String, String) -> Unit) {
                 onRefresh = {
                     scope.launch {
                         isRefreshing = true
-                        try { conversations = APIClient.getConversations() } catch (_: Exception) {}
+                        try { conversations = APIClient.getConversations() } catch (e: Exception) {
+                            snackbarHostState.showSnackbar("Network error — pull to retry")
+                        }
                         isRefreshing = false
                     }
                 },
@@ -550,7 +600,7 @@ fun ChatsTab(onOpenConversation: (String, String, String) -> Unit) {
                                 supportingContent = {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
                                         Text("🔒 ", fontSize = 10.sp)
-                                        Text(mediaTypePreview(conv.lastMessageType), color = RocColors.TextSecondary, fontSize = 14.sp, maxLines = 1)
+                                        Text(mediaTypePreview(conv.lastMessageType), color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium, maxLines = 1)
                                     }
                                 },
                                 leadingContent = {
@@ -559,7 +609,7 @@ fun ChatsTab(onOpenConversation: (String, String, String) -> Unit) {
                                 trailingContent = {
                                     Column(horizontalAlignment = Alignment.End) {
                                         conv.lastMessageAt?.let {
-                                            Text(formatRelativeTime(it), fontSize = 12.sp, color = RocColors.TextSecondary)
+                                            Text(formatRelativeTime(it), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                         }
                                         if (conv.muted) {
                                             Spacer(Modifier.height(4.dp))
@@ -842,7 +892,8 @@ fun ChatsTab(onOpenConversation: (String, String, String) -> Unit) {
                     TextButton(onClick = {
                         scope.launch {
                             try {
-                                val convId = APIClient.createConversation("group", selectedUsers.map { it.userId }, groupName.trim())
+                                val encMeta = encryptProfileField(context, groupName.trim())
+                                val convId = APIClient.createConversation("group", selectedUsers.map { it.userId }, encMeta)
                                 onOpenConversation(convId, groupName.ifBlank { "Group" }, "")
                                 showNewChat = false
                             } catch (_: Exception) {}
@@ -864,6 +915,7 @@ fun ChatsTab(onOpenConversation: (String, String, String) -> Unit) {
 fun ConversationScreen(conversationId: String, conversationName: String, recipientUserId: String = "", onBack: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val convSnackbarHostState = remember { SnackbarHostState() }
     var messages by remember { mutableStateOf<List<APIClient.ChatMessage>>(emptyList()) }
     var inputText by remember { mutableStateOf("") }
     var isSending by remember { mutableStateOf(false) }
@@ -971,7 +1023,8 @@ fun ConversationScreen(conversationId: String, conversationName: String, recipie
                         val env = SessionManager.encryptMessage(context, conversationId, recipientUserId, plaintext)
                         APIClient.sendMessage(conversationId, env.ciphertext, env.iv, env.ratchetHeader, "file")
                     } else {
-                        APIClient.sendMessage(conversationId, plaintext, "", "", "file")
+                        val groupEnvelope = GroupSessionManager.getInstance(context).encrypt(conversationId, plaintext.toByteArray(), userId)
+                        APIClient.sendMessage(conversationId, groupEnvelope.ciphertext, "", groupEnvelope.ratchetHeader, "file")
                     }
                     messages = messages + APIClient.ChatMessage(
                         id = "local-${System.currentTimeMillis()}", conversationId = conversationId,
@@ -988,10 +1041,18 @@ fun ConversationScreen(conversationId: String, conversationName: String, recipie
         try {
             val raw = APIClient.getMessages(conversationId)
             messages = raw.map { msg ->
-                if (msg.ratchetHeader.isNotEmpty() && msg.iv.isNotEmpty()) {
-                    val displayText = try {
-                        SessionManager.decryptMessage(context, conversationId, msg.ciphertext, msg.iv, msg.ratchetHeader)
-                    } catch (_: Exception) { msg.ciphertext }
+                if (msg.ratchetHeader.isNotEmpty()) {
+                    val displayText = if (GroupSessionManager.isGroupEncrypted(msg.ratchetHeader)) {
+                        try {
+                            val rhJson = JSONObject(msg.ratchetHeader)
+                            val senderId = rhJson.optString("senderId", "")
+                            String(GroupSessionManager.getInstance(context).decrypt(conversationId, senderId, msg.ciphertext, msg.ratchetHeader))
+                        } catch (_: Exception) { "[Unable to decrypt]" }
+                    } else if (msg.iv.isNotEmpty()) {
+                        try {
+                            SessionManager.decryptMessage(context, conversationId, msg.ciphertext, msg.iv, msg.ratchetHeader)
+                        } catch (_: Exception) { "[Unable to decrypt]" }
+                    } else "[Unable to decrypt]"
                     msg.copy(ciphertext = displayText)
                 } else msg
             }
@@ -1008,7 +1069,9 @@ fun ConversationScreen(conversationId: String, conversationName: String, recipie
                     }.toString())
                 }
             }
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            convSnackbarHostState.showSnackbar("Failed to load messages")
+        }
     }
 
     // Scroll to bottom when messages change
@@ -1021,13 +1084,17 @@ fun ConversationScreen(conversationId: String, conversationName: String, recipie
 
     // WebSocket connection with automatic reconnection
     DisposableEffect(conversationId) {
-        val token = APIClient.sessionToken ?: return@DisposableEffect onDispose {}
-        // Connect directly to Worker backend — Pages proxy cannot handle WebSocket upgrades
-        val wsUrl = "wss://rocchat-api.spoass.workers.dev/api/ws/$conversationId?userId=$userId&deviceId=android&token=$token"
+        if (APIClient.sessionToken == null) return@DisposableEffect onDispose {}
         var reconnectAttempt = 0
         var reconnectJob: kotlinx.coroutines.Job? = null
 
-        fun connectWs() {
+        suspend fun connectWs() {
+            val ticketJson = try {
+                APIClient.post("/ws/ticket", JSONObject())
+            } catch (_: Exception) { null }
+            val ticket = ticketJson?.optString("ticket", null)
+            if (ticket.isNullOrEmpty()) return
+            val wsUrl = "wss://rocchat-api.spoass.workers.dev/api/ws/$conversationId?userId=$userId&deviceId=android&ticket=$ticket"
             val listener = object : NativeWebSocket.Listener {
                 override fun onOpen(ws: NativeWebSocket) {
                     reconnectAttempt = 0
@@ -1041,9 +1108,17 @@ fun ConversationScreen(conversationId: String, conversationName: String, recipie
                                 val ct = payload.optString("ciphertext", "")
                                 val ivStr = payload.optString("iv", "")
                                 val rh = payload.optString("ratchet_header", "")
-                                val displayText = if (rh.isNotEmpty() && ivStr.isNotEmpty()) {
-                                    try { SessionManager.decryptMessage(context, conversationId, ct, ivStr, rh) } catch (_: Exception) { ct }
-                                } else ct
+                                val displayText = if (rh.isNotEmpty()) {
+                                    if (GroupSessionManager.isGroupEncrypted(rh)) {
+                                        try {
+                                            val rhJson = JSONObject(rh)
+                                            val senderId = rhJson.optString("senderId", "")
+                                            String(GroupSessionManager.getInstance(context).decrypt(conversationId, senderId, ct, rh))
+                                        } catch (_: Exception) { "[Unable to decrypt]" }
+                                    } else if (ivStr.isNotEmpty()) {
+                                        try { SessionManager.decryptMessage(context, conversationId, ct, ivStr, rh) } catch (_: Exception) { "[Unable to decrypt]" }
+                                    } else "[Unable to decrypt]"
+                                } else "[Unable to decrypt]"
                                 val newMsg = APIClient.ChatMessage(
                                     id = payload.optString("id", "ws-${System.currentTimeMillis()}"),
                                     conversationId = conversationId,
@@ -1071,35 +1146,29 @@ fun ConversationScreen(conversationId: String, conversationName: String, recipie
                             "delivery_receipt", "read_receipt" -> {
                                 val payload = data.getJSONObject("payload")
                                 val enc = payload.optString("e", "")
-                                val msgId = if (enc.isNotEmpty()) {
-                                    decryptMeta(context, conversationId, enc)?.optString("message_id") ?: ""
-                                } else payload.optString("message_id")
-                                val newStatus = if (data.optString("type") == "read_receipt") "read" else "delivered"
-                                if (msgId.isNotEmpty()) {
-                                    messages = messages.map { if (it.id == msgId) it.copy(status = newStatus) else it }
+                                if (enc.isNotEmpty()) {
+                                    val msgId = decryptMeta(context, conversationId, enc)?.optString("message_id") ?: ""
+                                    val newStatus = if (data.optString("type") == "read_receipt") "read" else "delivered"
+                                    if (msgId.isNotEmpty()) {
+                                        messages = messages.map { if (it.id == msgId) it.copy(status = newStatus) else it }
+                                    }
                                 }
                             }
                             "typing" -> {
                                 val payload = data.getJSONObject("payload")
                                 val enc = payload.optString("e", "")
-                                val isTyping: Boolean
-                                val fromUser: String
                                 if (enc.isNotEmpty()) {
                                     val meta = decryptMeta(context, conversationId, enc)
-                                    isTyping = meta?.optBoolean("isTyping", false) ?: false
-                                    fromUser = "" // encrypted = from other party
-                                } else {
-                                    fromUser = payload.optString("fromUserId")
-                                    isTyping = payload.optBoolean("isTyping", false)
-                                }
-                                if (fromUser != userId && isTyping) {
-                                    isRemoteTyping = true
-                                    scope.launch {
-                                        delay(4000)
+                                    val isTyping = meta?.optBoolean("isTyping", false) ?: false
+                                    if (isTyping) {
+                                        isRemoteTyping = true
+                                        scope.launch {
+                                            delay(4000)
+                                            isRemoteTyping = false
+                                        }
+                                    } else {
                                         isRemoteTyping = false
                                     }
-                                } else if (!isTyping) {
-                                    isRemoteTyping = false
                                 }
                             }
                             "presence" -> {
@@ -1109,16 +1178,13 @@ fun ConversationScreen(conversationId: String, conversationName: String, recipie
                                     val meta = decryptMeta(context, conversationId, enc)
                                     val status = meta?.optString("status") ?: ""
                                     if (status.isNotEmpty()) remoteOnlineStatus = status
-                                } else {
-                                    val fromUser = payload.optString("fromUserId")
-                                    val status = payload.optString("status")
-                                    if (fromUser != userId) remoteOnlineStatus = status
                                 }
                             }
                             "reaction" -> {
                                 val payload = data.getJSONObject("payload")
                                 val msgId = payload.optString("message_id")
-                                val emoji = payload.optString("emoji")
+                                val encReaction = payload.optString("encrypted_reaction", "")
+                                val emoji = if (encReaction.isNotEmpty()) decryptProfileField(context, encReaction) else ""
                                 messages = messages.map {
                                     if (it.id == msgId) {
                                         val cur = it.reactions ?: ""
@@ -1134,10 +1200,18 @@ fun ConversationScreen(conversationId: String, conversationName: String, recipie
                                 val newRh = payload.optString("ratchet_header", "")
                                 messages = messages.map {
                                     if (it.id == msgId) {
-                                        val displayText = if (newRh.isNotEmpty() && newIv.isNotEmpty()) {
-                                            try { SessionManager.decryptMessage(context, conversationId, newCt, newIv, newRh) }
-                                            catch (_: Exception) { newCt }
-                                        } else newCt
+                                        val displayText = if (newRh.isNotEmpty()) {
+                                            if (GroupSessionManager.isGroupEncrypted(newRh)) {
+                                                try {
+                                                    val rhJson = JSONObject(newRh)
+                                                    val senderId = rhJson.optString("senderId", "")
+                                                    String(GroupSessionManager.getInstance(context).decrypt(conversationId, senderId, newCt, newRh))
+                                                } catch (_: Exception) { "[Unable to decrypt]" }
+                                            } else if (newIv.isNotEmpty()) {
+                                                try { SessionManager.decryptMessage(context, conversationId, newCt, newIv, newRh) }
+                                                catch (_: Exception) { "[Unable to decrypt]" }
+                                            } else "[Unable to decrypt]"
+                                        } else "[Unable to decrypt]"
                                         it.copy(ciphertext = "$displayText (edited)")
                                     } else it
                                 }
@@ -1195,7 +1269,7 @@ fun ConversationScreen(conversationId: String, conversationName: String, recipie
             }
         }
 
-        connectWs()
+        scope.launch { connectWs() }
         // Flush any queued offline messages
         scope.launch {
             val flushed = flushMessageQueue(context)
@@ -1274,11 +1348,12 @@ fun ConversationScreen(conversationId: String, conversationName: String, recipie
     }
 
     Scaffold(
+        snackbarHost = { SnackbarHost(convSnackbarHostState) },
         topBar = {
             TopAppBar(
                 title = {
                     Column {
-                        Text(conversationName, fontWeight = FontWeight.Bold, fontSize = 17.sp)
+                        Text(conversationName, style = MaterialTheme.typography.titleMedium)
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             if (remoteOnlineStatus.isNotEmpty()) {
                                 Surface(
@@ -1289,12 +1364,12 @@ fun ConversationScreen(conversationId: String, conversationName: String, recipie
                                 Spacer(Modifier.width(4.dp))
                                 Text(
                                     if (remoteOnlineStatus == "online") "Online" else "Offline",
-                                    fontSize = 11.sp,
-                                    color = if (remoteOnlineStatus == "online") Color.Green else RocColors.TextSecondary,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = if (remoteOnlineStatus == "online") Color.Green else MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                                 Spacer(Modifier.width(6.dp))
                             }
-                            Text("🔒 E2EE", fontSize = 11.sp, color = RocColors.Turquoise)
+                            Text("🔒 E2EE", style = MaterialTheme.typography.labelSmall, color = RocColors.Turquoise)
                         }
                     }
                 },
@@ -1374,7 +1449,7 @@ fun ConversationScreen(conversationId: String, conversationName: String, recipie
     ) { padding ->
         val activeThemeBg = chatThemes.firstOrNull { it.key == chatTheme }?.bgColor ?: Color.Transparent
         Column(
-            modifier = Modifier.fillMaxSize().padding(padding)
+            modifier = Modifier.fillMaxSize().padding(padding).imePadding()
                 .then(if (chatTheme != "default") Modifier.background(activeThemeBg) else Modifier),
         ) {
             // Encryption banner
@@ -1388,7 +1463,7 @@ fun ConversationScreen(conversationId: String, conversationName: String, recipie
             ) {
                 Icon(Icons.Default.Lock, contentDescription = null, modifier = Modifier.size(14.dp), tint = RocColors.Turquoise)
                 Spacer(Modifier.width(6.dp))
-                Text("Messages are end-to-end encrypted", fontSize = 12.sp, color = RocColors.Turquoise)
+                Text("Messages are end-to-end encrypted", style = MaterialTheme.typography.labelSmall, color = RocColors.Turquoise)
             }
 
             // Search bar
@@ -1415,14 +1490,47 @@ fun ConversationScreen(conversationId: String, conversationName: String, recipie
                 contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
-                items(messages.filter { msg ->
+                val filteredMessages = messages.filter { msg ->
                     val ea = msg.expiresAt
                     val notExpired = ea == null || ea > (System.currentTimeMillis() / 1000)
                     if (searchText.isNotEmpty()) {
                         notExpired && msg.ciphertext.contains(searchText, ignoreCase = true)
                     } else notExpired
-                }) { msg ->
-                    val isMine = msg.senderId == userId
+                }
+
+                // Date separators + message grouping
+                val groupedItems = buildMessageListItems(filteredMessages, userId)
+
+                groupedItems.forEach { listItem ->
+                    when (listItem) {
+                        is MessageListItem.DateHeader -> {
+                            item(key = "date-${listItem.label}") {
+                                Box(
+                                    modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    Text(
+                                        text = listItem.label,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier
+                                            .background(
+                                                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
+                                                shape = RoundedCornerShape(12.dp),
+                                            )
+                                            .padding(horizontal = 12.dp, vertical = 4.dp),
+                                    )
+                                }
+                            }
+                        }
+                        is MessageListItem.Msg -> {
+                            val msg = listItem.message
+                            val groupPosition = listItem.groupPosition
+                            val showTimestamp = listItem.showTimestamp
+                            val spacing = if (listItem.tightSpacing) 1.dp else 4.dp
+                            item(key = msg.id) {
+                                Spacer(Modifier.height(spacing))
+                                val isMine = msg.senderId == userId
                     if (msg.messageType == "screenshot_alert") {
                         val senderName = if (msg.senderId == userId) "You"
                             else groupMembers.firstOrNull { it.optString("user_id") == msg.senderId }
@@ -1438,13 +1546,15 @@ fun ConversationScreen(conversationId: String, conversationName: String, recipie
                                     .padding(horizontal = 12.dp, vertical = 4.dp),
                             )
                         }
-                        return@items
+                        return@item
                     }
                     MessageBubble(
                         msg = msg,
                         isMine = isMine,
+                        groupPosition = groupPosition,
+                        showTimestamp = showTimestamp,
                         onReact = { emoji ->
-                            scope.launch { try { APIClient.post("/messages/${msg.id}/react", JSONObject().put("encrypted_reaction", emoji)) } catch (_: Exception) {} }
+                            scope.launch { try { APIClient.post("/messages/${msg.id}/react", JSONObject().put("encrypted_reaction", encryptProfileField(context, emoji))) } catch (_: Exception) {} }
                         },
                         onEdit = { editingMessageId = msg.id; inputText = msg.ciphertext },
                         onDelete = {
@@ -1461,7 +1571,10 @@ fun ConversationScreen(conversationId: String, conversationName: String, recipie
                             scope.launch { try { APIClient.post("/contacts/block", JSONObject().put("userId", msg.senderId).put("blocked", true)) } catch (_: Exception) {} }
                         },
                     )
-                }
+                            } // item
+                        } // Msg
+                    } // when
+                } // forEach
             }
 
             // Typing indicator
@@ -1469,12 +1582,10 @@ fun ConversationScreen(conversationId: String, conversationName: String, recipie
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 2.dp),
+                        .padding(horizontal = 16.dp, vertical = 4.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text("typing", fontSize = 12.sp, color = RocColors.TextSecondary)
-                    Spacer(Modifier.width(4.dp))
-                    Text("•••", fontSize = 12.sp, color = RocColors.TextSecondary)
+                    BouncingDotsIndicator()
                 }
             }
 
@@ -1497,12 +1608,12 @@ fun ConversationScreen(conversationId: String, conversationName: String, recipie
                     Column(Modifier.weight(1f)) {
                         Text(
                             if (reply.senderId == userId) "Replying to yourself" else "Replying to message",
-                            fontSize = 10.sp,
+                            style = MaterialTheme.typography.labelSmall,
                             color = RocColors.RocGold,
                         )
                         Text(
                             if (reply.ciphertext.isBlank()) "🔒 Encrypted" else reply.ciphertext,
-                            fontSize = 12.sp,
+                            style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
@@ -1640,7 +1751,21 @@ fun ConversationScreen(conversationId: String, conversationName: String, recipie
                                     if (editId != null) {
                                         editingMessageId = null
                                         try {
-                                            APIClient.post("/messages/$editId", JSONObject().put("encrypted", text), method = "PATCH")
+                                            val encPayload = JSONObject()
+                                            if (recipientUserId.isNotEmpty()) {
+                                                val envelope = SessionManager.encryptMessage(context, conversationId, recipientUserId, text)
+                                                encPayload.put("ciphertext", envelope.ciphertext)
+                                                encPayload.put("iv", envelope.iv)
+                                                encPayload.put("ratchet_header", envelope.ratchetHeader)
+                                                encPayload.put("message_type", "text")
+                                            } else {
+                                                val groupEnvelope = GroupSessionManager.getInstance(context).encrypt(conversationId, text.toByteArray(), userId)
+                                                encPayload.put("ciphertext", groupEnvelope.ciphertext)
+                                                encPayload.put("iv", "")
+                                                encPayload.put("ratchet_header", groupEnvelope.ratchetHeader)
+                                                encPayload.put("message_type", "text")
+                                            }
+                                            APIClient.post("/messages/$editId", JSONObject().put("encrypted", encPayload.toString()), method = "PATCH")
                                             messages = messages.map { if (it.id == editId) it.copy(ciphertext = text) else it }
                                         } catch (_: Exception) {}
                                         isSending = false
@@ -1651,7 +1776,8 @@ fun ConversationScreen(conversationId: String, conversationName: String, recipie
                                             val envelope = SessionManager.encryptMessage(context, conversationId, recipientUserId, text)
                                             APIClient.sendMessage(conversationId, envelope.ciphertext, envelope.iv, envelope.ratchetHeader, "text", disappearTimer, replyTo = replyToId)
                                         } else {
-                                            APIClient.sendMessage(conversationId, text, "", "", "text", disappearTimer, replyTo = replyToId)
+                                            val groupEnvelope = GroupSessionManager.getInstance(context).encrypt(conversationId, text.toByteArray(), userId)
+                                            APIClient.sendMessage(conversationId, groupEnvelope.ciphertext, "", groupEnvelope.ratchetHeader, "text", disappearTimer, replyTo = replyToId)
                                         }
                                         messages = messages + APIClient.ChatMessage(
                                             id = "local-${System.currentTimeMillis()}",
@@ -2260,13 +2386,17 @@ fun ConversationScreen(conversationId: String, conversationName: String, recipie
                                         scope.launch {
                                             try {
                                                 val fwdMsg = forwardingMessage ?: return@launch
-                                                val body = JSONObject().apply {
-                                                    put("ciphertext", fwdMsg.ciphertext)
-                                                    put("iv", "")
-                                                    put("ratchet_header", "")
-                                                    put("message_type", fwdMsg.messageType)
+                                                val plaintext = "↪ Forwarded: ${fwdMsg.ciphertext}"
+                                                val isGroup = conv.type == "group"
+                                                val recipientId = conv.members.firstOrNull { it.userId != userId }?.userId ?: ""
+
+                                                if (!isGroup && recipientId.isNotEmpty()) {
+                                                    val envelope = SessionManager.encryptMessage(context, conv.id, recipientId, plaintext)
+                                                    APIClient.sendMessage(conv.id, envelope.ciphertext, envelope.iv, envelope.ratchetHeader, fwdMsg.messageType)
+                                                } else if (isGroup) {
+                                                    val groupEnvelope = GroupSessionManager.getInstance(context).encrypt(conv.id, plaintext.toByteArray(), userId)
+                                                    APIClient.sendMessage(conv.id, groupEnvelope.ciphertext, "", groupEnvelope.ratchetHeader, fwdMsg.messageType)
                                                 }
-                                                APIClient.post("/messages/send?conversation_id=${conv.id}", body)
                                             } catch (_: Exception) {}
                                             showForwardDialog = false
                                             forwardingMessage = null
@@ -2291,6 +2421,8 @@ fun ConversationScreen(conversationId: String, conversationName: String, recipie
 private fun MessageBubble(
     msg: APIClient.ChatMessage,
     isMine: Boolean,
+    groupPosition: GroupPosition = GroupPosition.SOLO,
+    showTimestamp: Boolean = true,
     onReact: (String) -> Unit = {},
     onEdit: () -> Unit = {},
     onDelete: () -> Unit = {},
@@ -2357,12 +2489,34 @@ private fun MessageBubble(
             },
         horizontalArrangement = if (isMine) Arrangement.End else Arrangement.Start,
     ) {
+        val cornerFull = 18.dp
+        val cornerSmall = 4.dp
+        val bubbleShape = when (groupPosition) {
+            GroupPosition.SOLO -> RoundedCornerShape(
+                topStart = cornerFull, topEnd = cornerFull,
+                bottomStart = if (isMine) cornerFull else cornerSmall,
+                bottomEnd = if (isMine) cornerSmall else cornerFull,
+            )
+            GroupPosition.FIRST -> RoundedCornerShape(
+                topStart = cornerFull, topEnd = cornerFull,
+                bottomStart = if (isMine) cornerFull else cornerSmall,
+                bottomEnd = if (isMine) cornerSmall else cornerFull,
+            )
+            GroupPosition.MIDDLE -> RoundedCornerShape(
+                topStart = if (isMine) cornerFull else cornerSmall,
+                topEnd = if (isMine) cornerSmall else cornerFull,
+                bottomStart = if (isMine) cornerFull else cornerSmall,
+                bottomEnd = if (isMine) cornerSmall else cornerFull,
+            )
+            GroupPosition.LAST -> RoundedCornerShape(
+                topStart = if (isMine) cornerFull else cornerSmall,
+                topEnd = if (isMine) cornerSmall else cornerFull,
+                bottomStart = if (isMine) cornerFull else cornerSmall,
+                bottomEnd = if (isMine) cornerSmall else cornerFull,
+            )
+        }
         Surface(
-            shape = RoundedCornerShape(
-                topStart = 18.dp, topEnd = 18.dp,
-                bottomStart = if (isMine) 18.dp else 4.dp,
-                bottomEnd = if (isMine) 4.dp else 18.dp,
-            ),
+            shape = bubbleShape,
             color = if (isMine) RocColors.RocGold.copy(alpha = 0.12f)
                     else MaterialTheme.colorScheme.surface,
             shadowElevation = 1.dp,
@@ -2376,9 +2530,9 @@ private fun MessageBubble(
                 if (isViewOnce) {
                     if (alreadyViewed || viewOnceOpened) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.Visibility, contentDescription = null, modifier = Modifier.size(16.dp), tint = RocColors.TextSecondary)
+                            Icon(Icons.Default.Visibility, contentDescription = null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
                             Spacer(Modifier.width(6.dp))
-                            Text("Opened", fontSize = 14.sp, color = RocColors.TextSecondary)
+                            Text("Opened", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     } else {
                         Row(
@@ -2420,8 +2574,8 @@ private fun MessageBubble(
                             Icon(Icons.Default.RemoveRedEye, contentDescription = null, modifier = Modifier.size(24.dp), tint = RocColors.RocGold)
                             Spacer(Modifier.width(8.dp))
                             Column {
-                                Text("View once photo", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
-                                Text("Tap to open", fontSize = 12.sp, color = RocColors.TextSecondary)
+                                Text("View once photo", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+                                Text("Tap to open", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                         }
                     }
@@ -2430,7 +2584,7 @@ private fun MessageBubble(
                 } else {
                     Text(
                         text = msg.ciphertext.ifBlank { "🔒 Encrypted" },
-                        fontSize = 15.sp,
+                        style = MaterialTheme.typography.bodyLarge,
                         color = MaterialTheme.colorScheme.onSurface,
                     )
                     // Link preview
@@ -2445,17 +2599,19 @@ private fun MessageBubble(
                 ) {
                     Text("🔒", fontSize = 8.sp)
                     Spacer(Modifier.width(4.dp))
+                    if (showTimestamp) {
                     Text(
                         formatRelativeTime(msg.createdAt),
-                        fontSize = 11.sp,
-                        color = RocColors.TextSecondary,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                    }
                     if (isMine) {
                         Spacer(Modifier.width(4.dp))
                         when (msg.status) {
-                            "read" -> Text("✓✓", fontSize = 11.sp, color = RocColors.Turquoise)
-                            "delivered" -> Text("✓✓", fontSize = 11.sp, color = RocColors.TextSecondary)
-                            else -> Text("✓", fontSize = 11.sp, color = RocColors.TextSecondary)
+                            "read" -> Text("✓✓", style = MaterialTheme.typography.labelSmall, color = RocColors.Turquoise)
+                            "delivered" -> Text("✓✓", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            else -> Text("✓", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     }
                 }
@@ -2638,6 +2794,9 @@ fun SettingsTab(onLogout: () -> Unit) {
     var showDeleteConfirm by remember { mutableStateOf(false) }
     var identityKeyFingerprint by remember { mutableStateOf("") }
     var defaultDisappearTimer by remember { mutableIntStateOf(0) }
+    var lastSeenVisibility by remember { mutableStateOf("everyone") }
+    var photoVisibility by remember { mutableStateOf("everyone") }
+    var screenshotDetect by remember { mutableStateOf(true) }
     var showRecoveryPhrase by remember { mutableStateOf(false) }
     var recoveryPhrase by remember { mutableStateOf("") }
 
@@ -2656,20 +2815,6 @@ fun SettingsTab(onLogout: () -> Unit) {
     var showDonationSheet by remember { mutableStateOf(false) }
     var donorTier by remember { mutableStateOf("") }
     var donorSince by remember { mutableStateOf("") }
-
-    // Business/Org
-    var showBusinessSheet by remember { mutableStateOf(false) }
-    var organizations by remember { mutableStateOf<List<JSONObject>>(emptyList()) }
-    var newOrgName by remember { mutableStateOf("") }
-    var selectedOrg by remember { mutableStateOf<JSONObject?>(null) }
-    var showOrgDetail by remember { mutableStateOf(false) }
-    var orgMembers by remember { mutableStateOf<List<JSONObject>>(emptyList()) }
-    var addMemberEmail by remember { mutableStateOf("") }
-    var retentionDays by remember { mutableStateOf(0) }
-    var ssoEnabled by remember { mutableStateOf(false) }
-    var brandLogoUrl by remember { mutableStateOf("") }
-    var brandAccentColor by remember { mutableStateOf("#D4AF37") }
-    var brandSaving by remember { mutableStateOf(false) }
 
     // Encrypted backup
     var showBackupSheet by remember { mutableStateOf(false) }
@@ -2775,8 +2920,24 @@ fun SettingsTab(onLogout: () -> Unit) {
                     val baos = java.io.ByteArrayOutputStream()
                     scaled.compress(android.graphics.Bitmap.CompressFormat.JPEG, 85, baos)
                     val jpegBytes = baos.toByteArray()
-                    // Upload
-                    val resp = APIClient.uploadAvatar(jpegBytes)
+                    // E2E encrypt the avatar before upload
+                    val vkB64 = SecureStorage.get(context, "rocchat_vault_key")
+                    val uploadBytes: ByteArray
+                    val uploadContentType: String
+                    if (vkB64 != null) {
+                        val vk = android.util.Base64.decode(vkB64, android.util.Base64.NO_WRAP)
+                        val avatarKeyBytes = hkdfProfileKey(vk, "rocchat:avatar:encrypt")
+                        val iv = ByteArray(12).also { java.security.SecureRandom().nextBytes(it) }
+                        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+                        cipher.init(Cipher.ENCRYPT_MODE, SecretKeySpec(avatarKeyBytes, "AES"), GCMParameterSpec(128, iv))
+                        val ct = cipher.doFinal(jpegBytes)
+                        uploadBytes = iv + ct
+                        uploadContentType = "application/octet-stream"
+                    } else {
+                        uploadBytes = jpegBytes
+                        uploadContentType = "image/jpeg"
+                    }
+                    val resp = APIClient.uploadAvatar(uploadBytes, uploadContentType)
                     avatarUrl = resp.optString("avatar_url", null)
                 } catch (_: Exception) {
                 } finally {
@@ -2798,6 +2959,9 @@ fun SettingsTab(onLogout: () -> Unit) {
             if (me.has("show_typing_indicator")) typingIndicators = me.optInt("show_typing_indicator", 1) != 0
             if (me.has("show_online_to")) onlineVisibility = me.optString("show_online_to", "everyone")
             if (me.has("who_can_add")) whoCanAdd = me.optString("who_can_add", "everyone")
+            if (me.has("show_last_seen_to")) lastSeenVisibility = me.optString("show_last_seen_to", "everyone")
+            if (me.has("show_photo_to")) photoVisibility = me.optString("show_photo_to", "everyone")
+            if (me.has("screenshot_detection")) screenshotDetect = me.optInt("screenshot_detection", 1) != 0
             ghostMode = !readReceipts && !typingIndicators && onlineVisibility == "nobody"
             if (me.has("default_disappear_timer")) defaultDisappearTimer = me.optInt("default_disappear_timer", 0)
             // Load identity key fingerprint
@@ -3297,7 +3461,6 @@ fun SettingsTab(onLogout: () -> Unit) {
         }
 
         // Last seen visible to picker
-        var lastSeenVisibility by remember { mutableStateOf("everyone") }
         var lastSeenExpanded by remember { mutableStateOf(false) }
         Box(modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
             Row(modifier = Modifier.fillMaxWidth().clickable { lastSeenExpanded = true }, verticalAlignment = Alignment.CenterVertically) {
@@ -3320,7 +3483,6 @@ fun SettingsTab(onLogout: () -> Unit) {
         }
 
         // Profile photo visible to picker
-        var photoVisibility by remember { mutableStateOf("everyone") }
         var photoVisExpanded by remember { mutableStateOf(false) }
         Box(modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
             Row(modifier = Modifier.fillMaxWidth().clickable { photoVisExpanded = true }, verticalAlignment = Alignment.CenterVertically) {
@@ -3342,8 +3504,28 @@ fun SettingsTab(onLogout: () -> Unit) {
             }
         }
 
+        // Link preview mode
+        val prefs = context.getSharedPreferences("rocchat", Context.MODE_PRIVATE)
+        var linkPreviewMode by remember { mutableStateOf(prefs.getString("link_preview_mode", "server") ?: "server") }
+        Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text("Link previews", fontSize = 14.sp)
+                Text("Server hides IP; Client-side hides URLs from server", fontSize = 12.sp, color = RocColors.TextSecondary)
+            }
+            var expanded by remember { mutableStateOf(false) }
+            Box {
+                TextButton(onClick = { expanded = true }) {
+                    Text(when (linkPreviewMode) { "client" -> "Client"; "disabled" -> "Off"; else -> "Server" })
+                }
+                DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                    DropdownMenuItem(text = { Text("Server (default)") }, onClick = { linkPreviewMode = "server"; prefs.edit().putString("link_preview_mode", "server").apply(); expanded = false })
+                    DropdownMenuItem(text = { Text("Client-side (private)") }, onClick = { linkPreviewMode = "client"; prefs.edit().putString("link_preview_mode", "client").apply(); expanded = false })
+                    DropdownMenuItem(text = { Text("Disabled") }, onClick = { linkPreviewMode = "disabled"; prefs.edit().putString("link_preview_mode", "disabled").apply(); expanded = false })
+                }
+            }
+        }
+
         // Screenshot detection toggle
-        var screenshotDetect by remember { mutableStateOf(true) }
         Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(modifier = Modifier.weight(1f)) {
                 Text("Screenshot detection", fontSize = 14.sp)
@@ -3405,14 +3587,59 @@ fun SettingsTab(onLogout: () -> Unit) {
             )
         }
         if (quietEnabled) {
+            var showStartPicker by remember { mutableStateOf(false) }
+            var showEndPicker by remember { mutableStateOf(false) }
             Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text("From: ", fontSize = 14.sp, color = RocColors.TextSecondary)
-                Text(String.format("%02d:%02d", quietStartHour, quietStartMin), fontWeight = FontWeight.SemiBold)
-                Spacer(Modifier.width(24.dp))
-                Text("To: ", fontSize = 14.sp, color = RocColors.TextSecondary)
-                Text(String.format("%02d:%02d", quietEndHour, quietEndMin), fontWeight = FontWeight.SemiBold)
+                Text("From: ", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                TextButton(onClick = { showStartPicker = true }) {
+                    Text(String.format("%02d:%02d", quietStartHour, quietStartMin), fontWeight = FontWeight.SemiBold)
+                }
+                Spacer(Modifier.width(16.dp))
+                Text("To: ", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                TextButton(onClick = { showEndPicker = true }) {
+                    Text(String.format("%02d:%02d", quietEndHour, quietEndMin), fontWeight = FontWeight.SemiBold)
+                }
             }
-            Text("Configure exact times in RocChat Web settings", modifier = Modifier.padding(horizontal = 16.dp), fontSize = 11.sp, color = RocColors.TextSecondary)
+            if (showStartPicker) {
+                AlertDialog(
+                    onDismissRequest = { showStartPicker = false },
+                    title = { Text("Quiet hours start") },
+                    text = {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center, modifier = Modifier.fillMaxWidth()) {
+                            NumberPicker(value = quietStartHour, range = 0..23, onValueChange = { quietStartHour = it })
+                            Text(" : ", fontWeight = FontWeight.Bold, fontSize = 20.sp)
+                            NumberPicker(value = quietStartMin, range = 0..59, onValueChange = { quietStartMin = it })
+                        }
+                    },
+                    confirmButton = {
+                        TextButton(onClick = {
+                            showStartPicker = false
+                            scope.launch { try { APIClient.post("/features/quiet-hours", org.json.JSONObject().apply { put("quiet_start", String.format("%02d:%02d", quietStartHour, quietStartMin)); put("quiet_end", String.format("%02d:%02d", quietEndHour, quietEndMin)) }, "PUT") } catch (_: Exception) {} }
+                        }) { Text("OK") }
+                    },
+                    dismissButton = { TextButton(onClick = { showStartPicker = false }) { Text("Cancel") } }
+                )
+            }
+            if (showEndPicker) {
+                AlertDialog(
+                    onDismissRequest = { showEndPicker = false },
+                    title = { Text("Quiet hours end") },
+                    text = {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center, modifier = Modifier.fillMaxWidth()) {
+                            NumberPicker(value = quietEndHour, range = 0..23, onValueChange = { quietEndHour = it })
+                            Text(" : ", fontWeight = FontWeight.Bold, fontSize = 20.sp)
+                            NumberPicker(value = quietEndMin, range = 0..59, onValueChange = { quietEndMin = it })
+                        }
+                    },
+                    confirmButton = {
+                        TextButton(onClick = {
+                            showEndPicker = false
+                            scope.launch { try { APIClient.post("/features/quiet-hours", org.json.JSONObject().apply { put("quiet_start", String.format("%02d:%02d", quietStartHour, quietStartMin)); put("quiet_end", String.format("%02d:%02d", quietEndHour, quietEndMin)) }, "PUT") } catch (_: Exception) {} }
+                        }) { Text("OK") }
+                    },
+                    dismissButton = { TextButton(onClick = { showEndPicker = false }) { Text("Cancel") } }
+                )
+            }
         }
 
         // Keyword Alerts
@@ -3638,17 +3865,6 @@ fun SettingsTab(onLogout: () -> Unit) {
                 Text("${donorTier.replaceFirstChar { it.uppercase() }} Supporter", color = RocColors.RocGold, fontWeight = FontWeight.SemiBold)
             }
         }
-
-        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-
-        // Business
-        Text("Business", modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp), fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = RocColors.RocGold)
-        Row(modifier = Modifier.fillMaxWidth().clickable { showBusinessSheet = true; scope.launch { try { val data = APIClient.getArray("/business/org"); organizations = (0 until data.length()).map { data.getJSONObject(it) } } catch (_: Exception) {} } }.padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-            Icon(Icons.Default.Business, contentDescription = null, tint = RocColors.TextSecondary, modifier = Modifier.size(20.dp))
-            Spacer(Modifier.width(12.dp))
-            Text("Organization Management")
-        }
-        Text("\$3.99/user/month — RBAC, SSO, compliance, remote wipe", modifier = Modifier.padding(horizontal = 16.dp), fontSize = 12.sp, color = RocColors.TextSecondary)
 
         HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
 
@@ -4037,276 +4253,6 @@ fun SettingsTab(onLogout: () -> Unit) {
             )
         }
 
-        // Business/Org dialog
-        if (showBusinessSheet) {
-            AlertDialog(
-                onDismissRequest = { showBusinessSheet = false },
-                title = { Text("Organizations") },
-                text = {
-                    Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
-                        OutlinedTextField(value = newOrgName, onValueChange = { newOrgName = it }, label = { Text("Organization name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                        Spacer(Modifier.height(8.dp))
-                        Button(onClick = {
-                            if (newOrgName.trim().isNotEmpty()) {
-                                scope.launch {
-                                    try { APIClient.post("/business/org", JSONObject().put("name", newOrgName.trim())); newOrgName = "" } catch (_: Exception) {}
-                                    try { val data = APIClient.getArray("/business/org"); organizations = (0 until data.length()).map { data.getJSONObject(it) } } catch (_: Exception) {}
-                                }
-                            }
-                        }, modifier = Modifier.fillMaxWidth()) { Text("Create") }
-                        Spacer(Modifier.height(12.dp))
-                        if (organizations.isEmpty()) {
-                            Text("No organizations yet", color = RocColors.TextSecondary, fontSize = 12.sp)
-                        }
-                        organizations.forEach { org ->
-                            val name = org.optString("name", "Unnamed")
-                            val memberCount = org.optInt("member_count", 0)
-                            Row(modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp).clickable {
-                                selectedOrg = org
-                                showOrgDetail = true
-                                showBusinessSheet = false
-                                scope.launch {
-                                    try {
-                                        val detail = APIClient.get("/business/org/${org.optString("id")}")
-                                        val members = detail.optJSONArray("members")
-                                        orgMembers = if (members != null) (0 until members.length()).map { members.getJSONObject(it) } else emptyList()
-                                        retentionDays = detail.optInt("retention_days", 0)
-                                        ssoEnabled = detail.optBoolean("sso_enabled", false)
-                                    } catch (_: Exception) {}
-                                }
-                            }, verticalAlignment = Alignment.CenterVertically) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(name, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
-                                    Text("$memberCount members", fontSize = 12.sp, color = RocColors.TextSecondary)
-                                }
-                                Icon(Icons.Default.ChevronRight, contentDescription = null, tint = RocColors.TextSecondary)
-                            }
-                            HorizontalDivider()
-                        }
-                        Spacer(Modifier.height(8.dp))
-                        Text("\$3.99/user/month — RBAC, SSO, compliance export, retention, remote wipe.", fontSize = 11.sp, color = RocColors.TextSecondary)
-                    }
-                },
-                confirmButton = {},
-                dismissButton = { TextButton(onClick = { showBusinessSheet = false }) { Text("Done") } },
-            )
-        }
-
-        // Org Detail dialog (member management, compliance, retention, SSO, remote wipe)
-        if (showOrgDetail && selectedOrg != null) {
-            val orgId = selectedOrg!!.optString("id")
-            val orgName = selectedOrg!!.optString("name", "Organization")
-            AlertDialog(
-                onDismissRequest = { showOrgDetail = false },
-                title = { Text(orgName) },
-                text = {
-                    Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
-                        // Members section
-                        Text("Members", fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                        Spacer(Modifier.height(4.dp))
-                        if (orgMembers.isEmpty()) {
-                            Text("No members", color = RocColors.TextSecondary, fontSize = 12.sp)
-                        }
-                        orgMembers.forEach { member ->
-                            val mName = member.optString("display_name", member.optString("email", "Unknown"))
-                            val mRole = member.optString("role", "member")
-                            val mId = member.optString("user_id", "")
-                            Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(mName, fontSize = 13.sp)
-                                    Text(mRole, fontSize = 11.sp, color = RocColors.TextSecondary)
-                                }
-                                // Role change dropdown
-                                var showRoleMenu by remember { mutableStateOf(false) }
-                                Box {
-                                    IconButton(onClick = { showRoleMenu = true }, modifier = Modifier.size(28.dp)) {
-                                        Icon(Icons.Default.MoreVert, contentDescription = "Change role", modifier = Modifier.size(16.dp))
-                                    }
-                                    DropdownMenu(expanded = showRoleMenu, onDismissRequest = { showRoleMenu = false }) {
-                                        listOf("admin", "moderator", "member").forEach { role ->
-                                            DropdownMenuItem(
-                                                text = { Text(role.replaceFirstChar { it.uppercase() }) },
-                                                onClick = {
-                                                    showRoleMenu = false
-                                                    scope.launch {
-                                                        try {
-                                                            APIClient.post("/business/org/$orgId/members",
-                                                                JSONObject().put("user_id", mId).put("role", role))
-                                                            // Refresh members
-                                                            val detail = APIClient.get("/business/org/$orgId")
-                                                            val members = detail.optJSONArray("members")
-                                                            orgMembers = if (members != null) (0 until members.length()).map { members.getJSONObject(it) } else emptyList()
-                                                        } catch (_: Exception) {}
-                                                    }
-                                                }
-                                            )
-                                        }
-                                    }
-                                }
-                                IconButton(onClick = {
-                                    scope.launch {
-                                        try {
-                                            APIClient.delete("/business/org/$orgId/members/$mId")
-                                            orgMembers = orgMembers.filter { it.optString("user_id") != mId }
-                                        } catch (_: Exception) {}
-                                    }
-                                }, modifier = Modifier.size(28.dp)) {
-                                    Icon(Icons.Default.Delete, contentDescription = "Remove", tint = RocColors.Danger, modifier = Modifier.size(16.dp))
-                                }
-                            }
-                        }
-
-                        Spacer(Modifier.height(8.dp))
-                        HorizontalDivider()
-                        Spacer(Modifier.height(8.dp))
-
-                        // Add member
-                        Text("Add Member", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            OutlinedTextField(value = addMemberEmail, onValueChange = { addMemberEmail = it },
-                                label = { Text("Email") }, singleLine = true, modifier = Modifier.weight(1f),
-                                textStyle = LocalTextStyle.current.copy(fontSize = 13.sp))
-                            Spacer(Modifier.width(8.dp))
-                            Button(onClick = {
-                                if (addMemberEmail.isNotBlank()) {
-                                    scope.launch {
-                                        try {
-                                            APIClient.post("/business/org/$orgId/members",
-                                                JSONObject().put("email", addMemberEmail.trim()))
-                                            addMemberEmail = ""
-                                            val detail = APIClient.get("/business/org/$orgId")
-                                            val members = detail.optJSONArray("members")
-                                            orgMembers = if (members != null) (0 until members.length()).map { members.getJSONObject(it) } else emptyList()
-                                        } catch (_: Exception) {}
-                                    }
-                                }
-                            }, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)) { Text("Add", fontSize = 12.sp) }
-                        }
-
-                        Spacer(Modifier.height(12.dp))
-                        HorizontalDivider()
-                        Spacer(Modifier.height(8.dp))
-
-                        // Retention policy
-                        Text("Retention Policy", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(if (retentionDays == 0) "Disabled" else "$retentionDays days", fontSize = 13.sp, modifier = Modifier.weight(1f))
-                            listOf(0, 30, 90, 365).forEach { days ->
-                                FilterChip(
-                                    selected = retentionDays == days,
-                                    onClick = {
-                                        retentionDays = days
-                                        scope.launch {
-                                            try { APIClient.post("/business/org/$orgId/retention", JSONObject().put("days", days), method = "PUT") } catch (_: Exception) {}
-                                        }
-                                    },
-                                    label = { Text(if (days == 0) "Off" else "${days}d", fontSize = 11.sp) },
-                                    modifier = Modifier.padding(horizontal = 2.dp),
-                                )
-                            }
-                        }
-
-                        Spacer(Modifier.height(8.dp))
-                        HorizontalDivider()
-                        Spacer(Modifier.height(8.dp))
-
-                        // SSO toggle
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("Single Sign-On (SSO)", fontSize = 13.sp, modifier = Modifier.weight(1f))
-                            Switch(checked = ssoEnabled, onCheckedChange = { enabled ->
-                                ssoEnabled = enabled
-                                scope.launch {
-                                    try {
-                                        if (enabled) APIClient.post("/business/org/$orgId/sso", JSONObject().put("provider", "oidc"), method = "PUT")
-                                        else APIClient.delete("/business/org/$orgId/sso")
-                                    } catch (_: Exception) {}
-                                }
-                            })
-                        }
-
-                        Spacer(Modifier.height(8.dp))
-                        HorizontalDivider()
-                        Spacer(Modifier.height(8.dp))
-
-                        // Compliance export
-                        Button(onClick = {
-                            scope.launch {
-                                try { APIClient.get("/business/org/$orgId/export") } catch (_: Exception) {}
-                            }
-                        }, modifier = Modifier.fillMaxWidth()) {
-                            Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(Modifier.width(6.dp))
-                            Text("Compliance Export", fontSize = 13.sp)
-                        }
-
-                        Spacer(Modifier.height(6.dp))
-
-                        // Remote wipe
-                        Button(onClick = {
-                            scope.launch {
-                                try { APIClient.post("/business/org/$orgId/wipe", JSONObject()) } catch (_: Exception) {}
-                            }
-                        }, modifier = Modifier.fillMaxWidth(),
-                            colors = ButtonDefaults.buttonColors(containerColor = RocColors.Danger)
-                        ) {
-                            Icon(Icons.Default.DeleteForever, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(Modifier.width(6.dp))
-                            Text("Remote Wipe All Devices", fontSize = 13.sp)
-                        }
-
-                        Spacer(Modifier.height(12.dp))
-                        HorizontalDivider()
-                        Spacer(Modifier.height(8.dp))
-
-                        // Custom Branding
-                        Text("Custom Branding", fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                        Spacer(Modifier.height(4.dp))
-                        OutlinedTextField(
-                            value = brandLogoUrl,
-                            onValueChange = { brandLogoUrl = it },
-                            label = { Text("Logo URL (https://...)") },
-                            singleLine = true,
-                            modifier = Modifier.fillMaxWidth(),
-                            textStyle = LocalTextStyle.current.copy(fontSize = 12.sp),
-                        )
-                        Spacer(Modifier.height(4.dp))
-                        OutlinedTextField(
-                            value = brandAccentColor,
-                            onValueChange = { brandAccentColor = it },
-                            label = { Text("Accent Color (hex)") },
-                            singleLine = true,
-                            modifier = Modifier.fillMaxWidth(),
-                            textStyle = LocalTextStyle.current.copy(fontSize = 12.sp),
-                        )
-                        Spacer(Modifier.height(6.dp))
-                        Button(
-                            onClick = {
-                                if (!brandSaving) {
-                                    brandSaving = true
-                                    scope.launch {
-                                        try {
-                                            val body = JSONObject().put("accent_color", brandAccentColor)
-                                            if (brandLogoUrl.isNotBlank()) body.put("logo_url", brandLogoUrl)
-                                            APIClient.post("/business/org/$orgId", body, method = "PATCH")
-                                        } catch (_: Exception) {} finally { brandSaving = false }
-                                    }
-                                }
-                            },
-                            enabled = !brandSaving,
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = ButtonDefaults.buttonColors(containerColor = RocColors.RocGold),
-                        ) {
-                            Text(if (brandSaving) "Saving…" else "Save Branding", fontSize = 13.sp)
-                        }
-                    }
-                },
-                confirmButton = {},
-                dismissButton = {
-                    TextButton(onClick = { showOrgDetail = false; showBusinessSheet = true }) { Text("Back") }
-                },
-            )
-        }
-
         // Encrypted Backup dialog
         if (showBackupSheet) {
             AlertDialog(
@@ -4659,18 +4605,58 @@ private fun LinkPreviewCard(url: String) {
     var imageUrl by remember { mutableStateOf<String?>(null) }
     var loaded by remember { mutableStateOf(false) }
 
+    val context = LocalContext.current
     LaunchedEffect(url) {
+        val mode = context.getSharedPreferences("rocchat", Context.MODE_PRIVATE)
+            .getString("link_preview_mode", "server") ?: "server"
+        if (mode == "disabled") { loaded = true; return@LaunchedEffect }
         try {
-            val encoded = java.net.URLEncoder.encode(url, "UTF-8")
-            val json = APIClient.get("/link-preview?url=$encoded")
-            title = json.optString("title", "").ifBlank { null }
-            description = json.optString("description", "").ifBlank { null }
-            imageUrl = json.optString("image", "").ifBlank { null }
+            if (mode == "client") {
+                val conn = java.net.URL(url).openConnection() as java.net.HttpURLConnection
+                conn.connectTimeout = 5000; conn.readTimeout = 5000
+                conn.setRequestProperty("User-Agent", "RocChat/1.0")
+                val html = conn.inputStream.bufferedReader().use { it.readText() }
+                conn.disconnect()
+                title = Regex("<title>([^<]+)</title>").find(html)?.groupValues?.get(1)
+                description = Regex("""property="og:description"\s+content="([^"]+)"""").find(html)?.groupValues?.get(1)
+                    ?: Regex("""content="([^"]+)"\s+property="og:description"""").find(html)?.groupValues?.get(1)
+                imageUrl = Regex("""property="og:image"\s+content="([^"]+)"""").find(html)?.groupValues?.get(1)
+                    ?: Regex("""content="([^"]+)"\s+property="og:image"""").find(html)?.groupValues?.get(1)
+            } else {
+                val encoded = java.net.URLEncoder.encode(url, "UTF-8")
+                val json = APIClient.get("/link-preview?url=$encoded")
+                title = json.optString("title", "").ifBlank { null }
+                description = json.optString("description", "").ifBlank { null }
+                imageUrl = json.optString("image", "").ifBlank { null }
+            }
             loaded = true
         } catch (_: Exception) { loaded = true }
     }
 
-    if (loaded && (title != null || description != null)) {
+    if (!loaded) {
+        Surface(
+            shape = RoundedCornerShape(8.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
+            modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+        ) {
+            Row(
+                modifier = Modifier.padding(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(16.dp),
+                    strokeWidth = 2.dp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+                )
+                Text(
+                    "Loading preview…",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                )
+            }
+        }
+    } else if (title != null || description != null) {
         Surface(
             shape = RoundedCornerShape(8.dp),
             color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
@@ -4686,10 +4672,129 @@ private fun LinkPreviewCard(url: String) {
                     )
                     Spacer(Modifier.height(6.dp))
                 }
-                title?.let { Text(it, fontWeight = FontWeight.SemiBold, fontSize = 13.sp, maxLines = 2, overflow = TextOverflow.Ellipsis) }
-                description?.let { Text(it, fontSize = 12.sp, color = RocColors.TextSecondary, maxLines = 3, overflow = TextOverflow.Ellipsis) }
-                Text(url.take(40) + if (url.length > 40) "…" else "", fontSize = 11.sp, color = RocColors.Turquoise, maxLines = 1)
+                title?.let { Text(it, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodyMedium, maxLines = 2, overflow = TextOverflow.Ellipsis) }
+                description?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 3, overflow = TextOverflow.Ellipsis) }
+                Text(url.take(40) + if (url.length > 40) "…" else "", style = MaterialTheme.typography.labelSmall, color = RocColors.Turquoise, maxLines = 1)
             }
+        }
+    }
+}
+
+// ── Message grouping + date separators ──
+
+enum class GroupPosition { SOLO, FIRST, MIDDLE, LAST }
+
+private sealed class MessageListItem {
+    data class DateHeader(val label: String) : MessageListItem()
+    data class Msg(
+        val message: APIClient.ChatMessage,
+        val groupPosition: GroupPosition,
+        val showTimestamp: Boolean,
+        val tightSpacing: Boolean,
+    ) : MessageListItem()
+}
+
+private fun parseIsoDate(iso: String): Date? {
+    val formats = listOf(
+        SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US),
+        SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US),
+    )
+    formats.forEach { it.timeZone = TimeZone.getTimeZone("UTC") }
+    return formats.firstNotNullOfOrNull { try { it.parse(iso) } catch (_: Exception) { null } }
+}
+
+private fun buildMessageListItems(messages: List<APIClient.ChatMessage>, userId: String): List<MessageListItem> {
+    if (messages.isEmpty()) return emptyList()
+    val result = mutableListOf<MessageListItem>()
+    val cal = Calendar.getInstance()
+    val todayCal = Calendar.getInstance()
+    val dayFmt = SimpleDateFormat("EEE, MMM d", Locale.getDefault())
+    var lastDateLabel: String? = null
+
+    for (i in messages.indices) {
+        val msg = messages[i]
+        val date = parseIsoDate(msg.createdAt)
+        if (date != null) {
+            cal.time = date
+            val label = when {
+                cal.get(Calendar.YEAR) == todayCal.get(Calendar.YEAR) &&
+                    cal.get(Calendar.DAY_OF_YEAR) == todayCal.get(Calendar.DAY_OF_YEAR) -> "Today"
+                cal.get(Calendar.YEAR) == todayCal.get(Calendar.YEAR) &&
+                    cal.get(Calendar.DAY_OF_YEAR) == todayCal.get(Calendar.DAY_OF_YEAR) - 1 -> "Yesterday"
+                else -> dayFmt.format(date)
+            }
+            if (label != lastDateLabel) {
+                result.add(MessageListItem.DateHeader(label))
+                lastDateLabel = label
+            }
+        }
+
+        val prev = if (i > 0) messages[i - 1] else null
+        val next = if (i < messages.size - 1) messages[i + 1] else null
+
+        val prevDate = prev?.let { parseIsoDate(it.createdAt) }
+        val curDate = date
+        val nextDate = next?.let { parseIsoDate(it.createdAt) }
+
+        val sameSenderAsPrev = prev != null && prev.senderId == msg.senderId &&
+            prevDate != null && curDate != null && (curDate.time - prevDate.time) < 120_000
+        val sameSenderAsNext = next != null && next.senderId == msg.senderId &&
+            nextDate != null && curDate != null && (nextDate.time - curDate.time) < 120_000
+
+        val groupPosition = when {
+            sameSenderAsPrev && sameSenderAsNext -> GroupPosition.MIDDLE
+            sameSenderAsPrev -> GroupPosition.LAST
+            sameSenderAsNext -> GroupPosition.FIRST
+            else -> GroupPosition.SOLO
+        }
+
+        val showTimestamp = groupPosition == GroupPosition.SOLO || groupPosition == GroupPosition.LAST
+        val tightSpacing = sameSenderAsPrev
+
+        result.add(MessageListItem.Msg(msg, groupPosition, showTimestamp, tightSpacing))
+    }
+    return result
+}
+
+// ── Animated typing indicator ──
+
+@Composable
+private fun BouncingDotsIndicator() {
+    val transition = rememberInfiniteTransition(label = "typingDots")
+    val offsets = (0..2).map { index ->
+        transition.animateFloat(
+            initialValue = 0f,
+            targetValue = 0f,
+            animationSpec = infiniteRepeatable(
+                animation = keyframes {
+                    durationMillis = 1200
+                    0f at 0
+                    -6f at 200 + index * 150
+                    0f at 400 + index * 150
+                    0f at 1200
+                },
+                repeatMode = RepeatMode.Restart,
+            ),
+            label = "dot$index",
+        )
+    }
+    Row(
+        modifier = Modifier
+            .background(
+                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
+                shape = RoundedCornerShape(12.dp),
+            )
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        offsets.forEach { anim ->
+            Box(
+                modifier = Modifier
+                    .size(8.dp)
+                    .graphicsLayer { translationY = anim.value }
+                    .background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f), CircleShape),
+            )
         }
     }
 }
@@ -4851,7 +4956,9 @@ private suspend fun uploadAndSendMediaNote(
     cipher.init(javax.crypto.Cipher.ENCRYPT_MODE, keySpec, gcmSpec)
     val encrypted = cipher.doFinal(plainBytes)
 
-    val mediaId = APIClient.uploadMedia(conversationId, encrypted, filename, detectedMime)
+    val encFilename = encryptProfileField(context, filename)
+    val encMime = encryptProfileField(context, detectedMime)
+    val mediaId = APIClient.uploadMedia(conversationId, encrypted, encFilename, encMime)
 
     val msg = org.json.JSONObject().apply {
         put("type", kind)
@@ -4869,6 +4976,9 @@ private suspend fun uploadAndSendMediaNote(
     if (recipientUserId.isNotEmpty()) {
         val envelope = SessionManager.encryptMessage(context, conversationId, recipientUserId, msg)
         APIClient.sendMessage(conversationId, envelope.ciphertext, envelope.iv, envelope.ratchetHeader, kind, 0)
+    } else {
+        val groupEnvelope = GroupSessionManager.getInstance(context).encrypt(conversationId, msg.toByteArray(), userId)
+        APIClient.sendMessage(conversationId, groupEnvelope.ciphertext, "", groupEnvelope.ratchetHeader, kind, 0)
     }
 
     val label = if (kind == "voice_note") "🎙️ Voice note (${duration}s)" else "📹 Video message (${duration}s)"
@@ -5242,6 +5352,19 @@ private fun requestKeyTransferAsNewDevice(
             kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) { onStatus("Key transfer timed out") }
         } catch (_: Exception) {
             kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) { onStatus("Key transfer failed") }
+        }
+    }
+}
+
+@Composable
+private fun NumberPicker(value: Int, range: IntRange, onValueChange: (Int) -> Unit) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        IconButton(onClick = { if (value < range.last) onValueChange(value + 1) else onValueChange(range.first) }) {
+            Icon(Icons.Default.KeyboardArrowUp, contentDescription = "Increase")
+        }
+        Text(String.format("%02d", value), fontSize = 24.sp, fontWeight = FontWeight.Bold)
+        IconButton(onClick = { if (value > range.first) onValueChange(value - 1) else onValueChange(range.last) }) {
+            Icon(Icons.Default.KeyboardArrowDown, contentDescription = "Decrease")
         }
     }
 }

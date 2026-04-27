@@ -15,20 +15,7 @@ import {
   parsePostHeader,
 } from '../crypto/channel-keys.js';
 
-/** Legacy plaintext fallback (pre-E2E channels stored base64-encoded UTF-8). */
-function tryDecodeLegacyPost(b64: string): string {
-  try {
-    const bytes = fromBase64(b64);
-    const text = decode(bytes);
-    // If decode produced replacement chars or control bytes, treat as encrypted
-    if (/[\x00-\x08\x0B\x0C\x0E-\x1F\uFFFD]/.test(text)) return '';
-    return text;
-  } catch {
-    return '';
-  }
-}
-
-/** Render a post body, preferring E2E decryption with fallback to legacy plaintext. */
+/** Render a post body using E2E decryption. */
 async function renderPostBody(
   channelId: string,
   ciphertext: string,
@@ -39,9 +26,8 @@ async function renderPostBody(
   if (meta && meta.cv === 1 && meta.tag) {
     const plain = await decryptPost(channelId, ciphertext, iv, meta.tag, meta.v || 1);
     if (plain !== null) return plain;
-    return ''; // E2E post but no key yet — caller shows placeholder
   }
-  return tryDecodeLegacyPost(ciphertext);
+  return '[Encrypted post — key not yet received]';
 }
 
 interface Channel {
@@ -349,35 +335,26 @@ function showPostDialog(channelId: string, isScheduled: boolean, container: HTML
     const content = (overlay.querySelector('#post-content') as HTMLTextAreaElement).value.trim();
     if (!content) return;
 
-    // E2E: encrypt with the channel symmetric key. Falls back to base64
-    // plaintext if the key isn't available (e.g. legacy channel created
-    // before E2E shipped — admin's first post will still go through).
     let ciphertext: string;
     let iv: string;
     let ratchetHeader: string;
     try {
-      // Make sure we have a channel key (auto-creates self-envelope if missing
-      // and we're an admin). If we still don't have one, fall back to base64.
       let key = await getChannelKey(channelId);
       if (!key) {
-        // We're an admin with no key yet — create one and distribute on next render.
         try { await generateAndUploadChannelKey(channelId); key = await getChannelKey(channelId); }
-        catch { key = null; }
+        catch { /* key stays null */ }
       }
-      if (key) {
-        const enc = await encryptPost(channelId, content);
-        ciphertext = enc.ciphertext;
-        iv = enc.iv;
-        ratchetHeader = JSON.stringify({ cv: 1, v: enc.key_version, tag: enc.tag });
-      } else {
-        ciphertext = toBase64(new TextEncoder().encode(content));
-        iv = '';
-        ratchetHeader = '{}';
+      if (!key) {
+        alert('Cannot post: channel encryption key unavailable.');
+        return;
       }
+      const enc = await encryptPost(channelId, content);
+      ciphertext = enc.ciphertext;
+      iv = enc.iv;
+      ratchetHeader = JSON.stringify({ cv: 1, v: enc.key_version, tag: enc.tag });
     } catch {
-      ciphertext = toBase64(new TextEncoder().encode(content));
-      iv = '';
-      ratchetHeader = '{}';
+      alert('Encryption failed — post not sent.');
+      return;
     }
 
     if (isScheduled) {
@@ -713,11 +690,9 @@ function showCreateChannelDialog(container: HTMLElement) {
     });
 
     if (res.ok) {
-      // Generate the E2E channel key for this new channel and upload self-envelope.
-      // Best-effort — if it fails, posts will fall back to legacy plaintext.
       const channelId = (res.data as { channel_id?: string } | undefined)?.channel_id;
       if (channelId) {
-        try { await generateAndUploadChannelKey(channelId); } catch { /* fallback to legacy */ }
+        try { await generateAndUploadChannelKey(channelId); } catch { /* key gen failed — posts will show as encrypted until key distributed */ }
       }
       overlay.remove();
       renderDiscoverView(container);

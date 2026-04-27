@@ -103,6 +103,12 @@ class AuthViewModel: ObservableObject {
                 UserDefaults.standard.set(result.userId, forKey: "user_id")
                 api.sessionToken = result.sessionToken
                 
+                // Persist vault key for profile/group-meta encryption
+                let vaultKey = try await RocCrypto.deriveVaultKey(passphrase: passphrase, salt: salt)
+                vaultKey.withUnsafeBytes { buf in
+                    SecureStorage.shared.setData(Data(buf), forKey: "rocchat_vault_key")
+                }
+                
                 // Initialize session manager key material
                 SessionManager.shared.loadCachedKeyMaterial()
                 
@@ -165,9 +171,24 @@ class AuthViewModel: ObservableObject {
                 // Encrypt SPK private key with vault key before sending to server
                 let spkPrivateEncrypted = try RocCrypto.aesGcmEncrypt(key: vaultKey, plaintext: signedPreKey.rawRepresentation)
                 
+                // E2E encrypt display name before sending to server
+                let encryptedDisplayName: String
+                do {
+                    let vk = SymmetricKey(data: vaultKey)
+                    let info = Data("rocchat:profile:encrypt".utf8)
+                    let profileKey = HKDF<SHA256>.deriveKey(inputKeyMaterial: vk, salt: Data(), info: info, outputByteCount: 32)
+                    let nonce = AES.GCM.Nonce()
+                    let plainData = Data(displayName.utf8)
+                    let sealed = try AES.GCM.seal(plainData, using: profileKey, nonce: nonce)
+                    let combined = Data(nonce) + sealed.ciphertext + sealed.tag
+                    encryptedDisplayName = combined.base64EncodedString()
+                } catch {
+                    encryptedDisplayName = displayName
+                }
+                
                 let result = try await api.register(
                     username: cleanUsername,
-                    displayName: displayName,
+                    displayName: encryptedDisplayName,
                     authHash: authHash.base64EncodedString(),
                     salt: salt.base64EncodedString(),
                     identityKey: identityKey.publicKey.rawRepresentation.base64EncodedString(),
@@ -181,6 +202,11 @@ class AuthViewModel: ObservableObject {
                 
                 // Store keys locally
                 try RocCrypto.storeKeys(vaultKey: vaultKey, encryptedKeys: encryptedKeys)
+                
+                // Persist vault key for profile/group-meta encryption
+                vaultKey.withUnsafeBytes { buf in
+                    SecureStorage.shared.setData(Data(buf), forKey: "rocchat_vault_key")
+                }
                 
                 // Cache key material for E2E session manager
                 SecureStorage.shared.setData(identityDHKey.publicKey.rawRepresentation, forKey: "rocchat_identity_dh_pub")

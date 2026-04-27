@@ -424,6 +424,7 @@ struct ChannelPostSheet: View {
     @State private var content = ""
     @State private var scheduleDate = Date().addingTimeInterval(3600)
     @State private var isSending = false
+    @State private var errorMessage: String?
 
     var body: some View {
         NavigationStack {
@@ -440,6 +441,11 @@ struct ChannelPostSheet: View {
             }
             .navigationTitle(isScheduled ? "Schedule Post" : "New Post")
             .navigationBarTitleDisplayMode(.inline)
+            .alert("Error", isPresented: .init(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
+                Button("OK") { errorMessage = nil }
+            } message: {
+                Text(errorMessage ?? "")
+            }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
@@ -452,22 +458,19 @@ struct ChannelPostSheet: View {
 
     private func send() async {
         isSending = true
-        // Try the E2E path first: top up envelopes for any new subscribers,
-        // then encrypt with the channel symmetric key and post {ciphertext,
-        // iv, ratchet_header} matching the web wire format. Fall back to
-        // legacy base64-plaintext if no channel key is available so admins
-        // can still post on accounts without identity DH keys yet.
-        var ciphertext = Data(content.utf8).base64EncodedString()
-        var iv = ""
-        var ratchetHeader = "{}"
+        let ciphertext: String
+        let iv: String
+        let ratchetHeader: String
         do {
-            try? await ChannelCrypto.distributeChannelKeyToPending(channelId: channelId)
+            try await ChannelCrypto.distributeChannelKeyToPending(channelId: channelId)
             let enc = try await ChannelCrypto.encryptPost(channelId: channelId, plaintext: content)
             ciphertext = enc.ciphertext
             iv = enc.iv
             ratchetHeader = enc.ratchetHeaderJSON
         } catch {
-            // Legacy plaintext path — already initialized above.
+            isSending = false
+            errorMessage = "Channel key not available — cannot post"
+            return
         }
 
         if isScheduled {

@@ -77,6 +77,19 @@ class APIClient {
         self.refreshToken = SecureStorage.shared.get(forKey: "refresh_token")
     }
 
+    var websocketBaseURL: URL? {
+        guard var components = URLComponents(string: baseURL) else { return nil }
+        components.path = ""
+        components.query = nil
+        components.fragment = nil
+        if components.scheme == "https" {
+            components.scheme = "wss"
+        } else if components.scheme == "http" {
+            components.scheme = "ws"
+        }
+        return components.url
+    }
+
     func webSocketTask(with url: URL) -> URLSessionWebSocketTask {
         session.webSocketTask(with: url)
     }
@@ -284,10 +297,10 @@ class APIClient {
     }
 
     /// Upload encrypted media to R2, returns the blob ID string
-    func uploadMedia(_ encryptedData: Data) async throws -> String {
-        let data = try await uploadBinary("/media/upload", data: encryptedData, headers: [
-            "Content-Type": "application/octet-stream"
-        ])
+    func uploadMedia(_ encryptedData: Data, headers extraHeaders: [String: String] = [:]) async throws -> String {
+        var headers = ["Content-Type": "application/octet-stream"]
+        for (k, v) in extraHeaders { headers[k] = v }
+        let data = try await uploadBinary("/media/upload", data: encryptedData, headers: headers)
         if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
            let blobId = json["blob_id"] as? String {
             return blobId

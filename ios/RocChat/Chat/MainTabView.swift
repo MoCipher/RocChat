@@ -9,15 +9,33 @@ import CommonCrypto
 import LocalAuthentication
 
 // MARK: - Profile & Group Meta Encryption
-// Key: SHA-256(identityKey + ":profile:encrypt") → AES-GCM-256
+// Key: HKDF(vaultKey, "rocchat:profile:encrypt") → AES-GCM-256
+// Vault key is passphrase-derived and NEVER leaves the device, so the
+// server cannot derive this key (unlike the old public-key-based scheme).
 // Format: base64(iv) + "." + base64(ciphertext+tag)
 
-func encryptProfileField(_ value: String) -> String {
-    guard !value.isEmpty else { return value }
+private func profileEncryptionKey() -> SymmetricKey {
+    if let vaultData = SecureStorage.shared.getData(forKey: "rocchat_vault_key"), vaultData.count == 32 {
+        let vk = SymmetricKey(data: vaultData)
+        let info = Data("rocchat:profile:encrypt".utf8)
+        return HKDF<SHA256>.deriveKey(inputKeyMaterial: vk, salt: Data(), info: info, outputByteCount: 32)
+    }
     let idKey = UserDefaults.standard.string(forKey: "identity_pub") ?? "default"
     let raw = (idKey + ":profile:encrypt").data(using: .utf8)!
     let hash = SHA256.hash(data: raw)
-    let key = SymmetricKey(data: hash)
+    return SymmetricKey(data: hash)
+}
+
+private func legacyProfileKey() -> SymmetricKey {
+    let idKey = UserDefaults.standard.string(forKey: "identity_pub") ?? "default"
+    let raw = (idKey + ":profile:encrypt").data(using: .utf8)!
+    let hash = SHA256.hash(data: raw)
+    return SymmetricKey(data: hash)
+}
+
+func encryptProfileField(_ value: String) -> String {
+    guard !value.isEmpty else { return value }
+    let key = profileEncryptionKey()
     let nonce = AES.GCM.Nonce()
     guard let sealed = try? AES.GCM.seal(value.data(using: .utf8)!, using: key, nonce: nonce) else { return value }
     return Data(nonce).base64EncodedString() + "." + (sealed.ciphertext + sealed.tag).base64EncodedString()
@@ -30,17 +48,19 @@ func decryptProfileField(_ value: String) -> String {
           let ivData = Data(base64Encoded: String(parts[0])),
           let ctData = Data(base64Encoded: String(parts[1])),
           ivData.count == 12, ctData.count >= 16 else { return value }
-    let idKey = UserDefaults.standard.string(forKey: "identity_pub") ?? "default"
-    let raw = (idKey + ":profile:encrypt").data(using: .utf8)!
-    let hash = SHA256.hash(data: raw)
-    let key = SymmetricKey(data: hash)
-    guard let nonce = try? AES.GCM.Nonce(data: ivData) else { return value }
+    let nonce = try? AES.GCM.Nonce(data: ivData)
     let ciphertext = ctData.prefix(ctData.count - 16)
     let tag = ctData.suffix(16)
-    guard let box = try? AES.GCM.SealedBox(nonce: nonce, ciphertext: ciphertext, tag: tag),
-          let plain = try? AES.GCM.open(box, using: key),
-          let result = String(data: plain, encoding: .utf8) else { return value }
-    return result
+    guard let nonce = nonce,
+          let box = try? AES.GCM.SealedBox(nonce: nonce, ciphertext: ciphertext, tag: tag) else { return value }
+    // Try vault-derived key first, then legacy key for backward compat
+    let key = profileEncryptionKey()
+    if let plain = try? AES.GCM.open(box, using: key),
+       let result = String(data: plain, encoding: .utf8) { return result }
+    let legacy = legacyProfileKey()
+    if let plain = try? AES.GCM.open(box, using: legacy),
+       let result = String(data: plain, encoding: .utf8) { return result }
+    return value
 }
 
 // MARK: - Data Models
@@ -352,7 +372,10 @@ struct ChatsView: View {
                                 .foregroundColor(.adaptiveText)
                                 .lineLimit(1)
                             HStack(spacing: 3) {
-                                Text("🔒").font(.system(size: 9))
+                                Image(systemName: "lock.fill")
+                                    .font(.caption2)
+                                    .imageScale(.small)
+                                    .foregroundColor(.adaptiveTextSec)
                                 Text(mediaTypePreview(conv.lastMessageType))
                                     .font(.subheadline)
                                     .foregroundColor(.adaptiveTextSec)
@@ -370,7 +393,7 @@ struct ChatsView: View {
                             }
                             if conv.muted {
                                 Image(systemName: "speaker.slash.fill")
-                                    .font(.system(size: 11))
+                                    .font(.caption2)
                                     .foregroundColor(.adaptiveTextSec)
                             }
                         }
@@ -786,7 +809,8 @@ struct NewChatView: View {
     private func createGroup() async {
         do {
             let memberIds = selectedMembers.map { $0.id }
-            let body: [String: Any] = ["type": "group", "member_ids": memberIds, "name": groupName.trimmingCharacters(in: .whitespaces)]
+            let encMeta = encryptProfileField(groupName.trimmingCharacters(in: .whitespaces))
+            let body: [String: Any] = ["type": "group", "member_ids": memberIds, "encrypted_meta": encMeta]
             let data = try await APIClient.shared.postRaw("/messages/conversations", body: body)
             if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                let convId = json["conversation_id"] as? String {
@@ -1002,10 +1026,32 @@ struct ConversationView: View {
 
     @ViewBuilder
     private var messageListSection: some View {
+        let msgs = filteredMessages
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(spacing: 4) {
-                    ForEach(filteredMessages) { msg in
+                LazyVStack(spacing: 0) {
+                    ForEach(Array(msgs.enumerated()), id: \.element.id) { index, msg in
+                        let prev: ChatMessage? = index > 0 ? msgs[index - 1] : nil
+                        let next: ChatMessage? = index < msgs.count - 1 ? msgs[index + 1] : nil
+
+                        let curDate = parseISODate(msg.createdAt)
+                        let prevDate = prev.flatMap { parseISODate($0.createdAt) }
+                        let needsDateSep = curDate != nil && (prevDate == nil || !Calendar.current.isDate(curDate!, inSameDayAs: prevDate!))
+
+                        if needsDateSep, let d = curDate {
+                            Text(dateSeparatorLabel(for: d))
+                                .font(.caption)
+                                .fontWeight(.semibold)
+                                .foregroundColor(.adaptiveTextSec)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 6)
+                                .background(Color(.secondarySystemBackground).opacity(0.7))
+                                .clipShape(Capsule())
+                                .frame(maxWidth: .infinity)
+                                .padding(.top, index == 0 ? 4 : 12)
+                                .padding(.bottom, 4)
+                        }
+
                         if msg.messageType == "screenshot_alert" {
                             let senderName = conversation.members.first(where: { $0.userId == msg.senderId })?.displayName
                                 ?? conversation.members.first(where: { $0.userId == msg.senderId })?.username
@@ -1021,48 +1067,79 @@ struct ConversationView: View {
                                     .clipShape(Capsule())
                                 Spacer()
                             }
+                            .padding(.top, 4)
                             .id(msg.id)
                         } else {
-                        MessageBubbleView(
-                            message: msg,
-                            isMine: msg.senderId == userId,
-                            onReact: { emoji in Task { await reactToMessage(msg.id, emoji: emoji) } },
-                            onEdit: { editingMessageId = msg.id; inputText = msg.ciphertext },
-                            onDelete: { Task { await deleteMessage(msg.id) } },
-                            onPin: { Task { await pinMessage(msg.id) } },
-                            onReply: {
-                                withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
-                                    replyingTo = msg
+                            let sameAsPrev = prev != nil
+                                && prev!.senderId == msg.senderId
+                                && prev!.messageType != "screenshot_alert"
+                                && messagesWithinGroupWindow(prev!, msg)
+                                && !needsDateSep
+                            let sameAsNext = next != nil
+                                && next!.senderId == msg.senderId
+                                && next!.messageType != "screenshot_alert"
+                                && messagesWithinGroupWindow(msg, next!)
+                                && {
+                                    guard let nd = parseISODate(next!.createdAt), let cd = curDate else { return true }
+                                    return Calendar.current.isDate(nd, inSameDayAs: cd)
+                                }()
+                            let gp: MessageGroupPosition = {
+                                switch (sameAsPrev, sameAsNext) {
+                                case (false, false): return .single
+                                case (false, true):  return .first
+                                case (true, true):   return .middle
+                                case (true, false):  return .last
                                 }
-                            },
-                            onForward: {
-                                forwardMessage = msg
-                                showForwardSheet = true
-                            },
-                            onBlock: {
-                                Task {
-                                    _ = try? await APIClient.shared.postRaw("/contacts/block", body: ["userId": msg.senderId, "blocked": true])
+                            }()
+
+                            MessageBubbleView(
+                                message: msg,
+                                isMine: msg.senderId == userId,
+                                bubbleMineColor: activeTheme.bubbleMine,
+                                bubbleTheirsColor: activeTheme.bubbleTheirs,
+                                groupPosition: gp,
+                                showSenderName: !sameAsPrev,
+                                showTimestamp: !sameAsNext,
+                                onReact: { emoji in Task { await reactToMessage(msg.id, emoji: emoji) } },
+                                onEdit: { editingMessageId = msg.id; inputText = msg.ciphertext },
+                                onDelete: { Task { await deleteMessage(msg.id) } },
+                                onPin: { Task { await pinMessage(msg.id) } },
+                                onReply: {
+                                    withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                                        replyingTo = msg
+                                    }
+                                },
+                                onForward: {
+                                    forwardMessage = msg
+                                    showForwardSheet = true
+                                },
+                                onBlock: {
+                                    Task {
+                                        _ = try? await APIClient.shared.postRaw("/contacts/block", body: ["userId": msg.senderId, "blocked": true])
+                                    }
                                 }
-                            }
-                        )
+                            )
                             .id(msg.id)
+                            .padding(.top, sameAsPrev ? 1 : 4)
                             .transition(.asymmetric(
                                 insertion: .scale(scale: 0.85, anchor: .bottomTrailing)
                                     .combined(with: .opacity)
                                     .combined(with: .offset(y: 12)),
                                 removal: .opacity.combined(with: .scale(scale: 0.9))
                             ))
-                        } // end else
+                        }
                     }
                 }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
             }
             .onChange(of: messages.count) { _, _ in
-                if let last = messages.last {
+                if let last = messages.last, last.senderId != userId {
                     #if canImport(UIKit)
                     UIImpactFeedbackGenerator(style: .soft).impactOccurred()
                     #endif
+                }
+                if let last = messages.last {
                     withAnimation(.spring(response: 0.42, dampingFraction: 0.72)) {
                         proxy.scrollTo(last.id, anchor: .bottom)
                     }
@@ -1261,75 +1338,81 @@ struct ConversationView: View {
     @ToolbarContentBuilder
     private var conversationToolbarItems: some ToolbarContent {
         ToolbarItemGroup(placement: .topBarTrailing) {
-                if conversation.isGroup {
-                    Button(action: {
-                        if let task = wsTask {
-                            let memberIds = conversation.members.map { $0.userId }
-                            CallManager.shared.startGroupCall(
-                                conversationId: conversation.id,
-                                callType: .voice,
-                                ws: task,
-                                members: memberIds
-                            )
-                        }
-                    }) {
-                        Image(systemName: "phone.fill").foregroundColor(.rocGold)
+            if conversation.isGroup {
+                Button(action: {
+                    if let task = wsTask {
+                        let memberIds = conversation.members.map { $0.userId }
+                        CallManager.shared.startGroupCall(
+                            conversationId: conversation.id,
+                            callType: .voice,
+                            ws: task,
+                            members: memberIds
+                        )
                     }
-                } else {
-                    Button(action: {
-                        let others = conversation.members.filter { $0.userId != userId }
-                        if let peer = others.first, let task = wsTask {
-                            CallManager.shared.startCall(
-                                conversationId: conversation.id,
-                                remoteUserId: peer.userId,
-                                remoteName: peer.displayName.isEmpty ? peer.username : peer.displayName,
-                                callType: .voice,
-                                ws: task
-                            )
-                        }
-                    }) {
-                        Image(systemName: "phone.fill").foregroundColor(.rocGold)
-                    }
-                    Button(action: {
-                        let others = conversation.members.filter { $0.userId != userId }
-                        if let peer = others.first, let task = wsTask {
-                            CallManager.shared.startCall(
-                                conversationId: conversation.id,
-                                remoteUserId: peer.userId,
-                                remoteName: peer.displayName.isEmpty ? peer.username : peer.displayName,
-                                callType: .video,
-                                ws: task
-                            )
-                        }
-                    }) {
-                        Image(systemName: "video.fill").foregroundColor(.rocGold)
-                    }
+                }) {
+                    Image(systemName: "phone.fill").foregroundColor(.rocGold)
                 }
+            } else {
+                Button(action: {
+                    let others = conversation.members.filter { $0.userId != userId }
+                    if let peer = others.first, let task = wsTask {
+                        CallManager.shared.startCall(
+                            conversationId: conversation.id,
+                            remoteUserId: peer.userId,
+                            remoteName: peer.displayName.isEmpty ? peer.username : peer.displayName,
+                            callType: .voice,
+                            ws: task
+                        )
+                    }
+                }) {
+                    Image(systemName: "phone.fill").foregroundColor(.rocGold)
+                }
+                Button(action: {
+                    let others = conversation.members.filter { $0.userId != userId }
+                    if let peer = others.first, let task = wsTask {
+                        CallManager.shared.startCall(
+                            conversationId: conversation.id,
+                            remoteUserId: peer.userId,
+                            remoteName: peer.displayName.isEmpty ? peer.username : peer.displayName,
+                            callType: .video,
+                            ws: task
+                        )
+                    }
+                }) {
+                    Image(systemName: "video.fill").foregroundColor(.rocGold)
+                }
+            }
+
+            Button(action: { withAnimation { isSearching.toggle() } }) {
+                Image(systemName: "magnifyingglass").foregroundColor(.rocGold)
+            }
+
+            Menu {
                 Button(action: { showDisappearMenu = true }) {
-                    Image(systemName: disappearTimer > 0 ? "timer" : "timer")
-                        .foregroundColor(disappearTimer > 0 ? .turquoise : .rocGold)
+                    Label(disappearTimer > 0 ? "Timer (On)" : "Disappearing Timer", systemImage: "timer")
                 }
                 Button(action: { loadSafetyNumber() }) {
-                    Image(systemName: "shield.fill").foregroundColor(.rocGold)
+                    Label("Safety Number", systemImage: "shield.fill")
                 }
                 Button(action: { showThemePicker = true }) {
-                    Image(systemName: "paintpalette.fill").foregroundColor(.rocGold)
+                    Label("Chat Theme", systemImage: "paintpalette.fill")
                 }
                 Button(action: { Task { await loadPinnedMessages() }; showPinnedMessages = true }) {
-                    Image(systemName: "pin.fill").foregroundColor(.rocGold)
+                    Label("Pinned Messages", systemImage: "pin.fill")
                 }
                 Button(action: { showMediaGallery = true }) {
-                    Image(systemName: "photo.on.rectangle").foregroundColor(.rocGold)
+                    Label("Media Gallery", systemImage: "photo.on.rectangle")
                 }
                 if conversation.isGroup {
                     Button(action: { Task { await loadGroupMembers() }; showGroupAdmin = true }) {
-                        Image(systemName: "person.3.fill").foregroundColor(.rocGold)
+                        Label("Group Members", systemImage: "person.3.fill")
                     }
                 }
-                Button(action: { withAnimation { isSearching.toggle() } }) {
-                    Image(systemName: "magnifyingglass").foregroundColor(.rocGold)
-                }
+            } label: {
+                Image(systemName: "ellipsis.circle")
+                    .foregroundColor(.rocGold)
             }
+        }
     }
 
     @ViewBuilder
@@ -1565,7 +1648,11 @@ struct ConversationView: View {
             guard let encrypted = sealed.combined else { return }
 
             // Upload to R2
-            let uploadResult = try await APIClient.shared.uploadMedia(encrypted)
+            let uploadResult = try await APIClient.shared.uploadMedia(encrypted, headers: [
+                "x-conversation-id": conversation.id,
+                "x-encrypted-filename": encryptProfileField("photo.jpg"),
+                "x-encrypted-mimetype": encryptProfileField("image/jpeg"),
+            ])
             let blobId = uploadResult
 
             // Send message with file metadata via Double Ratchet
@@ -1590,10 +1677,20 @@ struct ConversationView: View {
                 body["ciphertext"] = envelope.ciphertext
                 body["iv"] = envelope.iv
                 body["ratchet_header"] = envelope.ratchetHeader
-            } else {
-                body["ciphertext"] = plaintext
+            } else if conversation.isGroup {
+                let members = conversation.members.map { ($0.userId, $0.username) }
+                _ = try await GroupSessionManager.shared.ensureDistributed(
+                    groupId: conversation.id, members: members, myUserId: userId)
+                guard let plaintextData = plaintext.data(using: .utf8) else {
+                    throw NSError(domain: "RocChat", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to encode file message"])
+                }
+                let groupEnvelope = try GroupSessionManager.shared.encrypt(
+                    groupId: conversation.id, plaintext: plaintextData, myUserId: userId)
+                body["ciphertext"] = groupEnvelope.ciphertext
                 body["iv"] = ""
-                body["ratchet_header"] = ""
+                body["ratchet_header"] = groupEnvelope.ratchetHeader
+            } else {
+                throw NSError(domain: "RocChat", code: -1, userInfo: [NSLocalizedDescriptionKey: "Cannot send unencrypted message"])
             }
             _ = try await APIClient.shared.postRaw("/messages/send", body: body)
             messages.append(ChatMessage(id: "local-\(Date().timeIntervalSince1970)",
@@ -1611,7 +1708,11 @@ struct ConversationView: View {
             let sealed = try AES.GCM.seal(data, using: fileKey, nonce: iv)
             guard let encrypted = sealed.combined else { return }
 
-            let uploadResult = try await APIClient.shared.uploadMedia(encrypted)
+            let uploadResult = try await APIClient.shared.uploadMedia(encrypted, headers: [
+                "x-conversation-id": conversation.id,
+                "x-encrypted-filename": encryptProfileField(filename),
+                "x-encrypted-mimetype": encryptProfileField(mime),
+            ])
             let blobId = uploadResult
 
             let payload: [String: Any] = [
@@ -1635,10 +1736,20 @@ struct ConversationView: View {
                 body["ciphertext"] = envelope.ciphertext
                 body["iv"] = envelope.iv
                 body["ratchet_header"] = envelope.ratchetHeader
-            } else {
-                body["ciphertext"] = plaintext
+            } else if conversation.isGroup {
+                let members = conversation.members.map { ($0.userId, $0.username) }
+                _ = try await GroupSessionManager.shared.ensureDistributed(
+                    groupId: conversation.id, members: members, myUserId: userId)
+                guard let plaintextData = plaintext.data(using: .utf8) else {
+                    throw NSError(domain: "RocChat", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to encode file message"])
+                }
+                let groupEnvelope = try GroupSessionManager.shared.encrypt(
+                    groupId: conversation.id, plaintext: plaintextData, myUserId: userId)
+                body["ciphertext"] = groupEnvelope.ciphertext
                 body["iv"] = ""
-                body["ratchet_header"] = ""
+                body["ratchet_header"] = groupEnvelope.ratchetHeader
+            } else {
+                throw NSError(domain: "RocChat", code: -1, userInfo: [NSLocalizedDescriptionKey: "Cannot send unencrypted message"])
             }
             _ = try await APIClient.shared.postRaw("/messages/send", body: body)
             messages.append(ChatMessage(id: "local-\(Date().timeIntervalSince1970)",
@@ -1650,13 +1761,46 @@ struct ConversationView: View {
 
     private func forwardMessageTo(_ msg: ChatMessage, targetConversationId: String) async {
         do {
-            let body: [String: Any] = [
+            let allConvs = try await APIClient.shared.getConversations()
+            guard let targetDict = allConvs.first(where: { ($0["id"] as? String) == targetConversationId }) else { return }
+
+            let membersArr = targetDict["members"] as? [[String: Any]] ?? []
+            let targetType = targetDict["type"] as? String ?? ""
+            let isGroup = targetType == "group"
+            let plaintext = msg.ciphertext
+
+            var body: [String: Any] = [
                 "conversation_id": targetConversationId,
                 "message_type": msg.messageType,
-                "ciphertext": msg.ciphertext,
-                "iv": "",
-                "ratchet_header": "",
             ]
+
+            let recipientId = membersArr.first(where: { ($0["user_id"] as? String) != userId })?["user_id"] as? String ?? ""
+
+            if !recipientId.isEmpty && !isGroup {
+                let envelope = try await SessionManager.shared.encryptMessage(
+                    conversationId: targetConversationId, recipientUserId: recipientId, plaintext: plaintext)
+                body["ciphertext"] = envelope.ciphertext
+                body["iv"] = envelope.iv
+                body["ratchet_header"] = envelope.ratchetHeader
+            } else if isGroup {
+                let members = membersArr.map { (
+                    $0["user_id"] as? String ?? "",
+                    $0["username"] as? String ?? ""
+                ) }
+                _ = try await GroupSessionManager.shared.ensureDistributed(
+                    groupId: targetConversationId, members: members, myUserId: userId)
+                guard let plaintextData = plaintext.data(using: .utf8) else {
+                    throw NSError(domain: "RocChat", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to encode forwarded message"])
+                }
+                let groupEnvelope = try GroupSessionManager.shared.encrypt(
+                    groupId: targetConversationId, plaintext: plaintextData, myUserId: userId)
+                body["ciphertext"] = groupEnvelope.ciphertext
+                body["iv"] = ""
+                body["ratchet_header"] = groupEnvelope.ratchetHeader
+            } else {
+                throw NSError(domain: "RocChat", code: -1, userInfo: [NSLocalizedDescriptionKey: "Cannot forward unencrypted message"])
+            }
+
             _ = try await APIClient.shared.postRaw("/messages/send", body: body)
         } catch {}
     }
@@ -1689,6 +1833,11 @@ struct ConversationView: View {
     // Format: base64(iv) + "." + base64(ciphertext+tag) — matches web encryptMeta()
 
     private func getMetaKey() -> SymmetricKey {
+        if let vaultData = SecureStorage.shared.getData(forKey: "rocchat_vault_key"), vaultData.count == 32 {
+            let vk = SymmetricKey(data: vaultData)
+            let info = Data(("rocchat:meta:" + conversation.id).utf8)
+            return HKDF<SHA256>.deriveKey(inputKeyMaterial: vk, salt: Data(), info: info, outputByteCount: 32)
+        }
         let idKey = UserDefaults.standard.string(forKey: "identity_pub") ?? conversation.id
         let raw = (idKey + ":meta:" + conversation.id).data(using: .utf8)!
         let hash = SHA256.hash(data: raw)
@@ -2002,13 +2151,24 @@ struct ConversationView: View {
                     let iv = m["iv"] as? String ?? ""
                     let rh = m["ratchet_header"] as? String ?? ""
                     let displayText: String
-                    if !rh.isEmpty && !iv.isEmpty {
-                        displayText = (try? SessionManager.shared.decryptMessage(
-                            conversationId: conversation.id,
-                            ciphertext: ct, iv: iv, ratchetHeaderStr: rh
-                        )) ?? ct
+                    if !rh.isEmpty {
+                        if let rhData = rh.data(using: .utf8),
+                           let rhJson = try? JSONSerialization.jsonObject(with: rhData) as? [String: Any],
+                           rhJson["groupEncrypted"] as? Bool == true,
+                           let groupSenderId = rhJson["senderId"] as? String {
+                            displayText = (try? String(data: GroupSessionManager.shared.decrypt(
+                                groupId: conversation.id, senderId: groupSenderId,
+                                ciphertextB64: ct, ratchetHeader: rh), encoding: .utf8)) ?? "[Unable to decrypt]"
+                        } else if !iv.isEmpty {
+                            displayText = (try? SessionManager.shared.decryptMessage(
+                                conversationId: conversation.id,
+                                ciphertext: ct, iv: iv, ratchetHeaderStr: rh
+                            )) ?? "[Unable to decrypt]"
+                        } else {
+                            displayText = "[Unable to decrypt]"
+                        }
                     } else {
-                        displayText = ct
+                        displayText = "[Unable to decrypt]"
                     }
                     return ChatMessage(
                         id: id,
@@ -2089,7 +2249,47 @@ struct ConversationView: View {
             editingMessageId = nil
             Task {
                 do {
-                    _ = try await APIClient.shared.postRaw("/messages/\(editId)", body: ["encrypted": text], method: "PATCH")
+                    let recipientId = conversation.members.first(where: { $0.userId != userId })?.userId ?? ""
+                    var encryptedPayload: [String: Any]
+                    if !recipientId.isEmpty {
+                        let envelope = try await SessionManager.shared.encryptMessage(
+                            conversationId: conversation.id,
+                            recipientUserId: recipientId,
+                            plaintext: text
+                        )
+                        encryptedPayload = [
+                            "ciphertext": envelope.ciphertext,
+                            "iv": envelope.iv,
+                            "ratchet_header": envelope.ratchetHeader,
+                            "message_type": "text",
+                        ]
+                    } else if conversation.isGroup {
+                        let members = conversation.members.map { ($0.userId, $0.username) }
+                        _ = try await GroupSessionManager.shared.ensureDistributed(
+                            groupId: conversation.id,
+                            members: members,
+                            myUserId: userId
+                        )
+                        guard let plaintextData = text.data(using: .utf8) else {
+                            throw NSError(domain: "RocChat", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to encode message"])
+                        }
+                        let groupEnvelope = try GroupSessionManager.shared.encrypt(
+                            groupId: conversation.id,
+                            plaintext: plaintextData,
+                            myUserId: userId
+                        )
+                        encryptedPayload = [
+                            "ciphertext": groupEnvelope.ciphertext,
+                            "iv": "",
+                            "ratchet_header": groupEnvelope.ratchetHeader,
+                            "message_type": "text",
+                        ]
+                    } else {
+                        throw NSError(domain: "RocChat", code: -1, userInfo: [NSLocalizedDescriptionKey: "Cannot send unencrypted edit"])
+                    }
+                    let jsonData = try JSONSerialization.data(withJSONObject: encryptedPayload)
+                    let jsonString = String(data: jsonData, encoding: .utf8) ?? "{}"
+                    _ = try await APIClient.shared.postRaw("/messages/\(editId)", body: ["encrypted": jsonString], method: "PATCH")
                     if let idx = messages.firstIndex(where: { $0.id == editId }) {
                         messages[idx] = ChatMessage(id: editId, conversationId: conversation.id, senderId: userId,
                             ciphertext: text, iv: "", ratchetHeader: "", messageType: "text",
@@ -2126,10 +2326,26 @@ struct ConversationView: View {
                     body["ciphertext"] = envelope.ciphertext
                     body["iv"] = envelope.iv
                     body["ratchet_header"] = envelope.ratchetHeader
-                } else {
-                    body["ciphertext"] = text
+                } else if conversation.isGroup {
+                    let members = conversation.members.map { ($0.userId, $0.username) }
+                    _ = try await GroupSessionManager.shared.ensureDistributed(
+                        groupId: conversation.id,
+                        members: members,
+                        myUserId: userId
+                    )
+                    guard let plaintextData = text.data(using: .utf8) else {
+                        throw NSError(domain: "RocChat", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to encode message"])
+                    }
+                    let groupEnvelope = try GroupSessionManager.shared.encrypt(
+                        groupId: conversation.id,
+                        plaintext: plaintextData,
+                        myUserId: userId
+                    )
+                    body["ciphertext"] = groupEnvelope.ciphertext
                     body["iv"] = ""
-                    body["ratchet_header"] = ""
+                    body["ratchet_header"] = groupEnvelope.ratchetHeader
+                } else {
+                    throw NSError(domain: "RocChat", code: -1, userInfo: [NSLocalizedDescriptionKey: "Cannot send unencrypted message"])
                 }
                 if disappearTimer > 0 {
                     body["expires_in"] = disappearTimer
@@ -2170,7 +2386,8 @@ struct ConversationView: View {
 
     private func reactToMessage(_ msgId: String, emoji: String) async {
         do {
-            _ = try await APIClient.shared.postRaw("/messages/\(msgId)/react", body: ["encrypted_reaction": emoji])
+            let encrypted = encryptProfileField(emoji)
+            _ = try await APIClient.shared.postRaw("/messages/\(msgId)/react", body: ["encrypted_reaction": encrypted])
         } catch {}
     }
 
@@ -2332,23 +2549,44 @@ struct ConversationView: View {
     }
 
     private func connectWebSocket() {
-          guard let token = SecureStorage.shared.get(forKey: "session_token")
-                ?? UserDefaults.standard.string(forKey: "session_token"),
-              !userId.isEmpty else { return }
+          guard !userId.isEmpty else { return }
 
-        // Connect directly to the Worker backend — Pages proxy cannot handle WebSocket upgrades
-        let wsHost = "rocchat-api.spoass.workers.dev"
-        let urlStr = "wss://\(wsHost)/api/ws/\(conversation.id)?userId=\(userId)&deviceId=ios&token=\(token)"
-        guard let url = URL(string: urlStr) else { return }
+        Task {
+            let deviceId = "ios"
 
-        let task = APIClient.shared.webSocketTask(with: url)
-        wsTask = task
-        task.resume()
-        // Successful resume does not mean the socket is open, but receive()
-        // failing is our only signal — so reset the attempt counter optimistically
-        // here and let the failure branch bump it back up.
-        wsReconnectAttempt = 0
-        receiveMessages(task: task)
+            guard let ticket = await fetchWsTicket(),
+                  let wsBase = APIClient.shared.websocketBaseURL,
+                  var components = URLComponents(
+                    url: wsBase.appendingPathComponent("api/ws/\(conversation.id)"),
+                    resolvingAgainstBaseURL: false
+                  ) else { return }
+            components.queryItems = [
+                URLQueryItem(name: "userId", value: userId),
+                URLQueryItem(name: "deviceId", value: deviceId),
+                URLQueryItem(name: "ticket", value: ticket),
+            ]
+            guard let url = components.url else { return }
+
+            let task = APIClient.shared.webSocketTask(with: url)
+            wsTask = task
+            task.resume()
+            // Successful resume does not mean the socket is open, but receive()
+            // failing is our only signal — so reset the attempt counter optimistically
+            // here and let the failure branch bump it back up.
+            wsReconnectAttempt = 0
+            receiveMessages(task: task)
+        }
+    }
+
+    private func fetchWsTicket() async -> String? {
+        for _ in 0..<2 {
+            if let data = try? await APIClient.shared.postRaw("/ws/ticket", body: [:]),
+               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let ticket = json["ticket"] as? String {
+                return ticket
+            }
+        }
+        return nil
     }
 
     private func receiveMessages(task: URLSessionWebSocketTask) {
@@ -2366,13 +2604,24 @@ struct ConversationView: View {
                             let iv = payload["iv"] as? String ?? ""
                             let rh = payload["ratchet_header"] as? String ?? ""
                             let displayText: String
-                            if !rh.isEmpty && !iv.isEmpty {
-                                displayText = (try? SessionManager.shared.decryptMessage(
-                                    conversationId: conversation.id,
-                                    ciphertext: ct, iv: iv, ratchetHeaderStr: rh
-                                )) ?? ct
+                            if !rh.isEmpty {
+                                if let rhData = rh.data(using: .utf8),
+                                   let rhJson = try? JSONSerialization.jsonObject(with: rhData) as? [String: Any],
+                                   rhJson["groupEncrypted"] as? Bool == true,
+                                   let groupSenderId = rhJson["senderId"] as? String {
+                                    displayText = (try? String(data: GroupSessionManager.shared.decrypt(
+                                        groupId: conversation.id, senderId: groupSenderId,
+                                        ciphertextB64: ct, ratchetHeader: rh), encoding: .utf8)) ?? "[Unable to decrypt]"
+                                } else if !iv.isEmpty {
+                                    displayText = (try? SessionManager.shared.decryptMessage(
+                                        conversationId: conversation.id,
+                                        ciphertext: ct, iv: iv, ratchetHeaderStr: rh
+                                    )) ?? "[Unable to decrypt]"
+                                } else {
+                                    displayText = "[Unable to decrypt]"
+                                }
                             } else {
-                                displayText = ct
+                                displayText = "[Unable to decrypt]"
                             }
                             let newMsg = ChatMessage(
                                 id: payload["id"] as? String ?? "ws-\(Date().timeIntervalSince1970)",
@@ -2387,12 +2636,14 @@ struct ConversationView: View {
                             )
                             DispatchQueue.main.async {
                                 messages.append(newMsg)
-                                // Send delivery receipt back
+                                // Send delivery receipt back (encrypted, matching Android/web)
                                 if newMsg.senderId != userId, let msgId = payload["id"] as? String {
-                                    let receipt: [String: Any] = ["type": "delivery_receipt", "payload": ["message_id": msgId, "fromUserId": userId]]
-                                    if let data = try? JSONSerialization.data(withJSONObject: receipt),
-                                       let str = String(data: data, encoding: .utf8) {
-                                        task.send(.string(str)) { _ in }
+                                    if let enc = encryptMeta(["message_id": msgId]) {
+                                        let receipt: [String: Any] = ["type": "delivery_receipt", "payload": ["e": enc]]
+                                        if let data = try? JSONSerialization.data(withJSONObject: receipt),
+                                           let str = String(data: data, encoding: .utf8) {
+                                            task.send(.string(str)) { _ in }
+                                        }
                                     }
                                 }
                             }
@@ -2429,7 +2680,6 @@ struct ConversationView: View {
                                 CallManager.shared.handleP2PCandidate(payload: payload)
                             }
                         } else if type == "delivery_receipt" || type == "read_receipt" {
-                            // Try encrypted payload first
                             if let enc = payload["e"] as? String, let meta = decryptMeta(enc) {
                                 let msgId = meta["message_id"] as? String ?? ""
                                 let newStatus = type == "read_receipt" ? "read" : "delivered"
@@ -2438,27 +2688,10 @@ struct ConversationView: View {
                                         messages[idx].status = newStatus
                                     }
                                 }
-                            } else {
-                                let msgId = payload["message_id"] as? String ?? ""
-                                let newStatus = type == "read_receipt" ? "read" : "delivered"
-                                DispatchQueue.main.async {
-                                    if let idx = messages.firstIndex(where: { $0.id == msgId }) {
-                                        messages[idx].status = newStatus
-                                    }
-                                }
                             }
                         } else if type == "typing" {
-                            // Try encrypted payload first, fallback to plaintext
-                            var isTyping = false
-                            var fromUser = payload["fromUserId"] as? String ?? ""
                             if let enc = payload["e"] as? String, let meta = decryptMeta(enc) {
-                                isTyping = meta["isTyping"] as? Bool ?? false
-                                fromUser = "" // encrypted = from other party
-                            } else {
-                                fromUser = payload["fromUserId"] as? String ?? ""
-                                isTyping = payload["isTyping"] as? Bool ?? false
-                            }
-                            if fromUser != userId {
+                                let isTyping = meta["isTyping"] as? Bool ?? false
                                 DispatchQueue.main.async {
                                     if isTyping {
                                         withAnimation { isRemoteTyping = true }
@@ -2474,17 +2707,12 @@ struct ConversationView: View {
                             if let enc = payload["e"] as? String, let meta = decryptMeta(enc) {
                                 let status = meta["status"] as? String ?? ""
                                 DispatchQueue.main.async { remoteOnlineStatus = status }
-                            } else {
-                                let fromUser = payload["fromUserId"] as? String ?? ""
-                                let status = payload["status"] as? String ?? ""
-                                if fromUser != userId {
-                                    DispatchQueue.main.async { remoteOnlineStatus = status }
-                                }
                             }
                         } else if type == "reaction" {
                             let msgId = payload["message_id"] as? String ?? ""
-                            let emoji = payload["emoji"] as? String ?? ""
+                            let encryptedReaction = payload["encrypted_reaction"] as? String ?? ""
                             let reactUserId = payload["user_id"] as? String ?? payload["fromUserId"] as? String ?? ""
+                            let emoji = decryptProfileField(encryptedReaction)
                             DispatchQueue.main.async {
                                 if let idx = messages.firstIndex(where: { $0.id == msgId }) {
                                     var reactions = messages[idx].reactions ?? []
@@ -2500,13 +2728,24 @@ struct ConversationView: View {
                             DispatchQueue.main.async {
                                 if let idx = messages.firstIndex(where: { $0.id == msgId }) {
                                     let displayText: String
-                                    if !newRh.isEmpty && !newIv.isEmpty {
-                                        displayText = (try? SessionManager.shared.decryptMessage(
-                                            conversationId: conversation.id,
-                                            ciphertext: newCiphertext, iv: newIv, ratchetHeaderStr: newRh
-                                        )) ?? newCiphertext
+                                    if !newRh.isEmpty {
+                                        if let rhData = newRh.data(using: .utf8),
+                                           let rhJson = try? JSONSerialization.jsonObject(with: rhData) as? [String: Any],
+                                           rhJson["groupEncrypted"] as? Bool == true,
+                                           let groupSenderId = rhJson["senderId"] as? String {
+                                            displayText = (try? String(data: GroupSessionManager.shared.decrypt(
+                                                groupId: conversation.id, senderId: groupSenderId,
+                                                ciphertextB64: newCiphertext, ratchetHeader: newRh), encoding: .utf8)) ?? "[Unable to decrypt]"
+                                        } else if !newIv.isEmpty {
+                                            displayText = (try? SessionManager.shared.decryptMessage(
+                                                conversationId: conversation.id,
+                                                ciphertext: newCiphertext, iv: newIv, ratchetHeaderStr: newRh
+                                            )) ?? "[Unable to decrypt]"
+                                        } else {
+                                            displayText = "[Unable to decrypt]"
+                                        }
                                     } else {
-                                        displayText = newCiphertext
+                                        displayText = "[Unable to decrypt]"
                                     }
                                     messages[idx].ciphertext = displayText + " (edited)"
                                 }
@@ -2541,11 +2780,42 @@ struct ConversationView: View {
     }
 }
 
+// MARK: - Message Grouping
+
+enum MessageGroupPosition {
+    case single, first, middle, last
+}
+
+private func parseISODate(_ iso: String) -> Date? {
+    let fmt = ISO8601DateFormatter()
+    fmt.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    return fmt.date(from: iso) ?? ISO8601DateFormatter().date(from: iso)
+}
+
+private func dateSeparatorLabel(for date: Date) -> String {
+    let cal = Calendar.current
+    if cal.isDateInToday(date) { return "Today" }
+    if cal.isDateInYesterday(date) { return "Yesterday" }
+    let f = DateFormatter()
+    f.dateFormat = cal.isDate(date, equalTo: Date(), toGranularity: .year) ? "MMM d" : "MMM d, yyyy"
+    return f.string(from: date)
+}
+
+private func messagesWithinGroupWindow(_ a: ChatMessage, _ b: ChatMessage) -> Bool {
+    guard let da = parseISODate(a.createdAt), let db = parseISODate(b.createdAt) else { return false }
+    return abs(da.timeIntervalSince(db)) < 120
+}
+
 // MARK: - Message Bubble
 
 struct MessageBubbleView: View {
     let message: ChatMessage
     let isMine: Bool
+    var bubbleMineColor: Color = Color.rocGold.opacity(0.12)
+    var bubbleTheirsColor: Color = Color.adaptiveBubbleTheirs
+    var groupPosition: MessageGroupPosition = .single
+    var showSenderName: Bool = true
+    var showTimestamp: Bool = true
     var onReact: ((String) -> Void)?
     var onEdit: (() -> Void)?
     var onDelete: (() -> Void)?
@@ -2578,6 +2848,27 @@ struct MessageBubbleView: View {
         UserDefaults.standard.bool(forKey: viewOnceViewedKey)
     }
 
+    private var groupedBubbleShape: UnevenRoundedRectangle {
+        let full: CGFloat = 18
+        let tight: CGFloat = 6
+        switch groupPosition {
+        case .single:
+            return UnevenRoundedRectangle(topLeadingRadius: full, bottomLeadingRadius: full, bottomTrailingRadius: full, topTrailingRadius: full)
+        case .first:
+            return isMine
+                ? UnevenRoundedRectangle(topLeadingRadius: full, bottomLeadingRadius: full, bottomTrailingRadius: tight, topTrailingRadius: full)
+                : UnevenRoundedRectangle(topLeadingRadius: full, bottomLeadingRadius: tight, bottomTrailingRadius: full, topTrailingRadius: full)
+        case .middle:
+            return isMine
+                ? UnevenRoundedRectangle(topLeadingRadius: full, bottomLeadingRadius: full, bottomTrailingRadius: tight, topTrailingRadius: tight)
+                : UnevenRoundedRectangle(topLeadingRadius: tight, bottomLeadingRadius: tight, bottomTrailingRadius: full, topTrailingRadius: full)
+        case .last:
+            return isMine
+                ? UnevenRoundedRectangle(topLeadingRadius: full, bottomLeadingRadius: full, bottomTrailingRadius: full, topTrailingRadius: tight)
+                : UnevenRoundedRectangle(topLeadingRadius: tight, bottomLeadingRadius: full, bottomTrailingRadius: full, topTrailingRadius: full)
+        }
+    }
+
     var body: some View {
         HStack {
             if isMine { Spacer(minLength: 60) }
@@ -2597,27 +2888,32 @@ struct MessageBubbleView: View {
                     }
                 }
 
-                HStack(spacing: 4) {
-                    Text("🔒").font(.system(size: 8))
-                    Text(formatRelativeTime(message.createdAt))
-                        .font(.system(size: 11))
-                        .foregroundColor(.adaptiveTextSec)
-                    if isMine {
-                        switch message.status {
-                        case "read":
-                            Text("✓✓").font(.system(size: 11)).foregroundColor(.turquoise)
-                        case "delivered":
-                            Text("✓✓").font(.system(size: 11)).foregroundColor(.adaptiveTextSec)
-                        default:
-                            Text("✓").font(.system(size: 11)).foregroundColor(.adaptiveTextSec)
+                if showTimestamp {
+                    HStack(spacing: 4) {
+                        Image(systemName: "lock.fill")
+                            .font(.caption2)
+                            .imageScale(.small)
+                            .foregroundColor(.adaptiveTextSec)
+                        Text(formatRelativeTime(message.createdAt))
+                            .font(.caption2)
+                            .foregroundColor(.adaptiveTextSec)
+                        if isMine {
+                            switch message.status {
+                            case "read":
+                                Text("✓✓").font(.caption2).foregroundColor(.turquoise)
+                            case "delivered":
+                                Text("✓✓").font(.caption2).foregroundColor(.adaptiveTextSec)
+                            default:
+                                Text("✓").font(.caption2).foregroundColor(.adaptiveTextSec)
+                            }
                         }
                     }
                 }
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
-            .background(isMine ? Color.rocGold.opacity(0.12) : Color.adaptiveBubbleTheirs)
-            .clipShape(RoundedRectangle(cornerRadius: 18))
+            .background(isMine ? bubbleMineColor : bubbleTheirsColor)
+            .clipShape(groupedBubbleShape)
             .shadow(color: .black.opacity(0.04), radius: 2, y: 1)
 
             // Reactions display
@@ -2901,11 +3197,6 @@ struct SettingsView: View {
     @State private var showDonationSheet = false
     @State private var donorTier = ""
     @State private var donorSince = ""
-
-    // Business/Org
-    @State private var showBusinessSheet = false
-    @State private var organizations: [[String: Any]] = []
-    @State private var newOrgName = ""
 
     // Encrypted backup
     @State private var showBackupSheet = false
@@ -3368,6 +3659,14 @@ struct SettingsView: View {
                             _ = try? await APIClient.shared.postRaw("/me/settings", body: body, method: "PATCH")
                         }
                     }
+                    Picker("Link previews", selection: Binding(
+                        get: { UserDefaults.standard.string(forKey: "link_preview_mode") ?? "server" },
+                        set: { UserDefaults.standard.set($0, forKey: "link_preview_mode") }
+                    )) {
+                        Text("Server (default)").tag("server")
+                        Text("Client-side (private)").tag("client")
+                        Text("Disabled").tag("disabled")
+                    }
                     Toggle("Screenshot detection", isOn: $screenshotDetection)
                         .onChange(of: screenshotDetection) { _, val in
                             Task {
@@ -3472,7 +3771,7 @@ struct SettingsView: View {
                                 .font(.subheadline.bold())
                                 .foregroundColor(.turquoise)
                             Text("X25519 + AES-256-GCM + Double Ratchet")
-                                .font(.custom("JetBrains Mono", size: 10))
+                                .font(.custom("JetBrains Mono", size: 10, relativeTo: .caption))
                                 .foregroundColor(.textSecondary)
                         }
                     }
@@ -3481,7 +3780,7 @@ struct SettingsView: View {
                             Text("Your Identity Key")
                                 .font(.caption.bold())
                             Text(identityKeyFingerprint)
-                                .font(.custom("JetBrains Mono", size: 10))
+                                .font(.custom("JetBrains Mono", size: 10, relativeTo: .caption))
                                 .foregroundColor(.textSecondary)
                                 .textSelection(.enabled)
                         }
@@ -3600,17 +3899,6 @@ struct SettingsView: View {
                     }
                 }
 
-                Section("Business") {
-                    Button {
-                        Task { await loadOrganizations() }
-                        showBusinessSheet = true
-                    } label: {
-                        Label("Organization Management", systemImage: "building.2.fill")
-                    }
-                    Text("$3.99/user/month — RBAC, SSO, compliance, remote wipe")
-                        .font(.caption)
-                        .foregroundColor(.textSecondary)
-                }
 
                 Section("About") {
                     NavigationLink {
@@ -4005,46 +4293,6 @@ struct SettingsView: View {
                 }
             }
         }
-        // MARK: Business/Org Sheet
-        .sheet(isPresented: $showBusinessSheet) {
-            NavigationStack {
-                List {
-                    Section("Create Organization") {
-                        TextField("Organization name", text: $newOrgName)
-                        Button("Create") {
-                            Task { await createOrganization() }
-                        }
-                        .disabled(newOrgName.trimmingCharacters(in: .whitespaces).isEmpty)
-                    }
-                    Section("Your Organizations") {
-                        if organizations.isEmpty {
-                            Text("No organizations yet").foregroundColor(.secondary)
-                        }
-                        ForEach(Array(organizations.enumerated()), id: \.offset) { _, org in
-                            let name = org["name"] as? String ?? "Unnamed"
-                            let id = org["id"] as? String ?? ""
-                            let memberCount = org["member_count"] as? Int ?? 0
-                            NavigationLink {
-                                OrgDetailView(orgId: id, orgName: name)
-                            } label: {
-                                VStack(alignment: .leading) {
-                                    Text(name).font(.subheadline.bold())
-                                    Text("\(memberCount) members").font(.caption).foregroundColor(.secondary)
-                                }
-                            }
-                        }
-                    }
-                    Section(footer: Text("Business tier: $3.99/user/month. Includes RBAC, SSO, compliance export, retention policies, and remote device wipe.")) { EmptyView() }
-                }
-                .navigationTitle("Organizations")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button("Done") { showBusinessSheet = false }
-                    }
-                }
-            }
-        }
         // MARK: Encrypted Backup Sheet
         .sheet(isPresented: $showBackupSheet) {
             NavigationStack {
@@ -4181,6 +4429,10 @@ struct SettingsView: View {
                 if let ti = me["show_typing_indicator"] as? Int { typingIndicators = ti != 0 }
                 if let ov = me["show_online_to"] as? String { onlineVisibility = ov }
                 if let wa = me["who_can_add"] as? String { whoCanAdd = wa }
+                if let ls = me["show_last_seen_to"] as? String { lastSeenVisibility = ls }
+                if let pp = me["show_photo_to"] as? String { photoVisibility = pp }
+                if let sd = me["screenshot_detection"] as? Int { screenshotDetection = sd != 0 }
+                if let sd = me["screenshot_detection"] as? Bool { screenshotDetection = sd }
                 // Detect ghost mode
                 ghostMode = !readReceipts && !typingIndicators && onlineVisibility == "nobody"
                 // Load default disappear timer
@@ -4581,8 +4833,24 @@ struct SettingsView: View {
             UIGraphicsEndImageContext()
             guard let jpeg = resized.jpegData(compressionQuality: 0.85) else { return }
 
-            let resp = try await APIClient.shared.uploadBinary("/me/avatar", data: jpeg, headers: [
-                "Content-Type": "image/jpeg",
+            // E2E encrypt the avatar before upload
+            let uploadData: Data
+            let contentType: String
+            if let vaultData = SecureStorage.shared.getData(forKey: "rocchat_vault_key"), vaultData.count == 32 {
+                let vk = SymmetricKey(data: vaultData)
+                let info = Data("rocchat:avatar:encrypt".utf8)
+                let avatarKey = HKDF<SHA256>.deriveKey(inputKeyMaterial: vk, salt: Data(), info: info, outputByteCount: 32)
+                let nonce = AES.GCM.Nonce()
+                let sealed = try AES.GCM.seal(jpeg, using: avatarKey, nonce: nonce)
+                uploadData = Data(nonce) + sealed.ciphertext + sealed.tag
+                contentType = "application/octet-stream"
+            } else {
+                uploadData = jpeg
+                contentType = "image/jpeg"
+            }
+
+            let resp = try await APIClient.shared.uploadBinary("/me/avatar", data: uploadData, headers: [
+                "Content-Type": contentType,
             ])
             if let json = try JSONSerialization.jsonObject(with: resp) as? [String: Any],
                let url = json["avatar_url"] as? String {
@@ -4707,25 +4975,6 @@ struct SettingsView: View {
                 _ = try await APIClient.shared.postRaw("/features/donor", body: ["tier": tier])
                 await loadDonorStatus()
             }
-        } catch {}
-    }
-
-    // MARK: - Business/Org Helpers
-    private func loadOrganizations() async {
-        do {
-            let data = try await APIClient.shared.getRaw("/business/org")
-            if let arr = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
-                organizations = arr
-            }
-        } catch {}
-    }
-    private func createOrganization() async {
-        let name = newOrgName.trimmingCharacters(in: .whitespaces)
-        guard !name.isEmpty else { return }
-        do {
-            _ = try await APIClient.shared.postRaw("/business/org", body: ["name": name])
-            await loadOrganizations()
-            newOrgName = ""
         } catch {}
     }
 
@@ -4880,177 +5129,6 @@ struct SettingsView: View {
         let body: [String: Any] = ["contact_id": id, "nickname": nickname]
         _ = try? await APIClient.shared.postRaw("/features/contacts", body: body)
         await loadSavedContacts()
-    }
-}
-
-// MARK: - Organization Detail View
-struct OrgDetailView: View {
-    let orgId: String
-    let orgName: String
-    @State private var members: [[String: Any]] = []
-    @State private var newMemberEmail = ""
-    @State private var retentionDays = 90
-    @State private var ssoEnabled = false
-    @State private var showBulkInvite = false
-    @State private var bulkEmails = ""
-    @State private var brandLogoUrl = ""
-    @State private var brandAccentColor = "#D4AF37"
-    @State private var brandSaving = false
-
-    var body: some View {
-        List {
-            Section("Members") {
-                ForEach(Array(members.enumerated()), id: \.offset) { _, member in
-                    let name = member["display_name"] as? String ?? member["email"] as? String ?? "Unknown"
-                    let role = member["role"] as? String ?? "member"
-                    let uid = member["user_id"] as? String ?? ""
-                    HStack {
-                        VStack(alignment: .leading) {
-                            Text(name).font(.subheadline)
-                            Text(role).font(.caption).foregroundColor(.secondary)
-                        }
-                        Spacer()
-                        if role != "owner" {
-                            Menu {
-                                ForEach(["admin", "moderator", "member"], id: \.self) { r in
-                                    Button(r.capitalized) {
-                                        Task {
-                                            _ = try? await APIClient.shared.postRaw("/business/org/\(orgId)/members", body: ["user_id": uid, "role": r])
-                                            await loadMembers()
-                                        }
-                                    }
-                                }
-                                Divider()
-                                Button("Remove", role: .destructive) {
-                                    Task {
-                                        _ = try? await APIClient.shared.deleteRaw("/business/org/\(orgId)/members/\(uid)")
-                                        await loadMembers()
-                                    }
-                                }
-                            } label: {
-                                Image(systemName: "ellipsis.circle")
-                                    .foregroundColor(.rocGold)
-                            }
-                        }
-                    }
-                }
-                HStack {
-                    TextField("Email to add", text: $newMemberEmail)
-                        .textContentType(.emailAddress)
-                        .autocapitalization(.none)
-                    Button("Add") {
-                        Task {
-                            _ = try? await APIClient.shared.postRaw("/business/org/\(orgId)/members", body: ["email": newMemberEmail])
-                            newMemberEmail = ""
-                            await loadMembers()
-                        }
-                    }
-                    .disabled(newMemberEmail.isEmpty)
-                }
-                Button("Bulk Invite (CSV)") {
-                    showBulkInvite = true
-                }
-            }
-            Section("Compliance") {
-                Button("Export Compliance Report") {
-                    Task {
-                        _ = try? await APIClient.shared.getRaw("/business/org/\(orgId)/export")
-                    }
-                }
-                Stepper("Retention: \(retentionDays) days", value: $retentionDays, in: 1...365)
-                    .onChange(of: retentionDays) { _, days in
-                        Task {
-                            _ = try? await APIClient.shared.postRaw("/business/org/\(orgId)/retention", body: ["days": days], method: "PUT")
-                        }
-                    }
-            }
-            Section("Custom Branding") {
-                TextField("Logo URL (https://...)", text: $brandLogoUrl)
-                    .autocapitalization(.none)
-                    .disableAutocorrection(true)
-                    .textContentType(.URL)
-                HStack {
-                    Text("Accent Color")
-                    Spacer()
-                    TextField("#D4AF37", text: $brandAccentColor)
-                        .multilineTextAlignment(.trailing)
-                        .frame(width: 90)
-                        .font(.system(.body, design: .monospaced))
-                }
-                Button(brandSaving ? "Saving…" : "Save Branding") {
-                    guard !brandSaving else { return }
-                    brandSaving = true
-                    Task {
-                        var body: [String: Any] = ["accent_color": brandAccentColor]
-                        if !brandLogoUrl.isEmpty { body["logo_url"] = brandLogoUrl }
-                        _ = try? await APIClient.shared.postRaw("/business/org/\(orgId)", body: body, method: "PATCH")
-                        brandSaving = false
-                    }
-                }
-                .foregroundColor(.rocGold)
-                .disabled(brandSaving)
-            }
-            Section("Security") {
-                Toggle("SSO Enabled", isOn: $ssoEnabled)
-                    .onChange(of: ssoEnabled) { _, enabled in
-                        Task {
-                            if enabled {
-                                _ = try? await APIClient.shared.postRaw("/business/org/\(orgId)/sso", body: ["enabled": true], method: "PUT")
-                            } else {
-                                _ = try? await APIClient.shared.deleteRaw("/business/org/\(orgId)/sso")
-                            }
-                        }
-                    }
-                Button("Remote Wipe All Devices", role: .destructive) {
-                    Task {
-                        _ = try? await APIClient.shared.postRaw("/business/org/\(orgId)/wipe", body: [:])
-                    }
-                }
-            }
-        }
-        .navigationTitle(orgName)
-        .task { await loadMembers() }
-        .sheet(isPresented: $showBulkInvite) {
-            NavigationStack {
-                VStack(spacing: 16) {
-                    Text("Paste usernames, one per line (up to 200)")
-                        .font(.caption).foregroundColor(.secondary)
-                    TextEditor(text: $bulkEmails)
-                        .frame(minHeight: 200)
-                        .border(Color.gray.opacity(0.3))
-                        .padding(.horizontal)
-                    Button("Invite All") {
-                        let usernames = bulkEmails.components(separatedBy: .newlines)
-                            .map { $0.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: "@", with: "") }
-                            .filter { !$0.isEmpty }
-                        guard !usernames.isEmpty else { return }
-                        let users = usernames.map { ["username": $0] }
-                        Task {
-                            _ = try? await APIClient.shared.postRaw("/business/org/\(orgId)/members/bulk", body: ["users": users])
-                            bulkEmails = ""
-                            showBulkInvite = false
-                            await loadMembers()
-                        }
-                    }
-                    .buttonStyle(.borderedProminent).tint(.rocGold)
-                    .disabled(bulkEmails.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                }
-                .padding()
-                .navigationTitle("Bulk Invite")
-                .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { showBulkInvite = false } } }
-            }
-            .presentationDetents([.medium])
-        }
-    }
-
-    private func loadMembers() async {
-        do {
-            let data = try await APIClient.shared.getRaw("/business/org/\(orgId)")
-            if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let arr = json["members"] as? [[String: Any]] {
-                members = arr
-            }
-        } catch {}
     }
 }
 
@@ -5437,13 +5515,26 @@ struct LinkPreviewView: View {
     }
 
     private func fetchPreview() async {
+        let mode = UserDefaults.standard.string(forKey: "link_preview_mode") ?? "server"
+        guard mode != "disabled" else { return }
         do {
             let encoded = urlString.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? urlString
-            let data = try await APIClient.shared.getRaw("/link-preview?url=\(encoded)")
-            if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                title = json["title"] as? String
-                description = json["description"] as? String
-                imageURL = json["image"] as? String
+            if mode == "client" {
+                guard let url = URL(string: urlString) else { return }
+                let (data, _) = try await URLSession.shared.data(from: url)
+                let html = String(data: data, encoding: .utf8) ?? ""
+                title = html.range(of: "(?<=<title>)[^<]+", options: .regularExpression).map { String(html[$0]) }
+                description = html.range(of: "(?<=content=\")[^\"]+(?=\"[^>]*property=\"og:description)", options: .regularExpression).map { String(html[$0]) }
+                    ?? html.range(of: "(?<=property=\"og:description\"[^>]*content=\")[^\"]+", options: .regularExpression).map { String(html[$0]) }
+                imageURL = html.range(of: "(?<=content=\")[^\"]+(?=\"[^>]*property=\"og:image)", options: .regularExpression).map { String(html[$0]) }
+                    ?? html.range(of: "(?<=property=\"og:image\"[^>]*content=\")[^\"]+", options: .regularExpression).map { String(html[$0]) }
+            } else {
+                let data = try await APIClient.shared.getRaw("/link-preview?url=\(encoded)")
+                if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                    title = json["title"] as? String
+                    description = json["description"] as? String
+                    imageURL = json["image"] as? String
+                }
             }
         } catch {}
     }
@@ -5458,25 +5549,60 @@ struct ForwardMessageSheet: View {
     @State private var conversations: [ChatConversation] = []
     private let userId = UserDefaults.standard.string(forKey: "user_id") ?? ""
 
+    private var messageTypeIcon: String {
+        switch message?.messageType {
+        case "image": return "photo"
+        case "video": return "video"
+        case "audio", "voice": return "waveform"
+        case "file": return "doc"
+        default: return "text.bubble"
+        }
+    }
+
     var body: some View {
         NavigationStack {
-            List(conversations) { conv in
-                Button(action: {
-                    onForward(conv.id)
-                    dismiss()
-                }) {
-                    HStack(spacing: 12) {
-                        AvatarView(name: conv.name ?? conv.members.first?.username ?? "?", avatarUrl: conv.avatarURL, size: 40)
-                        VStack(alignment: .leading) {
-                            Text(conv.name ?? conv.members.filter { $0.userId != userId }.map { $0.displayName.isEmpty ? $0.username : $0.displayName }.joined(separator: ", "))
-                                .font(.headline)
-                                .lineLimit(1)
+            VStack(spacing: 0) {
+                if let msg = message {
+                    HStack(spacing: 10) {
+                        Image(systemName: messageTypeIcon)
+                            .font(.subheadline)
+                            .foregroundColor(.rocGold)
+                            .frame(width: 28)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Forwarding message")
+                                .font(.caption)
+                                .foregroundColor(.adaptiveTextSec)
+                            Text(msg.ciphertext.isEmpty ? "Encrypted message" : msg.ciphertext)
+                                .font(.subheadline)
+                                .foregroundColor(.adaptiveText)
+                                .lineLimit(2)
                         }
                         Spacer()
-                        Image(systemName: "chevron.right").foregroundColor(.secondary)
                     }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
+                    .background(Color.rocGold.opacity(0.06))
+                    Divider()
                 }
-                .buttonStyle(.plain)
+
+                List(conversations) { conv in
+                    Button(action: {
+                        onForward(conv.id)
+                        dismiss()
+                    }) {
+                        HStack(spacing: 12) {
+                            AvatarView(name: conv.name ?? conv.members.first?.username ?? "?", avatarUrl: conv.avatarURL, size: 40)
+                            VStack(alignment: .leading) {
+                                Text(conv.name ?? conv.members.filter { $0.userId != userId }.map { $0.displayName.isEmpty ? $0.username : $0.displayName }.joined(separator: ", "))
+                                    .font(.headline)
+                                    .lineLimit(1)
+                            }
+                            Spacer()
+                            Image(systemName: "chevron.right").foregroundColor(.secondary)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                }
             }
             .navigationTitle("Forward To")
             .navigationBarTitleDisplayMode(.inline)

@@ -247,6 +247,10 @@
 }
 html {
   font-size: calc(var(--roc-font-scale, 1) * 15px);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
 }
 
 /* ── Auto theme: apply light variables when OS prefers light (and no explicit .dark/.light class) ── */
@@ -296,13 +300,6 @@ html {
 }
 
 /* ── Base ── */
-html {
-  font-size: 16px;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-  -webkit-text-size-adjust: 100%;
-  text-size-adjust: 100%;
-}
 
 body {
   font-family: var(--font-sans);
@@ -909,12 +906,38 @@ a:hover { text-decoration: underline; }
   color: var(--color-text-secondary);
 }
 
+/* ── Date separators ── */
+.date-separator {
+  align-self: center;
+  background: var(--bg-card);
+  color: var(--text-secondary);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  padding: 4px 12px;
+  border-radius: 12px;
+  margin: var(--sp-3) 0 var(--sp-1);
+  border: 1px solid var(--border-weak);
+  user-select: none;
+}
+
 .message-row {
   display: flex;
   max-width: 70%;
   content-visibility: auto;
   contain-intrinsic-size: auto 60px;
   animation: messageSlide 0.2s var(--ease-out);
+}
+
+/* Tighten spacing for grouped messages */
+.message-row.group-middle,
+.message-row.group-last {
+  margin-top: -2px;
+}
+.message-row.group-middle .message-meta,
+.message-row.group-middle .message-time,
+.message-row.group-middle .message-lock {
+  display: none;
 }
 
 .message-row.mine { align-self: flex-end; }
@@ -929,6 +952,7 @@ a:hover { text-decoration: underline; }
   transition: transform var(--duration-fast);
 }
 
+/* Default (solo / first-in-group) bubble radii */
 .message-row.mine .message-bubble {
   background: var(--bg-bubble-mine);
   border-radius: var(--radius-lg) var(--radius-lg) var(--radius-xs) var(--radius-lg);
@@ -939,6 +963,22 @@ a:hover { text-decoration: underline; }
   background: var(--bg-bubble-theirs);
   border-radius: var(--radius-lg) var(--radius-lg) var(--radius-lg) var(--radius-xs);
   border: 1px solid var(--border-weak);
+}
+
+/* Grouped bubble radii — tighten connected corners */
+.message-row.mine.group-middle .message-bubble,
+.message-row.mine.group-last .message-bubble {
+  border-radius: var(--radius) var(--radius-lg) var(--radius-xs) var(--radius);
+}
+.message-row.mine.group-first .message-bubble {
+  border-radius: var(--radius-lg) var(--radius-lg) var(--radius) var(--radius-lg);
+}
+.message-row.theirs.group-middle .message-bubble,
+.message-row.theirs.group-last .message-bubble {
+  border-radius: var(--radius-lg) var(--radius) var(--radius) var(--radius-xs);
+}
+.message-row.theirs.group-first .message-bubble {
+  border-radius: var(--radius-lg) var(--radius-lg) var(--radius-lg) var(--radius);
 }
 
 .message-bubble.priority-high { border-left: 3px solid #E5A00D; }
@@ -1631,27 +1671,29 @@ a:hover { text-decoration: underline; }
   transform: translateX(20px);
 }
 
-/* ── Typing indicator ── */
+/* ── Typing indicator (canonical — do not duplicate) ── */
 .typing-indicator {
-  display: flex;
+  display: inline-flex;
+  gap: 3px;
   align-items: center;
-  gap: 4px;
-  padding: var(--sp-2) var(--sp-3);
+  margin-right: 4px;
 }
-
+.typing-indicator span,
 .typing-dot {
-  width: 6px; height: 6px;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
   background: var(--roc-gold);
-  animation: typingBounce 1.2s ease-in-out infinite;
+  animation: typingBounce 1.4s infinite ease-in-out both;
 }
-
+.typing-indicator span:nth-child(2),
 .typing-dot:nth-child(2) { animation-delay: 0.2s; }
+.typing-indicator span:nth-child(3),
 .typing-dot:nth-child(3) { animation-delay: 0.4s; }
 
 @keyframes typingBounce {
-  0%, 60%, 100% { transform: translateY(0); }
-  30% { transform: translateY(-4px); }
+  0%, 80%, 100% { transform: scale(0.6); opacity: 0.4; }
+  40% { transform: scale(1); opacity: 1; }
 }
 
 /* ── Calling overlay ── */
@@ -1774,11 +1816,7 @@ a:hover { text-decoration: underline; }
 
 /* ── Hidden utility ── */
 .hidden { display: none !important; }
-.sr-only {
-  position: absolute; width: 1px; height: 1px;
-  padding: 0; margin: -1px; overflow: hidden;
-  clip: rect(0,0,0,0); white-space: nowrap; border: 0;
-}
+/* .sr-only / .visually-hidden — canonical definition in a11y section below */
 
 /* ── Focus visible (keyboard accessibility) ── */
 :focus-visible {
@@ -1982,21 +2020,7 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
   color: #4FC3F7 !important;
 }
 
-/* ── Typing Indicator ── */
-.typing-indicator {
-  display: inline-flex; gap: 3px; align-items: center;
-}
-.typing-indicator span {
-  width: 6px; height: 6px; border-radius: 50%;
-  background: var(--text-tertiary);
-  animation: typingBounce 1.4s infinite ease-in-out both;
-}
-.typing-indicator span:nth-child(1) { animation-delay: -0.32s; }
-.typing-indicator span:nth-child(2) { animation-delay: -0.16s; }
-@keyframes typingBounce {
-  0%, 80%, 100% { transform: scale(0); }
-  40% { transform: scale(1); }
-}
+/* Typing Indicator — see canonical definition above (~line 1635) */
 
 /* ─────────────────────────────────────────────
    Landing Page
@@ -2825,26 +2849,7 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
   padding: var(--sp-1) 0;
 }
 
-/* ── Typing Indicator ── */
-.typing-indicator {
-  display: inline-flex;
-  gap: 3px;
-  align-items: center;
-  margin-right: 4px;
-}
-.typing-indicator span {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: var(--roc-gold);
-  animation: typingBounce 1.4s infinite ease-in-out both;
-}
-.typing-indicator span:nth-child(1) { animation-delay: -0.32s; }
-.typing-indicator span:nth-child(2) { animation-delay: -0.16s; }
-@keyframes typingBounce {
-  0%, 80%, 100% { transform: scale(0.6); opacity: 0.4; }
-  40% { transform: scale(1); opacity: 1; }
-}
+/* Typing Indicator — see canonical definition above (~line 1635) */
 
 /* ── Offline Banner ── */
 .offline-banner {
@@ -2952,15 +2957,12 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
   cursor: default;
 }
 
-/* Premium/Business badge animations */
+/* Premium badge animations */
 @keyframes wingPulse {
   0%, 100% { transform: translateX(-50%) scale(1); }
   50% { transform: translateX(-50%) scale(1.02); }
 }
 .premium-wings {
-  pointer-events: none;
-}
-.business-badge {
   pointer-events: none;
 }
 
@@ -3401,32 +3403,9 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
   box-shadow: 0 0 0 3px rgba(212, 175, 55, 0.35);
 }
 
-/* Skip-link */
-.skip-link {
-  position: absolute;
-  left: -9999px;
-  top: 8px;
-  z-index: 9999;
-  background: var(--roc-gold, #D4AF37);
-  color: #1A1A2E;
-  padding: 8px 12px;
-  border-radius: 6px;
-  font-weight: 600;
-  text-decoration: none;
-}
-.skip-link:focus, .skip-link:focus-visible {
-  left: 8px;
-}
+/* Skip-link — canonical definition at ~line 2870 */
 
-/* Honor OS reduced-motion */
-@media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after {
-    animation-duration: 0.001ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 0.001ms !important;
-    scroll-behavior: auto !important;
-  }
-}
+/* Reduced-motion — canonical definition at ~line 292 */
 
 /* Honor OS high-contrast */
 @media (prefers-contrast: more) {
@@ -3718,23 +3697,11 @@ html[data-channel="roc"] .top-bar::after {
   animation: unreadPulse 0.4s var(--ease-out);
 }
 
-/* ── Conversation item active highlight ── */
-.conversation-item.active {
-  background: var(--primary-bg);
-  border-left: 3px solid var(--primary);
-}
+/* Conversation active — see canonical definition above (~line 657) */
 
 /* ── Smooth scroll for messages ── */
 .messages-area {
   scroll-behavior: smooth;
 }
 
-/* ── Read receipt ticks ── */
-.msg-status {
-  display: inline-flex;
-  align-items: center;
-  margin-left: 4px;
-  opacity: 0.6;
-}
-.msg-status.read { opacity: 1; color: var(--turquoise); }
-.msg-status svg { width: 14px; height: 14px; }
+/* Read receipt ticks — uses .message-status class in chat.ts */

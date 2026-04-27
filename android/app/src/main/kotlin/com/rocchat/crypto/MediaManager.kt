@@ -7,6 +7,8 @@ import java.security.SecureRandom
 import javax.crypto.Cipher
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
+import android.content.Context
+import com.rocchat.chat.encryptProfileField
 import com.rocchat.network.APIClient
 
 /**
@@ -28,7 +30,7 @@ object MediaManager {
 
     // MARK: - Upload
 
-    suspend fun upload(data: ByteArray, filename: String, mime: String, conversationId: String): EncryptedMedia {
+    suspend fun upload(context: Context, data: ByteArray, filename: String, mime: String, conversationId: String): EncryptedMedia {
         // Generate random file key and IV
         val fileKey = ByteArray(32)
         val fileIv = ByteArray(12)
@@ -43,8 +45,9 @@ object MediaManager {
         // SHA-256 hash of encrypted blob
         val hash = MessageDigest.getInstance("SHA-256").digest(encrypted)
 
-        // Upload encrypted blob
-        val blobId = APIClient.uploadMedia(conversationId, encrypted, filename, mime)
+        val encFilename = encryptProfileField(context, filename)
+        val encMime = encryptProfileField(context, mime)
+        val blobId = APIClient.uploadMedia(conversationId, encrypted, encFilename, encMime)
 
         return EncryptedMedia(
             blobId = blobId,

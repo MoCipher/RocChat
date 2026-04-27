@@ -355,8 +355,8 @@ class CallManager: ObservableObject {
                       let str = String(data: data, encoding: .utf8) else { return }
                 ws?.send(.string(str)) { _ in }
             } catch {
-                // Fallback to plaintext signaling
-                self.sendSignal(type: type, extra: extra)
+                print("[CallManager] encrypted signaling failed, dropping signal: \(error)")
+                return
             }
         }
     }

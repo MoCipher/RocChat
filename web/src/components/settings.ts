@@ -192,6 +192,17 @@ export function renderSettings(container: HTMLElement) {
               <span class="toggle-slider"></span>
             </label>
           </div>
+          <div class="setting-row">
+            <div>
+              <div class="setting-label">Link previews</div>
+              <div class="setting-desc">How URLs in messages are previewed. "Server" hides your IP from target sites but the server sees URLs. "Client" keeps URLs private from the server but exposes your IP.</div>
+            </div>
+            <select class="form-input" style="width:auto;padding:var(--sp-2) var(--sp-3)" id="link-preview-mode">
+              <option value="server">Server (default)</option>
+              <option value="client">Client-side (private)</option>
+              <option value="disabled">Disabled</option>
+            </select>
+          </div>
           <div class="setting-row" style="cursor:pointer" id="blocked-contacts-row">
             <div>
               <div class="setting-label">Blocked contacts</div>
@@ -453,48 +464,6 @@ export function renderSettings(container: HTMLElement) {
         </div>
 
         <div class="settings-section">
-          <h3>RocChat Business</h3>
-          <div id="business-section">
-            <div class="setting-row" style="flex-direction:column;align-items:stretch;gap:var(--sp-3)">
-              <div>
-                <div class="setting-label">Organization Management</div>
-                <div class="setting-desc">Admin dashboard, team management, compliance tools, custom branding, SSO, API access and more.</div>
-              </div>
-              <div id="business-content" style="background:var(--bg-card-hover);border-radius:var(--radius-lg);padding:var(--sp-4);border:1px solid var(--border-weak)">
-                <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:var(--sp-3)">
-                  <span style="font-weight:700;font-size:var(--text-base)">Business Plan</span>
-                  <span style="font-family:var(--font-mono);color:var(--roc-gold);font-size:var(--text-sm)">$3.99<span style="font-size:var(--text-xs);color:var(--text-tertiary)">/user/mo</span></span>
-                </div>
-                <div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--sp-2);font-size:var(--text-xs);color:var(--text-secondary)">
-                  <div style="display:flex;align-items:center;gap:6px"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--turquoise)" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>Admin dashboard</div>
-                  <div style="display:flex;align-items:center;gap:6px"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--turquoise)" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>5,000-member groups</div>
-                  <div style="display:flex;align-items:center;gap:6px"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--turquoise)" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>Org directory</div>
-                  <div style="display:flex;align-items:center;gap:6px"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--turquoise)" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>RBAC</div>
-                  <div style="display:flex;align-items:center;gap:6px"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--turquoise)" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>Remote device wipe</div>
-                  <div style="display:flex;align-items:center;gap:6px"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--turquoise)" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>Compliance export</div>
-                  <div style="display:flex;align-items:center;gap:6px"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--turquoise)" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>SSO (SAML/OIDC)</div>
-                  <div style="display:flex;align-items:center;gap:6px"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--turquoise)" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>API &amp; webhooks</div>
-                  <div style="display:flex;align-items:center;gap:6px"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--turquoise)" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>Custom branding</div>
-                  <div style="display:flex;align-items:center;gap:6px"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--turquoise)" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>Priority support</div>
-                </div>
-                <div style="margin-top:var(--sp-3);font-size:var(--text-xs);color:var(--text-tertiary);font-family:var(--font-mono)">
-                  5–25 users $3.99 · 26–100 $2.99 · 101–500 $1.99 · 500+ custom
-                </div>
-                <button class="btn-primary" id="upgrade-business-btn" style="width:100%;margin-top:var(--sp-3)">
-                  Upgrade to Business
-                </button>
-              </div>
-            </div>
-            <div id="business-dashboard" style="display:none;margin-top:var(--sp-3)">
-              <div id="org-list"></div>
-              <button class="btn-secondary" id="create-org-btn" style="margin-top:var(--sp-2);font-size:var(--text-sm);width:100%">
-                + Create Organization
-              </button>
-            </div>
-          </div>
-        </div>
-
-        <div class="settings-section">
           <h3>Import Chat History</h3>
           <div class="setting-row">
             <div>
@@ -530,7 +499,7 @@ export function renderSettings(container: HTMLElement) {
           <div class="setting-row">
             <div>
               <div class="setting-label">All premium features are free forever</div>
-              <div class="setting-desc">RocChat is built on the belief that privacy shouldn't cost extra. Business features support team/enterprise needs. If you'd like to support development, donations are welcome.</div>
+              <div class="setting-desc">RocChat is built on the belief that privacy shouldn't cost extra. If you'd like to support development, donations are welcome.</div>
             </div>
           </div>
           <div class="donor-tier-grid" id="donation-tiers">
@@ -963,6 +932,18 @@ export function renderSettings(container: HTMLElement) {
     await saveSetting(() => api.updateSettings({ screenshot_detection: checked ? 1 : 0 }));
   });
 
+  // Link preview mode (privacy setting — local only, not server-side)
+  {
+    const lpSelect = document.getElementById('link-preview-mode') as HTMLSelectElement | null;
+    if (lpSelect) {
+      const { getLinkPreviewMode, setLinkPreviewMode } = await import('../chat/link-preview.js');
+      lpSelect.value = getLinkPreviewMode();
+      lpSelect.addEventListener('change', () => {
+        setLinkPreviewMode(lpSelect.value as 'server' | 'client' | 'disabled');
+      });
+    }
+  }
+
   // Blocked contacts management
   document.getElementById('blocked-contacts-row')?.addEventListener('click', () => {
     showBlockedContactsDialog();
@@ -990,65 +971,54 @@ export function renderSettings(container: HTMLElement) {
   document.getElementById('export-data-btn')?.addEventListener('click', async () => {
     const btn = document.getElementById('export-data-btn') as HTMLButtonElement;
     const passphrase = prompt(
-      'Enter a strong passphrase to encrypt your export.\n' +
-      'Leave blank to download unencrypted JSON (NOT recommended).',
+      'Enter a strong passphrase (12+ characters) to encrypt your export.',
     );
-    if (passphrase === null) return; // user cancelled
+    if (passphrase === null) return;
+    if (passphrase.length < 12) {
+      alert('Passphrase must be at least 12 characters. Aborting.');
+      return;
+    }
     btn.disabled = true;
     btn.textContent = 'Exporting…';
     try {
       const res = await api.exportData();
       if (!res.ok) { alert('Export failed'); return; }
       const json = JSON.stringify(res.data.export, null, 2);
-      let blob: Blob;
-      let filename: string;
-      if (passphrase.length >= 12) {
-        // Encrypt with PBKDF2(SHA-256, 600k iters) -> AES-256-GCM.
-        // 600k matches OWASP 2023 guidance for PBKDF2-HMAC-SHA256.
-        const enc = new TextEncoder();
-        const salt = crypto.getRandomValues(new Uint8Array(16));
-        const iv = crypto.getRandomValues(new Uint8Array(12));
-        const baseKey = await crypto.subtle.importKey(
-          'raw', enc.encode(passphrase), 'PBKDF2', false, ['deriveKey'],
-        );
-        const aesKey = await crypto.subtle.deriveKey(
-          { name: 'PBKDF2', salt: salt as unknown as BufferSource, iterations: 600_000, hash: 'SHA-256' },
-          baseKey,
-          { name: 'AES-GCM', length: 256 },
-          false,
-          ['encrypt'],
-        );
-        const ct = new Uint8Array(
-          await crypto.subtle.encrypt({ name: 'AES-GCM', iv: iv as unknown as BufferSource }, aesKey, enc.encode(json)),
-        );
-        // Wrapper format: rocchat-export-v1 (versioned, self-describing)
-        const envelope = {
-          format: 'rocchat-export-v1',
-          kdf: 'PBKDF2-SHA256',
-          iterations: 600_000,
-          cipher: 'AES-256-GCM',
-          salt: bytesToBase64(salt),
-          iv: bytesToBase64(iv),
-          ciphertext: bytesToBase64(ct),
-          exported_at: new Date().toISOString(),
-        };
-        blob = new Blob([JSON.stringify(envelope, null, 2)], { type: 'application/json' });
-        filename = `rocchat-export-encrypted-${Date.now()}.json`;
-      } else {
-        if (passphrase.length > 0) {
-          alert('Passphrase too short (need at least 12 characters). Aborting.');
-          return;
-        }
-        blob = new Blob([json], { type: 'application/json' });
-        filename = `rocchat-export-${Date.now()}.json`;
-      }
+      const enc = new TextEncoder();
+      const salt = crypto.getRandomValues(new Uint8Array(16));
+      const iv = crypto.getRandomValues(new Uint8Array(12));
+      const baseKey = await crypto.subtle.importKey(
+        'raw', enc.encode(passphrase), 'PBKDF2', false, ['deriveKey'],
+      );
+      const aesKey = await crypto.subtle.deriveKey(
+        { name: 'PBKDF2', salt: salt as unknown as BufferSource, iterations: 600_000, hash: 'SHA-256' },
+        baseKey,
+        { name: 'AES-GCM', length: 256 },
+        false,
+        ['encrypt'],
+      );
+      const ct = new Uint8Array(
+        await crypto.subtle.encrypt({ name: 'AES-GCM', iv: iv as unknown as BufferSource }, aesKey, enc.encode(json)),
+      );
+      const envelope = {
+        format: 'rocchat-export-v1',
+        kdf: 'PBKDF2-SHA256',
+        iterations: 600_000,
+        cipher: 'AES-256-GCM',
+        salt: bytesToBase64(salt),
+        iv: bytesToBase64(iv),
+        ciphertext: bytesToBase64(ct),
+        exported_at: new Date().toISOString(),
+      };
+      const blob = new Blob([JSON.stringify(envelope, null, 2)], { type: 'application/json' });
+      const filename = `rocchat-export-encrypted-${Date.now()}.json`;
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
       a.download = filename;
       a.click();
       URL.revokeObjectURL(url);
-      showToast(passphrase.length >= 12 ? 'Encrypted export downloaded' : 'Plain export downloaded');
+      showToast('Encrypted export downloaded');
     } catch { alert('Export failed'); }
     btn.disabled = false;
     btn.textContent = 'Export My Data';
@@ -1227,33 +1197,6 @@ export function renderSettings(container: HTMLElement) {
     }
   });
 
-  // ── Business ──
-  document.getElementById('upgrade-business-btn')?.addEventListener('click', async () => {
-    try {
-      const res = await api.createCryptoCheckout('business');
-      if (res.data.wallet_address) {
-        showToast(`Send ${res.data.amount_crypto} ${res.data.crypto_symbol} to ${res.data.wallet_address} (memo: ${res.data.memo})`, 'success');
-      } else {
-        showToast('Business tier not configured yet. Contact sales@mocipher.com for early access.', 'error');
-      }
-    } catch {
-      showToast('Business tier not available yet. Contact sales@mocipher.com for early access.', 'error');
-    }
-  });
-  document.getElementById('create-org-btn')?.addEventListener('click', () => {
-    const name = prompt('Organization name:');
-    if (name && name.trim()) {
-      api.createOrganization(name.trim()).then(res => {
-        if (res.ok) {
-          showToast('Organization created');
-          loadBusinessDashboard();
-        } else {
-          showToast('Failed to create organization', 'error');
-        }
-      });
-    }
-  });
-
   // Chat import — one-click migration bridge with auto-detect & progress bar
   let importSource = '';
   const importFileInput = document.getElementById('import-file-input') as HTMLInputElement;
@@ -1351,17 +1294,25 @@ export function renderSettings(container: HTMLElement) {
       const convId = convRes.data?.conversation_id;
       if (!convId) { hideProgress(); importStatus.textContent = 'Failed to create conversation'; return; }
 
+      // E2E encrypt each message body before upload
+      const { encryptProfileField } = await import('../crypto/profile-crypto.js');
+      const encryptedParsed = await Promise.all(parsed.map(async (msg: { sender_name: string; body: string; timestamp: string }) => ({
+        ...msg,
+        body: await encryptProfileField(msg.body),
+        sender_name: await encryptProfileField(msg.sender_name),
+      })));
+
       // Batch upload with progress
       let total = 0;
       const chunkSize = 500;
-      const totalChunks = Math.ceil(parsed.length / chunkSize);
-      for (let i = 0; i < parsed.length; i += chunkSize) {
-        const batch = parsed.slice(i, i + chunkSize);
+      const totalChunks = Math.ceil(encryptedParsed.length / chunkSize);
+      for (let i = 0; i < encryptedParsed.length; i += chunkSize) {
+        const batch = encryptedParsed.slice(i, i + chunkSize);
         const res = await api.importMessages(source, convId, batch);
         total += res.data?.imported || 0;
         const chunksDone = Math.floor(i / chunkSize) + 1;
         const pct = 35 + (chunksDone / totalChunks) * 65;
-        setProgress(pct, `Importing: ${total} of ${parsed.length} messages...`);
+        setProgress(pct, `Importing: ${total} of ${encryptedParsed.length} messages...`);
       }
 
       setProgress(100, 'Complete!');
@@ -1489,8 +1440,6 @@ export function renderSettings(container: HTMLElement) {
 
   // No Apple IAP or Google Play verification — crypto donations only.
 
-  // Check if user has business tier and show dashboard
-  loadBusinessState();
   loadDonorBadge();
   loadQuietHours();
 
@@ -1985,7 +1934,8 @@ async function showContactsManager() {
         const current = (btn as HTMLElement).dataset.currentNick || '';
         const nickname = prompt('Set nickname (leave empty to clear):', current);
         if (nickname === null) return;
-        await api.saveContact(id, nickname || undefined);
+        const encNickname = nickname ? await encryptProfileField(nickname) : undefined;
+        await api.saveContact(id, encNickname);
         showToast(nickname ? 'Nickname set' : 'Nickname cleared');
         showContactsManager();
       });
@@ -2025,443 +1975,6 @@ function createOverlay(): HTMLElement {
   overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
   document.body.appendChild(overlay);
   return overlay;
-}
-
-async function loadBusinessState() {
-  try {
-    const res = await api.getMe();
-    if (!res.ok) return;
-    const user = res.data as unknown as Record<string, unknown>;
-    const tier = (user.account_tier as string) || 'premium';
-
-    if (tier === 'business') {
-      // Show dashboard, hide upgrade prompt
-      const content = document.getElementById('business-content');
-      const dashboard = document.getElementById('business-dashboard');
-      if (content) content.style.display = 'none';
-      if (dashboard) dashboard.style.display = 'block';
-      loadBusinessDashboard();
-    }
-  } catch { /* silent */ }
-}
-
-async function loadBusinessDashboard() {
-  const orgList = document.getElementById('org-list');
-  if (!orgList) return;
-
-  try {
-    const res = await api.getOrganizations();
-    const orgs = res.ok ? (res.data as unknown as api.Organization[]) : [];
-
-    if (orgs.length === 0) {
-      orgList.replaceChildren(parseHTML(`
-        <div style="text-align:center;padding:var(--sp-4);color:var(--text-tertiary)">
-          <p>No organizations yet. Create one to get started.</p>
-        </div>
-      `));
-    } else {
-      orgList.replaceChildren(parseHTML(orgs.map(o => `
-        <div class="setting-row" style="padding:var(--sp-3);cursor:pointer" data-org-id="${o.id}">
-          <div>
-            <div class="setting-label" style="display:flex;align-items:center;gap:var(--sp-2)">
-              <span style="width:28px;height:28px;border-radius:var(--radius-md);background:${escHtml(o.accent_color)};display:flex;align-items:center;justify-content:center;font-size:12px;color:white;font-weight:700">${escHtml(o.name[0])}</span>
-              ${escHtml(o.name)}
-            </div>
-            <div class="setting-desc">Role: ${escHtml(o.role)} · Created ${new Date(o.created_at * 1000).toLocaleDateString()}</div>
-          </div>
-        </div>
-      `).join('')));
-
-      orgList.querySelectorAll('[data-org-id]').forEach(el => {
-        el.addEventListener('click', () => {
-          const orgId = (el as HTMLElement).dataset.orgId!;
-          showOrgDashboard(orgId);
-        });
-      });
-    }
-  } catch { showToast('Failed to load organizations', 'error'); }
-}
-
-async function showOrgDashboard(orgId: string) {
-  const overlay = createOverlay();
-  overlay.querySelector('.overlay-body')!.replaceChildren(parseHTML('<div style="text-align:center;padding:var(--sp-4)">Loading...</div>'));
-
-  try {
-    const res = await api.getOrganization(orgId);
-    if (!res.ok) { showToast('Failed to load org', 'error'); return; }
-    const org = res.data as unknown as api.Organization & { members: api.OrgMember[] };
-    const body = overlay.querySelector('.overlay-body')!;
-
-    body.replaceChildren(parseHTML(`
-      <h3 style="margin-bottom:var(--sp-3)">${escHtml(org.name)}</h3>
-
-      <div style="margin-bottom:var(--sp-4)">
-        <div style="font-weight:600;margin-bottom:var(--sp-2)">Members (${org.members.length})</div>
-        ${org.members.map(m => {
-          const name = m.display_name || m.username;
-          const initials = name.split(' ').map((w: string) => w[0]).join('').slice(0, 2).toUpperCase();
-          let avatarHtml: string;
-          if (m.avatar_url) {
-            const path = (m.avatar_url as string).startsWith('/api/') ? m.avatar_url : `/api${m.avatar_url}`;
-            const sep = path.includes('?') ? '&' : '?';
-            avatarHtml = `<div class="avatar" style="width:32px;height:32px;font-size:12px"><img src="${path}${sep}uid=${encodeURIComponent(m.user_id)}" loading="lazy" decoding="async" style="width:100%;height:100%;border-radius:50%;object-fit:cover" data-fallback="${initials}" /></div>`;
-          } else {
-            avatarHtml = `<div class="avatar" style="width:32px;height:32px;font-size:12px">${initials}</div>`;
-          }
-          return `
-            <div class="setting-row" style="padding:var(--sp-2)">
-              <div style="display:flex;align-items:center;gap:var(--sp-2)">
-                ${avatarHtml}
-                <div>
-                  <div style="font-size:var(--text-sm);font-weight:500">${escHtml(name)}</div>
-                  <div style="font-size:var(--text-xs);color:var(--text-tertiary)">${escHtml(m.role)}</div>
-                </div>
-              </div>
-              ${m.role !== 'owner' ? `<button class="btn-secondary" style="font-size:var(--text-xs);color:var(--danger);border-color:var(--danger);padding:2px 8px" data-remove-member="${m.user_id}">Remove</button>` : ''}
-            </div>
-          `;
-        }).join('')}
-      </div>
-
-      <div style="display:grid;gap:var(--sp-2)">
-        <button class="btn-secondary" id="org-add-member">+ Add Member</button>
-        <button class="btn-secondary" id="org-bulk-add">Bulk Provision Users</button>
-        <button class="btn-secondary" id="org-sso">SSO Configuration</button>
-        <button class="btn-secondary" id="org-export">Compliance Export</button>
-        <button class="btn-secondary" id="org-retention">Retention Policy</button>
-        <button class="btn-secondary" id="org-wipe" style="color:var(--danger);border-color:var(--danger)">Remote Device Wipe</button>
-        <button class="btn-secondary" id="org-directory">User Directory</button>
-        <button class="btn-secondary" id="org-api-keys">API Keys</button>
-        <button class="btn-secondary" id="org-webhooks">Webhooks</button>
-        <button class="btn-secondary" id="org-branding">Custom Branding</button>
-      </div>
-    `));
-
-    // Remove member
-    body.querySelectorAll('[data-remove-member]').forEach(btn => {
-      btn.addEventListener('click', async () => {
-        const uid = (btn as HTMLElement).dataset.removeMember!;
-        if (confirm('Remove this member?')) {
-          await api.removeOrgMember(orgId, uid);
-          showToast('Member removed');
-          showOrgDashboard(orgId);
-        }
-      });
-    });
-
-    // Add member
-    body.querySelector('#org-add-member')?.addEventListener('click', async () => {
-      const username = prompt('Enter username to add:');
-      if (!username) return;
-      const searchRes = await api.searchUsers(username.trim());
-      if (!searchRes.ok || !(searchRes.data as unknown as { results: api.UserResult[] }).results?.length) {
-        showToast('User not found', 'error');
-        return;
-      }
-      const user = (searchRes.data as unknown as { results: api.UserResult[] }).results[0];
-      const addRes = await api.addOrgMember(orgId, user.userId);
-      if (addRes.ok) {
-        showToast(`${user.displayName || user.username} added`);
-        showOrgDashboard(orgId);
-      } else {
-        showToast('Failed to add member', 'error');
-      }
-    });
-
-    // Bulk provision
-    body.querySelector('#org-bulk-add')?.addEventListener('click', async () => {
-      const input = prompt('Enter usernames to add (comma-separated):');
-      if (!input) return;
-      const usernames = input.split(',').map(u => u.trim()).filter(Boolean);
-      if (usernames.length === 0) return;
-      if (usernames.length > 200) {
-        showToast('Maximum 200 users per bulk operation', 'error');
-        return;
-      }
-      const users = usernames.map(username => ({ username, role: 'member' }));
-      const res = await api.bulkAddOrgMembers(orgId, users);
-      if (res.ok) {
-        const data = res.data as unknown as { added: number; total: number };
-        showToast(`Added ${data.added} of ${data.total} users`);
-        showOrgDashboard(orgId);
-      } else {
-        showToast('Bulk provision failed', 'error');
-      }
-    });
-
-    // SSO configuration
-    body.querySelector('#org-sso')?.addEventListener('click', async () => {
-      const ssoRes = await api.getSsoConfig(orgId);
-      const current = ssoRes.ok ? (ssoRes.data as unknown as { provider: string; issuer_url: string; client_id: string; redirect_uri: string; enabled: number }) : { provider: 'oidc', issuer_url: '', client_id: '', redirect_uri: '', enabled: 0 };
-
-      const ssoOverlay = createOverlay();
-      ssoOverlay.querySelector('.overlay-body')!.replaceChildren(parseHTML(`
-        <h3 style="margin-bottom:var(--sp-3)">SSO Configuration</h3>
-        <div style="display:grid;gap:var(--sp-3)">
-          <div>
-            <label class="setting-label" style="display:block;margin-bottom:4px">Provider</label>
-            <select class="form-input" id="sso-provider" style="width:100%">
-              <option value="oidc" ${current.provider === 'oidc' ? 'selected' : ''}>OpenID Connect (OIDC)</option>
-              <option value="saml" ${current.provider === 'saml' ? 'selected' : ''}>SAML 2.0</option>
-            </select>
-          </div>
-          <div>
-            <label class="setting-label" style="display:block;margin-bottom:4px">Issuer URL</label>
-            <input class="form-input" id="sso-issuer" style="width:100%" placeholder="https://accounts.google.com" value="${escHtml(current.issuer_url)}" />
-          </div>
-          <div>
-            <label class="setting-label" style="display:block;margin-bottom:4px">Client ID</label>
-            <input class="form-input" id="sso-client-id" style="width:100%" placeholder="your-client-id" value="${escHtml(current.client_id)}" />
-          </div>
-          <div>
-            <label class="setting-label" style="display:block;margin-bottom:4px">Client Secret</label>
-            <input class="form-input" id="sso-client-secret" type="password" style="width:100%" placeholder="your-client-secret" />
-          </div>
-          <div>
-            <label class="setting-label" style="display:block;margin-bottom:4px">Redirect URI</label>
-            <input class="form-input" id="sso-redirect" style="width:100%" placeholder="https://chat.mocipher.com/sso/callback" value="${escHtml(current.redirect_uri)}" />
-          </div>
-          <label style="display:flex;align-items:center;gap:var(--sp-2);cursor:pointer">
-            <input type="checkbox" id="sso-enabled" ${current.enabled ? 'checked' : ''} />
-            <span>Enable SSO</span>
-          </label>
-          <div style="display:flex;gap:var(--sp-2)">
-            <button class="btn-primary" id="sso-save" style="flex:1">Save</button>
-            <button class="btn-secondary" id="sso-remove" style="flex:1;color:var(--danger);border-color:var(--danger)">Remove</button>
-          </div>
-        </div>
-      `));
-
-      ssoOverlay.querySelector('#sso-save')?.addEventListener('click', async () => {
-        const issuerUrl = (ssoOverlay.querySelector('#sso-issuer') as HTMLInputElement).value.trim();
-        const clientId = (ssoOverlay.querySelector('#sso-client-id') as HTMLInputElement).value.trim();
-        const clientSecret = (ssoOverlay.querySelector('#sso-client-secret') as HTMLInputElement).value.trim();
-        const redirectUri = (ssoOverlay.querySelector('#sso-redirect') as HTMLInputElement).value.trim();
-        const provider = (ssoOverlay.querySelector('#sso-provider') as HTMLSelectElement).value;
-        const enabled = (ssoOverlay.querySelector('#sso-enabled') as HTMLInputElement).checked;
-
-        if (!issuerUrl || !clientId || !clientSecret || !redirectUri) {
-          showToast('All fields are required', 'error');
-          return;
-        }
-        const saveRes = await api.setSsoConfig(orgId, { provider, issuer_url: issuerUrl, client_id: clientId, client_secret: clientSecret, redirect_uri: redirectUri, enabled });
-        if (saveRes.ok) {
-          showToast('SSO configuration saved');
-          ssoOverlay.remove();
-        } else {
-          showToast('Failed to save SSO config', 'error');
-        }
-      });
-
-      ssoOverlay.querySelector('#sso-remove')?.addEventListener('click', async () => {
-        if (!confirm('Remove SSO configuration?')) return;
-        await api.deleteSsoConfig(orgId);
-        showToast('SSO configuration removed');
-        ssoOverlay.remove();
-      });
-    });
-
-    // Compliance export
-    body.querySelector('#org-export')?.addEventListener('click', async () => {
-      const exportRes = await api.getComplianceExport(orgId);
-      if (exportRes.ok) {
-        const blob = new Blob([JSON.stringify(exportRes.data, null, 2)], { type: 'application/json' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `rocchat-export-${orgId.slice(0, 8)}-${Date.now()}.json`;
-        a.click();
-        URL.revokeObjectURL(url);
-        showToast('Export downloaded');
-      }
-    });
-
-    // Retention policy
-    body.querySelector('#org-retention')?.addEventListener('click', async () => {
-      const retRes = await api.getRetentionPolicy(orgId);
-      const current = retRes.ok ? (retRes.data as unknown as { max_age_days: number; auto_delete: number }) : { max_age_days: 365, auto_delete: 0 };
-      const days = prompt(`Message retention (days, current: ${current.max_age_days}):`, String(current.max_age_days));
-      if (!days) return;
-      const autoDelete = confirm('Auto-delete messages older than this?');
-      await api.setRetentionPolicy(orgId, parseInt(days, 10), autoDelete);
-      showToast('Retention policy updated');
-    });
-
-    // Remote wipe
-    body.querySelector('#org-wipe')?.addEventListener('click', async () => {
-      const username = prompt('Username of user to wipe device:');
-      if (!username) return;
-      const searchRes = await api.searchUsers(username.trim());
-      if (!searchRes.ok || !(searchRes.data as unknown as { results: api.UserResult[] }).results?.length) {
-        showToast('User not found', 'error');
-        return;
-      }
-      const user = (searchRes.data as unknown as { results: api.UserResult[] }).results[0];
-      const deviceId = prompt('Device ID to wipe:');
-      if (!deviceId) return;
-      if (!confirm(`WIPE device ${deviceId} for ${user.username}? This cannot be undone.`)) return;
-      const wipeRes = await api.wipeDevice(orgId, user.userId, deviceId);
-      if (wipeRes.ok) {
-        showToast('Device wiped successfully');
-      } else {
-        showToast('Failed to wipe device', 'error');
-      }
-    });
-
-    // Org directory
-    body.querySelector('#org-directory')?.addEventListener('click', async () => {
-      const q = prompt('Search members (leave blank to show all):') || '';
-      const res = await api.searchOrgDirectory(orgId, q);
-      const members = (res.data || []) as Record<string, string>[];
-      const list = members.map(m =>
-        `${m.display_name || m.username} (@${m.username}) — ${m.role}`
-      ).join('\n');
-      alert(list || 'No members found');
-    });
-
-    // API Keys
-    body.querySelector('#org-api-keys')?.addEventListener('click', async () => {
-      const overlay = createOverlay();
-      const ob = overlay.querySelector('.overlay-body')!;
-      const renderKeys = async () => {
-        const res = await api.listApiKeys(orgId);
-        const keys = (res.data || []) as Record<string, string>[];
-        ob.replaceChildren(parseHTML(`
-          <h3 style="margin-bottom:var(--sp-3)">API Keys</h3>
-          <div style="display:grid;gap:var(--sp-2);margin-bottom:var(--sp-3)">
-            ${keys.map((k: any) => `
-              <div style="display:flex;justify-content:space-between;align-items:center;padding:var(--sp-2);background:var(--bg-tertiary);border-radius:8px">
-                <div>
-                  <div style="font-size:14px;font-weight:600">${escHtml(k.name)}</div>
-                  <div style="font-size:12px;color:var(--text-tertiary)">${escHtml(k.key_prefix)}... · ${k.scopes}</div>
-                </div>
-                <button class="btn-secondary revoke-key" data-kid="${k.id}" style="font-size:12px;color:var(--danger);border-color:var(--danger)">Revoke</button>
-              </div>
-            `).join('') || '<p style="color:var(--text-tertiary)">No API keys yet</p>'}
-          </div>
-          <button class="btn-primary" id="create-api-key" style="width:100%">+ Create New Key</button>
-        `));
-        ob.querySelectorAll('.revoke-key').forEach(btn => {
-          btn.addEventListener('click', async () => {
-            const kid = (btn as HTMLElement).dataset.kid!;
-            if (confirm('Revoke this API key? This cannot be undone.')) {
-              await api.revokeApiKey(orgId, kid);
-              showToast('Key revoked');
-              renderKeys();
-            }
-          });
-        });
-        ob.querySelector('#create-api-key')?.addEventListener('click', async () => {
-          const name = prompt('Key name (e.g. "Production Integration"):');
-          if (!name) return;
-          const res2 = await api.createApiKey(orgId, name);
-          const data = res2.data;
-          if (data?.key) {
-            prompt(`Copy your API key now — it won't be shown again:`, data.key);
-          }
-          renderKeys();
-        });
-      };
-      renderKeys();
-    });
-
-    // Webhooks
-    body.querySelector('#org-webhooks')?.addEventListener('click', async () => {
-      const overlay = createOverlay();
-      const ob = overlay.querySelector('.overlay-body')!;
-      const renderHooks = async () => {
-        const res = await api.listWebhooks(orgId);
-        const hooks = (res.data || []) as Record<string, string>[];
-        ob.replaceChildren(parseHTML(`
-          <h3 style="margin-bottom:var(--sp-3)">Webhooks</h3>
-          <div style="display:grid;gap:var(--sp-2);margin-bottom:var(--sp-3)">
-            ${hooks.map((h: any) => `
-              <div style="display:flex;justify-content:space-between;align-items:center;padding:var(--sp-2);background:var(--bg-tertiary);border-radius:8px">
-                <div>
-                  <div style="font-size:13px;font-weight:600;word-break:break-all">${escHtml(h.url)}</div>
-                  <div style="font-size:11px;color:var(--text-tertiary)">${h.events}</div>
-                </div>
-                <button class="btn-secondary remove-hook" data-hid="${h.id}" style="font-size:12px;color:var(--danger);border-color:var(--danger)">Remove</button>
-              </div>
-            `).join('') || '<p style="color:var(--text-tertiary)">No webhooks registered</p>'}
-          </div>
-          <button class="btn-primary" id="create-webhook" style="width:100%">+ Add Webhook</button>
-        `));
-        ob.querySelectorAll('.remove-hook').forEach(btn => {
-          btn.addEventListener('click', async () => {
-            const hid = (btn as HTMLElement).dataset.hid!;
-            if (confirm('Remove this webhook?')) {
-              await api.deleteWebhook(orgId, hid);
-              showToast('Webhook removed');
-              renderHooks();
-            }
-          });
-        });
-        ob.querySelector('#create-webhook')?.addEventListener('click', async () => {
-          const url2 = prompt('Webhook URL (must start with https://):');
-          if (!url2) return;
-          const res2 = await api.createWebhook(orgId, url2);
-          const data = res2.data;
-          if (data?.signing_secret) {
-            prompt(`Save your signing secret — it won't be shown again:`, data.signing_secret);
-          }
-          renderHooks();
-        });
-      };
-      renderHooks();
-    });
-
-    // Custom Branding
-    body.querySelector('#org-branding')?.addEventListener('click', async () => {
-      const brandOverlay = createOverlay();
-      const ob = brandOverlay.querySelector('.overlay-body')!;
-      const currentColor = org.accent_color || '#c9a84c';
-      const currentLogo = (org as any).logo_url || '';
-      ob.replaceChildren(parseHTML(`
-        <h3 style="margin-bottom:var(--sp-3)">Custom Branding</h3>
-        <div style="display:grid;gap:var(--sp-3)">
-          <div>
-            <label class="setting-label" style="display:block;margin-bottom:4px">Accent Color</label>
-            <div style="display:flex;align-items:center;gap:var(--sp-2)">
-              <input type="color" id="brand-color" value="${escHtml(currentColor)}" style="width:48px;height:36px;border:none;cursor:pointer" />
-              <input class="form-input" id="brand-color-hex" value="${escHtml(currentColor)}" style="width:120px;font-family:monospace" />
-            </div>
-          </div>
-          <div>
-            <label class="setting-label" style="display:block;margin-bottom:4px">Organization Logo</label>
-            ${currentLogo ? `<img src="${escHtml(currentLogo)}" style="max-width:120px;max-height:60px;margin-bottom:8px;border-radius:8px;display:block" />` : ''}
-            <input type="file" id="brand-logo" accept="image/png,image/jpeg,image/svg+xml" />
-            <div style="font-size:11px;color:var(--text-tertiary);margin-top:4px">PNG, JPG or SVG. Max 512KB.</div>
-          </div>
-          <button class="btn-primary" id="brand-save" style="width:100%">Save Branding</button>
-        </div>
-      `));
-      const colorPicker = ob.querySelector('#brand-color') as HTMLInputElement;
-      const hexInput = ob.querySelector('#brand-color-hex') as HTMLInputElement;
-      colorPicker.addEventListener('input', () => { hexInput.value = colorPicker.value; });
-      hexInput.addEventListener('input', () => {
-        if (/^#[0-9a-fA-F]{6}$/.test(hexInput.value)) colorPicker.value = hexInput.value;
-      });
-      ob.querySelector('#brand-save')?.addEventListener('click', async () => {
-        const color = hexInput.value;
-        const fileInput = ob.querySelector('#brand-logo') as HTMLInputElement;
-        let logoUrl = currentLogo;
-        if (fileInput.files?.length) {
-          const file = fileInput.files[0];
-          if (file.size > 512 * 1024) { showToast('Logo must be under 512KB', 'error'); return; }
-          const formData = new FormData();
-          formData.append('file', file);
-          const uploadRes = await api.req<{ url: string }>(`/organizations/${orgId}/logo`, { method: 'POST', body: formData });
-          if (uploadRes.ok) logoUrl = uploadRes.data.url;
-          else { showToast('Logo upload failed', 'error'); return; }
-        }
-        const res = await api.req<void>(`/business/org/${orgId}`, { method: 'PATCH', body: JSON.stringify({ accent_color: color, logo_url: logoUrl }) });
-        if (res.ok) { showToast('Branding updated'); showOrgDashboard(orgId); brandOverlay.remove(); }
-        else showToast('Failed to update branding', 'error');
-      });
-    });
-
-  } catch { showToast('Failed to load organization', 'error'); }
 }
 
 async function loadProfile() {

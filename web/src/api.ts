@@ -297,11 +297,11 @@ export function importMessages(source: string, conversationId: string, messages:
 
 // ── Billing ──
 
-export function createCheckout(type: 'donation' | 'business', amount?: number) {
+export function createCheckout(type: 'donation', amount?: number) {
   return createCryptoCheckout(type, amount);
 }
 
-export function createCryptoCheckout(type: 'donation' | 'business', amount?: number, recurring = false) {
+export function createCryptoCheckout(type: 'donation', amount?: number, recurring = false) {
   return req<{
     id: string;
     checkout_type: string;
@@ -550,8 +550,12 @@ export function getApiBase(): string {
 export async function uploadAvatar(file: File) {
   const headers: Record<string, string> = {};
   if (sessionToken) headers['Authorization'] = `Bearer ${sessionToken}`;
-  headers['Content-Type'] = file.type;
-  const res = await fetch(`${BASE}/me/avatar`, { method: 'POST', headers, body: file });
+
+  // E2E encrypt avatar before upload so the server stores only ciphertext.
+  const { encryptAvatarBlob } = await import('./crypto/profile-crypto.js');
+  const encrypted = await encryptAvatarBlob(await file.arrayBuffer());
+  headers['Content-Type'] = 'application/octet-stream';
+  const res = await fetch(`${BASE}/me/avatar`, { method: 'POST', headers, body: encrypted });
   const data = await res.json();
   return { ok: res.ok, status: res.status, data };
 }
@@ -735,137 +739,6 @@ export function saveContact(contact_id: string, nickname?: string) {
 
 export function removeSavedContact(contactId: string) {
   return req<void>(`/features/contacts/${contactId}`, { method: 'DELETE' });
-}
-
-// ── Business / Organization ──
-
-export interface Organization {
-  id: string;
-  name: string;
-  logo_url: string | null;
-  accent_color: string;
-  role: string;
-  created_at: number;
-}
-
-export interface OrgMember {
-  user_id: string;
-  role: string;
-  joined_at: number;
-  username: string;
-  display_name: string;
-  avatar_url: string | null;
-}
-
-export function getOrganizations() {
-  return req<Organization[]>('/business/org');
-}
-
-export function createOrganization(name: string, accent_color?: string) {
-  return req<{ org_id: string }>('/business/org', {
-    method: 'POST',
-    body: JSON.stringify({ name, accent_color }),
-  });
-}
-
-export function getOrganization(orgId: string) {
-  return req<Organization & { members: OrgMember[] }>(`/business/org/${orgId}`);
-}
-
-export function updateOrganization(orgId: string, data: { name?: string; accent_color?: string }) {
-  return req<void>(`/business/org/${orgId}`, {
-    method: 'PATCH',
-    body: JSON.stringify(data),
-  });
-}
-
-export function addOrgMember(orgId: string, userId: string, role = 'member') {
-  return req<void>(`/business/org/${orgId}/members`, {
-    method: 'POST',
-    body: JSON.stringify({ user_id: userId, role }),
-  });
-}
-
-export function removeOrgMember(orgId: string, userId: string) {
-  return req<void>(`/business/org/${orgId}/members/${userId}`, { method: 'DELETE' });
-}
-
-export function wipeDevice(orgId: string, userId: string, deviceId: string) {
-  return req<void>(`/business/org/${orgId}/wipe`, {
-    method: 'POST',
-    body: JSON.stringify({ user_id: userId, device_id: deviceId }),
-  });
-}
-
-export function getComplianceExport(orgId: string) {
-  return req<Record<string, unknown>>(`/business/org/${orgId}/export`);
-}
-
-export function getRetentionPolicy(orgId: string) {
-  return req<{ max_age_days: number; auto_delete: number }>(`/business/org/${orgId}/retention`);
-}
-
-export function setRetentionPolicy(orgId: string, maxAgeDays: number, autoDelete: boolean) {
-  return req<void>(`/business/org/${orgId}/retention`, {
-    method: 'PUT',
-    body: JSON.stringify({ max_age_days: maxAgeDays, auto_delete: autoDelete ? 1 : 0 }),
-  });
-}
-
-export function bulkAddOrgMembers(orgId: string, users: { username: string; role?: string }[]) {
-  return req<{ added: number; total: number; results: { username: string; status: string }[] }>(`/business/org/${orgId}/members/bulk`, {
-    method: 'POST',
-    body: JSON.stringify({ users }),
-  });
-}
-
-export function getSsoConfig(orgId: string) {
-  return req<{ provider: string; issuer_url: string; client_id: string; redirect_uri: string; enabled: number }>(`/business/org/${orgId}/sso`);
-}
-
-export function setSsoConfig(orgId: string, config: { provider: string; issuer_url: string; client_id: string; client_secret: string; redirect_uri: string; enabled: boolean }) {
-  return req<void>(`/business/org/${orgId}/sso`, {
-    method: 'PUT',
-    body: JSON.stringify(config),
-  });
-}
-
-export function deleteSsoConfig(orgId: string) {
-  return req<void>(`/business/org/${orgId}/sso`, { method: 'DELETE' });
-}
-
-export function searchOrgDirectory(orgId: string, q = '') {
-  return req<unknown[]>(`/business/org/${orgId}/directory?q=${encodeURIComponent(q)}`);
-}
-
-export function listApiKeys(orgId: string) {
-  return req<unknown[]>(`/business/org/${orgId}/api-keys`);
-}
-
-export function createApiKey(orgId: string, name: string) {
-  return req<{ id: string; name: string; key: string; key_prefix: string }>(`/business/org/${orgId}/api-keys`, {
-    method: 'POST',
-    body: JSON.stringify({ name, scopes: ['read', 'write'] }),
-  });
-}
-
-export function revokeApiKey(orgId: string, keyId: string) {
-  return req<{ ok: boolean }>(`/business/org/${orgId}/api-keys/${keyId}`, { method: 'DELETE' });
-}
-
-export function listWebhooks(orgId: string) {
-  return req<unknown[]>(`/business/org/${orgId}/webhooks`);
-}
-
-export function createWebhook(orgId: string, url: string, events?: string[]) {
-  return req<{ id: string; url: string; signing_secret: string }>(`/business/org/${orgId}/webhooks`, {
-    method: 'POST',
-    body: JSON.stringify({ url, events: events || ['message.sent', 'member.added', 'member.removed'] }),
-  });
-}
-
-export function deleteWebhook(orgId: string, hookId: string) {
-  return req<{ ok: boolean }>(`/business/org/${orgId}/webhooks/${hookId}`, { method: 'DELETE' });
 }
 
 // ── Link Previews ──

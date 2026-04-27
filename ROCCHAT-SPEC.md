@@ -52,7 +52,7 @@ RocChat is built on uncompromising ethical foundations. We do not apologize for 
 | File/Media Storage | **Cloudflare R2** | Encrypted media blobs (images, voice messages) — S3-compatible, zero egress fees |
 | Session/Rate Limiting | **Cloudflare KV** | Session tokens, rate limit counters with TTL |
 | Async Jobs | **Cloudflare Queue** | Push notification batching, async processing |
-| Push Notifications | **APNs** (direct, iOS) + **self-hosted ntfy** at `ntfy.roc.family` (Android) + **Web Push** (VAPID) | Zero third-party push services. No FCM. No OneSignal. No Pusher. We run our own push relay. |
+| Push Notifications | **APNs** (direct, iOS) + **self-hosted ntfy** at `ntfy.roc.family` (Android) + **Web Push** (VAPID) | Zero third-party push services. No FCM. No OneSignal. No Pusher. We run our own push relay. Push body is generic "New message" — no sender name, no content leaked to push providers. |
 | Signaling (Calls) | **Durable Objects WebSockets** | E2E-encrypted signaling — call setup messages are encrypted via Double Ratchet before the server sees them |
 
 ### Web Frontend (Cloudflare Pages)
@@ -112,7 +112,7 @@ All Roc apps share a **mythological Roc bird** mascot with a **"Desert Sky"** th
 |---|---|---|
 | RocMail | Wings spread, turquoise feather accent | Envelope/mail motifs |
 | RocPass | Wings spread, shield overlay behind bird | Shield/guardian motifs |
-| **RocChat** | Wings spread, **speech bubble or signal wave overlay** | Chat/communication motifs |
+| **RocChat** | Wings spread, **signal wave overlay** | Chat/communication motifs |
 
 ### Core Color Palette
 
@@ -379,15 +379,6 @@ object RocColors {
 - Animation: gentle breathing pulse (scale 1.0 → 1.02, 3s ease loop)
 - Optional shimmer: subtle light sweep across wings (CSS, 4s interval)
 
-### Business Badge — Crowned Roc with Shield
-
-- Full Roc bird silhouette perched on a shield with a small crown/crest
-- Avatar border ring: 2.5px gradient stroke `#fbbf24` (top) → `#b45309` (bottom)
-- Crown/crest: 3 small feather points above avatar (center 8px tallest, sides 5px angled), gradient `#fde68a → #d97706`
-- Wings: fuller than Premium, 4 visible feather segments per wing, gradient `#fbbf24 → #d97706 → #92400e → #451a03`
-- Shield badge (bottom): gradient `#d97706 → #92400e → #161B22`, contains org initial or small Roc silhouette, 1px `#fbbf24` at 40% border
-- Ambient glow: `#D4AF37` at 22% opacity, 6px spread, slow rotation (8s loop)
-
 ### Donor Badges — Roc Feathers
 
 Custom SVG feather badges (not emoji). Each tier features a unique hand-crafted feather path with gradients:
@@ -411,21 +402,46 @@ Recurring donors get a subtle ∞ loop at feather base. Badge display is togglab
 
 | Data Type | Encryption Method | Key Exchange | Server Sees |
 |---|---|---|---|
-| Text messages | AES-256-GCM | Double Ratchet (per-message keys) | Encrypted blob + size |
+| Text messages (1:1) | AES-256-GCM | Double Ratchet (per-message keys) | Encrypted blob + size |
+| Text messages (group) | AES-256-GCM | Sender Keys (distributed via pairwise DR channels) | Encrypted blob + size |
+| Message edits | AES-256-GCM | Re-encrypted via DR (1:1) or Sender Keys (group) | Encrypted JSON blob |
 | Media/files | AES-256-GCM (random file key, key sent in message) | File key wrapped in message encryption | Encrypted blob in R2 |
-| Voice calls | SRTP (WebRTC DTLS-SRTP) + additional E2E layer | ECDH via signaling channel (encrypted) | Nothing — P2P direct |
-| Video calls | SRTP (WebRTC DTLS-SRTP) + additional E2E layer | ECDH via signaling channel (encrypted) | Nothing — P2P direct |
-| Call signaling | AES-256-GCM (SDP/ICE encrypted before relay) | Double Ratchet (same as messages) | Encrypted signaling blobs |
-| Profile data | AES-256-GCM | Vault key (derived from passphrase) | Encrypted blob |
-| Group metadata | AES-256-GCM | Group key (distributed via pairwise channels) | Encrypted blob |
-| Read receipts | AES-256-GCM | Double Ratchet | Encrypted blob |
-| Typing indicators | Ephemeral, encrypted in WebSocket frame | Session key | Encrypted |
+| File metadata | AES-256-GCM | Vault-derived key (HKDF) | Encrypted filename + MIME in R2 metadata |
+| Voice calls | AES-256-GCM over raw UDP (RocP2P) | HKDF from Double Ratchet session secret | Nothing — P2P direct |
+| Video calls | AES-256-GCM over raw UDP (RocP2P) | HKDF from Double Ratchet session secret | Nothing — P2P direct |
+| Call signaling (1:1) | AES-256-GCM (SDP/ICE encrypted before relay) | Double Ratchet (same as messages) | Encrypted signaling blobs only |
+| Call signaling (group) | AES-256-GCM | Sender Keys (broadcast) or pairwise DR (targeted) | Encrypted signaling blobs only |
+| Profile data (display name, status) | AES-256-GCM | Vault-derived key via HKDF(`vault_key`, `"rocchat:profile:encrypt"`) | Encrypted blob |
+| Profile avatars | AES-256-GCM | Vault-derived key via HKDF(`vault_key`, `"rocchat:avatar:encrypt"`) | Encrypted blob in R2 |
+| Group metadata (names) | AES-256-GCM | Vault-derived key via HKDF(`vault_key`, `"rocchat:profile:encrypt"`) | Encrypted blob |
+| Contact nicknames | AES-256-GCM | Vault-derived key via HKDF(`vault_key`, `"rocchat:profile:encrypt"`) | Encrypted blob |
+| Read receipts | AES-256-GCM | Vault-derived per-conversation key via HKDF | Encrypted blob |
+| Typing indicators | Ephemeral, AES-256-GCM in WebSocket frame | Vault-derived per-conversation key via HKDF | Encrypted |
 | Presence (online/offline) | Encrypted per-contact | Per-contact key | Encrypted |
-| Push notification payload | AES-256-GCM (content-hidden push) | Device push key | "New message" only — no content |
+| Push notification payload | Content-hidden push | N/A | Generic "New message" only — no sender name, no content |
+| Display name at registration | AES-256-GCM | Vault-derived key (HKDF from passphrase) | Encrypted from first registration |
+| Link previews | Configurable: Server / Client-side / Disabled | N/A | Depends on user setting |
+| Reactions (emoji) | AES-256-GCM | Vault-derived key via HKDF(`vault_key`, `"rocchat:profile:encrypt"`) | Encrypted blob |
+| GIFs / rich media (group) | AES-256-GCM | Sender Keys (all groups, regardless of member count) | Encrypted blob |
+| Data exports | AES-256-GCM | PBKDF2-SHA256 (600k iters) from user passphrase | N/A — downloaded locally |
 | Local database (device) | SQLCipher (SQLite) / iOS Data Protection | Derived from passphrase | N/A — on device |
 | Key backup blob | AES-256-GCM | Recovery phrase → HKDF | Encrypted blob |
 
 **The server is a blind relay. It processes nothing, reads nothing, decrypts nothing.**
+
+### Vault Key Architecture
+
+The **vault key** is the root of trust for all non-message encryption (profile, avatars, group names, contact nicknames, metadata signals). It is derived from the user's passphrase via PBKDF2/Argon2id and NEVER leaves the device.
+
+Sub-keys are derived via HKDF-SHA256 with domain-specific `info` strings:
+
+| Sub-key | HKDF Info String | Used For |
+|---|---|---|
+| Profile key | `rocchat:profile:encrypt` | Display name, status text, group names, contact nicknames, file metadata |
+| Avatar key | `rocchat:avatar:encrypt` | Profile photo encryption |
+| Meta key | `rocchat:meta:{conversationId}` | Typing indicators, read receipts, presence signals |
+
+Storage: IndexedDB (Web), Keychain (iOS), EncryptedSharedPreferences (Android).
 
 ### Encryption Primitives
 
@@ -439,7 +455,7 @@ Recurring donors get a subtle ∞ loop at feather base. Badge display is togglab
 | Content Hash | SHA-256 (file integrity) | All platforms natively |
 | Safety Numbers | SHA-512 (truncated, numeric display) | All platforms natively |
 | Message Protocol | Double Ratchet (1:1), Sender Keys (groups) | Custom implementation per platform |
-| Call Encryption | DTLS-SRTP (WebRTC) + E2E signaling | libwebrtc |
+| Call Encryption | AES-256-GCM (RocP2P) + E2E signaling | Custom per platform — no libwebrtc |
 | Local DB | SQLCipher (Android) / Data Protection (iOS) / IndexedDB + AES (Web) | Platform native |
 
 **ZERO third-party crypto libraries. Every primitive uses platform-native implementations.**
@@ -485,29 +501,47 @@ For group chats (more than 2 members):
 
 1. Generate random FILE KEY (256-bit) and FILE IV (96-bit)
 2. Compute FILE HASH = SHA-256(plaintext)
-3. Encrypt: AES-256-GCM(key: FILE KEY, iv: FILE IV, plaintext: raw file bytes)
-4. Upload encrypted file to R2 → get blob_id
-5. Send message via Double Ratchet containing: `{ type: "file", blob_id, file_key, file_iv, file_hash, filename, mime, size }`
-6. Recipient: decrypts message → gets file_key → downloads encrypted blob from R2 → decrypts locally → verifies SHA-256
+3. Encrypt file bytes: AES-256-GCM(key: FILE KEY, iv: FILE IV, plaintext: raw file bytes)
+4. Encrypt filename and MIME type with vault-derived profile key (HKDF) before upload
+5. Upload encrypted file to R2 with encrypted metadata headers → get blob_id
+6. Send message via Double Ratchet containing: `{ type: "file", blob_id, file_key, file_iv, file_hash, filename, mime, size }`
+7. Recipient: decrypts message → gets file_key → downloads encrypted blob from R2 → decrypts locally → verifies SHA-256
+
+**R2 metadata (filename, MIME) is also encrypted** — the server stores only ciphertext in custom metadata fields.
 
 ### What Server Can See (Worst Case — Full Compromise)
 
 | Data | Visible? |
 |---|---|
 | Who sent a message to which conversation ID | Yes (needed for routing) |
-| Message content | No |
-| File content | No |
-| Call audio/video | No (peer-to-peer) |
+| Message content | No (Double Ratchet / Sender Keys) |
+| Message edits | No (re-encrypted before PATCH) |
+| File content | No (AES-256-GCM with random file key) |
+| File names / MIME types | No (encrypted with vault-derived key) |
+| Call audio/video | No (peer-to-peer, HKDF-derived media keys) |
+| Call signaling (SDP/ICE) | No (encrypted via DR/Sender Keys; plaintext fallback removed) |
 | Call metadata (who called whom) | Encrypted signaling — only conversation_id visible |
 | Timestamps (server arrival) | Yes |
 | User IP address | Cloudflare sees for TCP, but NOT logged |
 | Username ↔ UUID mapping | Yes (needed for search) |
+| Display name | No (encrypted at registration with vault-derived key) |
+| Status text | No (encrypted with vault-derived key) |
 | Contact list / who talks to whom | Conversation IDs visible, but membership encrypted |
-| Group names / members | No (encrypted metadata) |
-| Profile photos | No (encrypted in R2) |
-| Read receipts | No |
-| Typing indicators | No (ephemeral + encrypted) |
+| Contact nicknames | No (encrypted with vault-derived key) |
+| Group names / members | No (encrypted metadata with vault-derived key) |
+| Profile photos / avatars | No (encrypted with vault-derived key, stored as ciphertext in R2) |
+| Read receipts | No (encrypted with vault-derived per-conversation key) |
+| Typing indicators | No (ephemeral + encrypted with vault-derived key) |
 | Online status | Encrypted per-contact |
+| Push notification content | No — only generic "New message" shown (no sender name, all platforms) |
+| Link preview URLs | Configurable — "Server" mode: server sees URLs; "Client-side"/"Disabled": server sees nothing (all platforms) |
+| Forwarded messages | No (re-encrypted via DR or Sender Keys before relay) |
+| Imported messages | No (encrypted client-side before upload) |
+| Channel posts | No (encrypted with channel-specific Sender Key; posting refused without key) |
+| Reactions (emoji) | No (encrypted with vault-derived profile key via `encryptProfileField`) |
+| Data exports | No (mandatory passphrase-encrypted AES-256-GCM via PBKDF2) |
+| GIFs / rich media | No (encrypted via DR or Sender Keys, same as text messages) |
+| Presence (online/offline) | User UUID visible to server (architectural routing requirement); status is opaque |
 
 ---
 
@@ -531,9 +565,10 @@ For group chats (more than 2 members):
    - Identity Key Pair (Ed25519)
    - Signed Pre-Key + batch of One-Time Pre-Keys (X25519)
    - Vault key = `HKDF(passphrase, "vault-encryption")` encrypts all private keys
-5. Server stores: `user_id (UUID) | username | auth_hash | salt | encrypted_keys | public_key_bundle | created_at`
+   - Display name encrypted with `HKDF(vaultKey, "rocchat:profile:encrypt")` → AES-256-GCM before sending
+5. Server stores: `user_id (UUID) | username | auth_hash | salt | encrypted_keys | encrypted_display_name | public_key_bundle | created_at`
 
-**Server NEVER sees: passphrase, private keys, plaintext of anything.**
+**Server NEVER sees: passphrase, private keys, display name, plaintext of anything.**
 
 #### Login Flow
 
@@ -578,7 +613,7 @@ RocChat **does not use Google's WebRTC framework, libwebrtc, GoogleWebRTC, or an
 
 #### Layer 1 — Signaling (Call Setup)
 
-Call offers, answers, and ICE candidates flow over the existing chat WebSocket and are double-encrypted (outer TLS + inner Double Ratchet) before the server sees them:
+Call offers, answers, and ICE candidates flow over the **user-inbox WebSocket** (preferred) or the conversation WebSocket and are double-encrypted (outer TLS + inner Double Ratchet) before the server sees them. The user-inbox WebSocket (`/api/ws/user/:userId`) is an always-on per-user connection managed by the `UserInbox` Durable Object; it forwards signaling to the callee's connected devices regardless of which conversation view is open. If the inbox WS is unavailable, the conversation WS is used as a fallback:
 
 ```
 signal_msg = DoubleRatchet.encrypt({
@@ -646,8 +681,8 @@ If ICE gathering fails (e.g., double-NAT, firewall blocks UDP), the client trans
 
 #### Group Calls
 
-- **Mesh topology** (up to ~6 participants): each pair has own DTLS-SRTP channel
-- **SFU mode** (larger groups): SFU relays encrypted frames using insertable streams / SFrame — SFU cannot decrypt media
+- **Mesh topology** (up to ~6 participants): each pair has own AES-256-GCM encrypted channel
+- **SFU mode** (larger groups): SFU relays encrypted frames — SFU cannot decrypt media
 
 ---
 
@@ -705,6 +740,11 @@ Per-user privacy controls:
 | Show online status to | Everyone / My contacts only / Nobody |
 | Show read receipts | On / Off |
 | Show typing indicator | On / Off |
+| Link previews | Server (default) / Client-side (private) / Disabled |
+
+**Link preview modes:** "Server" hides user IP from target sites but the server sees URLs. "Client-side" keeps URLs private from the server but exposes the user's IP to the target site. "Disabled" generates no previews.
+
+**iOS notification actions:** Quick-reply from the lock screen is intentionally omitted because the Notification Service Extension cannot access ratchet state without an App Group keychain. Users must open the app to reply, where full Double Ratchet E2E is used. Available actions: "Open" (foreground) and "Mark as Read".
 
 Per-conversation notification controls:
 
@@ -763,9 +803,25 @@ Card-based layout with `border-radius: var(--radius-xl)`, `border: 1px solid var
 
 **Profile hero**: Gradient top bar (`rgba(212,175,55,0.15) → rgba(64,224,208,0.08)`), avatar in gradient ring (`roc-gold → turquoise`), monospace username, status pill with background. Edit button uses inline SVG pencil (no Lucide dependency).
 
-**Business section**: Clean card with 2-column SVG-checkmark feature grid, monospace pricing, full-width CTA.
-
 **Scrollbar**: `scrollbar-width: thin; scrollbar-color: rgba(212,175,55,0.15) transparent` on all scrollable areas (settings, conversations, messages).
+
+#### Chat UX — Design Spec
+
+**Message grouping**: Consecutive messages from the same sender within 2 minutes form a visual group. Grouped bubbles use tighter vertical spacing (1–2pt), connected corner radii (smaller on the joined edge), and only the last message in a group displays a timestamp. Date separator chips ("Today", "Yesterday", weekday, or full date) inserted between messages from different calendar days.
+
+**Global search behavior**: Selecting a search hit opens the target conversation and scrolls directly to the matched message (with a brief highlight pulse) when a message-level hit is available.
+
+**Bubble radii**: First/solo bubbles use full rounded corners; middle bubbles tighten the connected side to `var(--radius)` (4–6pt); last bubbles restore the tail corner. Mine bubbles tail bottom-left; theirs bubbles tail bottom-right.
+
+**Typing indicator**: Three animated dots (gold, 6px circles) with staggered `scale` animation (1.4s ease-in-out). Displayed in the chat header or inline depending on platform.
+
+**Read receipts**: Single check (sent/delivered), double check (read). Read state tinted with `#4FC3F7` (web) or turquoise (native). iOS/Android use text glyphs; web uses Unicode with semantic class.
+
+**Reactions**: Encrypted emoji reactions displayed in a chip row below the bubble. Profile-key encrypted (`encryptProfileField`), decrypted on receive via `decryptProfileField`.
+
+**Link previews**: Configurable (Server / Client-side / Disabled). Card layout with thumbnail, title, description, and domain. Loading state shows shimmer skeleton (Android) or placeholder (web/iOS).
+
+**Accessibility (web)**: Viewport allows zoom up to 5x. Toast roles per-toast (`alert`/`assertive` for errors). Single `⌘K` owner (command palette). Proper ARIA roles on navigation. `prefers-reduced-motion` and `prefers-contrast` respected.
 
 ### 9.4 True Multi-Device E2E
 
@@ -812,7 +868,7 @@ Same account, same passphrase, instant sync, full E2E encryption. No phone neede
 
 ### The Minimalism Manifesto
 
-RocChat is NOT: a social network, a content platform, a marketplace, an AI assistant, a business tool, an ad platform.
+RocChat is NOT: a social network, a content platform, a marketplace, an AI assistant, an ad platform.
 
 RocChat IS: Messages, Calls, Groups, Encrypted, Private, Beautiful, Fast.
 
@@ -859,30 +915,6 @@ Everything in Free, plus:
 ⭐ Email support (48h response)
 ```
 
-### RocChat Business — $3.99/user/month (min 5 users)
-
-Volume discounts: 5-25 users $3.99, 26-100 $2.99, 101-500 $1.99, 500+ custom.
-
-```
-Everything in Premium, plus:
-🏢 Admin dashboard (manage users, permissions, devices)
-🏢 Groups up to 5,000 members
-🏢 Group video calls up to 50 participants
-🏢 500 GB shared media storage (pooled)
-🏢 Unlimited devices per user
-🏢 Organization directory (internal user lookup)
-🏢 Role-based access (admin, moderator, member)
-🏢 User provisioning (admin invites, bulk onboard)
-🏢 Remote device wipe
-🏢 Compliance export (encrypted audit logs)
-🏢 Message retention policies
-🏢 Custom branding (org logo, color accent)
-🏢 Crowned Roc with Shield badge
-🏢 Priority support (24h response SLA)
-🏢 SSO integration (SAML/OIDC)
-🏢 API access (webhooks for integration)
-```
-
 ### Donations
 
 In-app (Settings → Support RocChat):
@@ -902,7 +934,7 @@ Payment methods: Cryptocurrency only (BTC, ETH, XMR). No corporate payment proce
 
 Monthly transparency report published with aggregate revenue and infrastructure costs.
 
-### Rule: Encryption and privacy are NEVER paywalled. Free users get the same encryption as Business users. Always.
+### Rule: Encryption and privacy are NEVER paywalled. Free users get the same encryption as Premium users. Always.
 
 ---
 
@@ -959,7 +991,7 @@ RocChat/
 │   │   ├── messages.ts        # Store/retrieve encrypted messages
 │   │   ├── keys.ts            # Public key bundle management (X3DH)
 │   │   ├── contacts.ts        # Discovery, QR, username search
-│   │   ├── signaling.ts       # WebRTC signaling for calls
+│   │   ├── signaling.ts       # RocP2P signaling for calls
 │   │   ├── media.ts           # R2 upload/download encrypted media
 │   │   ├── rate-limit.ts      # KV-based rate limiting
 │   │   └── durable-objects/
@@ -991,7 +1023,7 @@ RocChat/
 │       ├── RocChatApp.swift
 │       ├── Crypto/            # CryptoKit implementation of protocol
 │       ├── Chat/
-│       ├── Calls/             # WebRTC integration
+│       ├── Calls/             # RocP2P voice & video
 │       ├── Auth/
 │       └── Assets.xcassets/   # Roc-family design assets
 │
@@ -1000,7 +1032,7 @@ RocChat/
         ├── kotlin/.../rocchat/
         │   ├── crypto/        # javax.crypto implementation
         │   ├── chat/
-        │   ├── calls/         # WebRTC integration
+        │   ├── calls/         # RocP2P voice & video
         │   ├── auth/
         │   └── ui/            # Jetpack Compose screens
         └── res/               # Roc-family design assets

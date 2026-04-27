@@ -71,11 +71,16 @@ async function removePushToken(env: Env, session: Session): Promise<Response> {
 /**
  * Send push notification to all devices of a user (called from message handler).
  * This is a best-effort delivery — failures are logged but don't block message storage.
+ *
+ * E2E privacy: push body is intentionally generic ("New message") so that
+ * no plaintext content or sender identity leaks to APNs / ntfy / Web Push
+ * infrastructure. Clients that want rich notifications should use a
+ * Notification Service Extension with local ratchet state.
  */
 export async function sendPushNotification(
   env: Env,
   recipientUserId: string,
-  senderName: string,
+  _senderName?: string,
   senderUserId?: string,
   msgPriority?: string,
 ): Promise<void> {
@@ -122,7 +127,7 @@ export async function sendPushNotification(
   if (!devices.results?.length) return;
 
   const title = 'RocChat';
-  const body = `New message from ${senderName}`;
+  const body = 'New message';
   const promises = devices.results.map(async (device) => {
     try {
       await dispatchPush(env, device, title, body);

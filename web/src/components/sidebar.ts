@@ -69,7 +69,7 @@ export function renderSidebar(
     profileContent = `<span class="sidebar-avatar-fallback">${initials}</span>`;
   }
   container.replaceChildren(parseHTML(`
-    <nav class="sidebar" role="navigation" aria-label="Main navigation" role="tablist">
+    <nav class="sidebar" role="navigation" aria-label="Main navigation">
       <div class="sidebar-logo" title="RocChat">
         ${SIDEBAR_BIRD}
       </div>

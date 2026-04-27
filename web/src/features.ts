@@ -222,16 +222,18 @@ async function forwardTo(targetConversationId: string, plaintext: string, _origi
         ratchet_header: JSON.stringify(header),
         message_type: 'text',
       });
-    } else {
-      // Fallback — group send with plaintext in ciphertext field (already the
-      // legacy path for groups in chat.ts).
+    } else if (conv.type === 'group') {
+      const { groupEncrypt } = await import('./crypto/group-session.js');
+      const groupEnc = await groupEncrypt(targetConversationId, conv.members, body);
       await api.sendMessage({
         conversation_id: targetConversationId,
-        ciphertext: body,
-        iv: '',
-        ratchet_header: '',
+        ciphertext: groupEnc.ciphertext,
+        iv: groupEnc.iv,
+        ratchet_header: groupEnc.ratchet_header,
         message_type: 'text',
       });
+    } else {
+      throw new Error('No encryption session available');
     }
     toast('Forwarded', 'success');
   } catch {
@@ -286,10 +288,21 @@ export function openGlobalSearch(): void {
     results.querySelectorAll('.rc-search-hit').forEach((el) => {
       el.addEventListener('click', () => {
         const cid = (el as HTMLElement).dataset.conv!;
+        const msgId = (el as HTMLElement).dataset.msg;
         dialog.remove();
         // Open conversation by simulating a click on its list item.
         const li = document.querySelector(`[data-conversation-id="${cid}"]`) as HTMLElement | null;
         li?.click();
+        if (msgId) {
+          // Wait a tick for conversation render, then jump to the exact hit.
+          setTimeout(() => {
+            const msgEl = document.querySelector(`[data-msg-id="${msgId}"]`) as HTMLElement | null;
+            if (!msgEl) return;
+            msgEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            msgEl.classList.add('message-highlight');
+            setTimeout(() => msgEl.classList.remove('message-highlight'), 1800);
+          }, 120);
+        }
       });
     });
   });

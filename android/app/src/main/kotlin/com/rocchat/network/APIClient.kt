@@ -245,11 +245,11 @@ object APIClient {
         return post("/messages/send", body)
     }
 
-    suspend fun createConversation(type: String, memberIds: List<String>, name: String? = null): String {
+    suspend fun createConversation(type: String, memberIds: List<String>, encryptedMeta: String? = null): String {
         val body = JSONObject().apply {
             put("type", type)
             put("member_ids", JSONArray(memberIds))
-            if (name != null) put("name", name)
+            if (encryptedMeta != null) put("encrypted_meta", encryptedMeta)
         }
         val json = post("/messages/conversations", body)
         return json.getString("conversation_id")
@@ -305,11 +305,11 @@ object APIClient {
 
     // ── HTTP Helpers ──
 
-    suspend fun uploadAvatar(data: ByteArray): JSONObject = withContext(Dispatchers.IO) {
+    suspend fun uploadAvatar(data: ByteArray, contentType: String = "image/jpeg"): JSONObject = withContext(Dispatchers.IO) {
         val conn = (URL("$BASE_URL/me/avatar").openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
             sessionToken?.let { setRequestProperty("Authorization", "Bearer $it") }
-            setRequestProperty("Content-Type", "image/jpeg")
+            setRequestProperty("Content-Type", contentType)
             doOutput = true
             connectTimeout = 30_000
             readTimeout = 30_000

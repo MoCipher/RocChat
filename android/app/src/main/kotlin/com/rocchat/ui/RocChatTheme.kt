@@ -5,6 +5,9 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.sp
 
 private val LightColorScheme = lightColorScheme(
     primary = RocColors.RocGold,
@@ -14,6 +17,7 @@ private val LightColorScheme = lightColorScheme(
     surface = RocColors.BgCard,
     onBackground = RocColors.TextPrimary,
     onSurface = RocColors.TextPrimary,
+    onSurfaceVariant = RocColors.TextSecondary,
     error = RocColors.Danger,
 )
 
@@ -25,15 +29,28 @@ private val DarkColorScheme = darkColorScheme(
     surface = RocColors.DarkBgCard,
     onBackground = RocColors.DarkText,
     onSurface = RocColors.DarkText,
+    onSurfaceVariant = RocColors.DarkTextSec,
     error = RocColors.Danger,
+)
+
+private val RocTypography = Typography(
+    headlineLarge = TextStyle(fontWeight = FontWeight.Bold, fontSize = 28.sp),
+    headlineMedium = TextStyle(fontWeight = FontWeight.Bold, fontSize = 24.sp),
+    headlineSmall = TextStyle(fontWeight = FontWeight.SemiBold, fontSize = 20.sp),
+    titleLarge = TextStyle(fontWeight = FontWeight.Bold, fontSize = 22.sp),
+    titleMedium = TextStyle(fontWeight = FontWeight.SemiBold, fontSize = 17.sp),
+    titleSmall = TextStyle(fontWeight = FontWeight.SemiBold, fontSize = 15.sp),
+    bodyLarge = TextStyle(fontSize = 15.sp),
+    bodyMedium = TextStyle(fontSize = 14.sp),
+    bodySmall = TextStyle(fontSize = 12.sp),
+    labelLarge = TextStyle(fontWeight = FontWeight.Medium, fontSize = 14.sp),
+    labelMedium = TextStyle(fontWeight = FontWeight.Medium, fontSize = 12.sp),
+    labelSmall = TextStyle(fontSize = 11.sp),
 )
 
 @Composable
 fun RocChatTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
-    // Material You: pull dynamic colors from the user's wallpaper on
-    // Android 12+. Falls back to the brand-locked palette on older devices
-    // and when explicitly disabled (e.g. accessibility / brand-strict mode).
     dynamicColor: Boolean = true,
     content: @Composable () -> Unit
 ) {
@@ -48,6 +65,7 @@ fun RocChatTheme(
 
     MaterialTheme(
         colorScheme = colorScheme,
+        typography = RocTypography,
         content = content
     )
 }

@@ -8,6 +8,7 @@ struct RocChatApp: App {
     @Environment(\.scenePhase) var scenePhase
     @State private var isObscured = false
     @State private var showSplash = true
+    @State private var inboxListenerRegistered = false
 
     var body: some Scene {
         WindowGroup {
@@ -22,9 +23,9 @@ struct RocChatApp: App {
                             .onAppear {
                                 requestPushNotifications()
                                 Task { await KeyRotationManager.shared.performMaintenance() }
-                                // Open the always-on user-inbox WS so calls
-                                // reach us no matter which conversation is open.
                                 InboxWebSocket.shared.connect()
+                                guard !inboxListenerRegistered else { return }
+                                inboxListenerRegistered = true
                                 InboxWebSocket.shared.addListener { type, payload in
                                     Task { @MainActor in
                                         let cm = CallManager.shared
@@ -113,19 +114,16 @@ struct RocChatApp: App {
         }
     }
 
-    /// Inline reply + mark-as-read action shown on lock screen / banner.
-    /// Replies are best-effort: the action lands in `userNotificationCenter(_:didReceive:)`
-    /// where we POST the plaintext to `/messages` so server-side ratchet
-    /// encryption + relay happens. End-to-end encryption from the lock
-    /// screen would require a Notification Service Extension with a
-    /// shared App Group keychain — tracked separately.
+    /// Notification actions shown on lock screen / banner.
+    /// Quick-reply is intentionally omitted because it would bypass E2E
+    /// encryption (the notification action handler cannot access ratchet
+    /// state without a Notification Service Extension + App Group keychain).
+    /// Users must open the app to reply, where full Double Ratchet E2E is used.
     private func registerNotificationCategories(on center: UNUserNotificationCenter) {
-        let reply = UNTextInputNotificationAction(
-            identifier: "REPLY_ACTION",
-            title: "Reply",
-            options: [],
-            textInputButtonTitle: "Send",
-            textInputPlaceholder: "Message"
+        let openChat = UNNotificationAction(
+            identifier: "OPEN_CHAT_ACTION",
+            title: "Open",
+            options: [.foreground]
         )
         let markRead = UNNotificationAction(
             identifier: "MARK_READ_ACTION",
@@ -134,7 +132,7 @@ struct RocChatApp: App {
         )
         let category = UNNotificationCategory(
             identifier: "MESSAGE_CATEGORY",
-            actions: [reply, markRead],
+            actions: [openChat, markRead],
             intentIdentifiers: [],
             options: [.customDismissAction]
         )
@@ -216,8 +214,8 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
         completionHandler([.banner, .sound, .badge, .list])
     }
 
-    /// Quick-reply / mark-as-read action dispatch. The push payload is
-    /// expected to include `conversation_id` (set by the backend).
+    /// Notification action dispatch. Quick-reply is intentionally removed
+    /// to prevent sending plaintext that bypasses E2E encryption.
     func userNotificationCenter(_ center: UNUserNotificationCenter,
                                 didReceive response: UNNotificationResponse,
                                 withCompletionHandler completionHandler: @escaping () -> Void) {
@@ -225,21 +223,6 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
         let conversationId = (info["conversation_id"] as? String) ?? (info["conversationId"] as? String) ?? ""
 
         switch response.actionIdentifier {
-        case "REPLY_ACTION":
-            if let textResponse = response as? UNTextInputNotificationResponse,
-               !conversationId.isEmpty {
-                let body = textResponse.userText
-                Task {
-                    // Server-side ratchet send. End-to-end encrypted reply
-                    // from a Notification Service Extension is tracked
-                    // separately — requires App Group keychain sharing.
-                    _ = try? await APIClient.shared.postRaw("/messages", body: [
-                        "conversation_id": conversationId,
-                        "body": body,
-                        "client_message_id": UUID().uuidString
-                    ])
-                }
-            }
         case "MARK_READ_ACTION":
             if !conversationId.isEmpty {
                 Task {

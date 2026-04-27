@@ -303,6 +303,7 @@ function initAfterUnlock() {
   registerPaletteCommand({ id: 'tab.calls',    label: 'Go to Calls',    shortcut: '⌘2', action: () => { currentTab = 'calls';    renderApp(); } });
   registerPaletteCommand({ id: 'tab.channels', label: 'Go to Channels', shortcut: '⌘3', action: () => { currentTab = 'channels'; renderApp(); } });
   registerPaletteCommand({ id: 'tab.settings', label: 'Go to Settings', shortcut: '⌘,', action: () => { currentTab = 'settings'; renderApp(); } });
+  registerPaletteCommand({ id: 'search.global', label: 'Search conversations & messages', shortcut: '⌘K', action: async () => { const { openGlobalSearch } = await import('./features.js'); openGlobalSearch(); } });
   registerPaletteCommand({ id: 'app.roc-bird', label: 'View Roc Bird Status', action: () => { location.hash = '#/roc-bird'; location.reload(); } });
   registerPaletteCommand({ id: 'app.transparency', label: 'View Transparency Reports', action: () => { location.hash = '#/transparency'; location.reload(); } });
   registerPaletteCommand({ id: 'app.status',   label: 'Open Status Page', action: () => { window.open('/status.html', '_blank', 'noopener,noreferrer'); } });

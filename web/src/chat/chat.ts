@@ -11,7 +11,7 @@ import { showToast } from '../components/toast.js';
 import { encryptMessage, decryptMessage, getOrCreateSession } from '../crypto/session-manager.js';
 import { groupEncrypt, groupDecrypt, isGroupEncrypted, handleSenderKeyDistribution } from '../crypto/group-session-manager.js';
 import { maybeRotateSignedPreKey } from '../crypto/client-crypto.js';
-import { encryptGroupMeta, decryptGroupMeta, decryptProfileField } from '../crypto/profile-crypto.js';
+import { encryptProfileField, encryptGroupMeta, decryptGroupMeta, decryptProfileField } from '../crypto/profile-crypto.js';
 import type { EncryptedMessage } from '@rocchat/shared';
 import { generateSafetyNumber, fromBase64, toBase64, randomBytes, sha256 as cryptoSha256 } from '@rocchat/shared';
 import { initEmojiPicker } from './emoji-picker.js';
@@ -29,16 +29,34 @@ import {
 } from '../features.js';
 
 // ── Lightweight AES-GCM for metadata signals (typing, presence, read receipts) ──
-// Uses a per-conversation key derived from HKDF(identityKey + conversationId)
+// Uses a per-conversation key derived from HKDF(vaultKey, conversationId).
+// Falls back to legacy identity-pub-based derivation for backward compat.
 const metaKeyCache = new Map<string, CryptoKey>();
 
 async function getMetaKey(conversationId: string): Promise<CryptoKey> {
   const cached = metaKeyCache.get(conversationId);
   if (cached) return cached;
-  const idKey = localStorage.getItem('rocchat_identity_pub') || conversationId;
-  const raw = new TextEncoder().encode(idKey + ':meta:' + conversationId);
-  const hash = await crypto.subtle.digest('SHA-256', raw);
-  const key = await crypto.subtle.importKey('raw', hash, 'AES-GCM', false, ['encrypt', 'decrypt']);
+  let key: CryptoKey;
+  const { getSecretString } = await import('./crypto/secure-store.js');
+  const vkB64 = await getSecretString('rocchat_vault_key');
+  if (vkB64) {
+    const vkBin = atob(vkB64);
+    const vkBytes = new Uint8Array(vkBin.length);
+    for (let i = 0; i < vkBin.length; i++) vkBytes[i] = vkBin.charCodeAt(i);
+    const baseKey = await crypto.subtle.importKey('raw', vkBytes, 'HKDF', false, ['deriveKey']);
+    key = await crypto.subtle.deriveKey(
+      { name: 'HKDF', hash: 'SHA-256', salt: new Uint8Array(0), info: new TextEncoder().encode('rocchat:meta:' + conversationId) },
+      baseKey,
+      { name: 'AES-GCM', length: 256 },
+      false,
+      ['encrypt', 'decrypt'],
+    );
+  } else {
+    const idKey = localStorage.getItem('rocchat_identity_pub') || conversationId;
+    const raw = new TextEncoder().encode(idKey + ':meta:' + conversationId);
+    const hash = await crypto.subtle.digest('SHA-256', raw);
+    key = await crypto.subtle.importKey('raw', hash, 'AES-GCM', false, ['encrypt', 'decrypt']);
+  }
   metaKeyCache.set(conversationId, key);
   return key;
 }
@@ -349,7 +367,7 @@ export async function renderChats(container: HTMLElement) {
       <div class="panel-header">
         <div class="panel-header-top">
           <h2>Chats</h2>
-          <button class="icon-btn" id="global-search-btn" title="Search (⌘/Ctrl+K)" aria-label="Search">
+          <button class="icon-btn" id="global-search-btn" title="Search" aria-label="Search">
             <i data-lucide="search" style="width:18px;height:18px"></i>
           </button>
           <button class="icon-btn" id="new-chat-btn" title="New conversation" aria-label="New conversation">
@@ -415,16 +433,6 @@ export async function renderChats(container: HTMLElement) {
 
   // Global search button
   container.querySelector('#global-search-btn')?.addEventListener('click', () => openGlobalSearch());
-  // Keyboard shortcut Cmd/Ctrl+K
-  if (!(window as any).__rcSearchShortcut) {
-    (window as any).__rcSearchShortcut = true;
-    document.addEventListener('keydown', (e) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
-        e.preventDefault();
-        openGlobalSearch();
-      }
-    });
-  }
 
   // Search filter (debounced)
   let searchTimeout: ReturnType<typeof setTimeout>;
@@ -1136,12 +1144,47 @@ function renderMessages(messages: Message[]) {
 
   let prevChild: Element | null = area.querySelector('.encryption-banner');
 
-  visible.forEach((msg) => {
+  // Remove stale date separators before re-rendering
+  area.querySelectorAll('.date-separator').forEach(el => el.remove());
+
+  let lastDateLabel = '';
+  let lastSenderId = '';
+  let lastTimestamp = 0;
+
+  visible.forEach((msg, idx) => {
     const isMine = msg.sender_id === userId;
+
+    // ── Date separator ──
+    const msgDate = new Date(msg.created_at);
+    const dateLabel = formatDateLabel(msgDate);
+    if (dateLabel !== lastDateLabel) {
+      lastDateLabel = dateLabel;
+      lastSenderId = '';
+      const dateSep = document.createElement('div');
+      dateSep.className = 'date-separator';
+      dateSep.setAttribute('role', 'separator');
+      dateSep.textContent = dateLabel;
+      if (prevChild) prevChild.after(dateSep); else area.prepend(dateSep);
+      prevChild = dateSep;
+    }
+
+    // ── Message grouping ──
+    const msgTs = msgDate.getTime();
+    const sameGroup = msg.sender_id === lastSenderId && (msgTs - lastTimestamp) < 120_000;
+    const nextMsg = visible[idx + 1];
+    const nextSameGroup = nextMsg && nextMsg.sender_id === msg.sender_id &&
+      new Date(nextMsg.created_at).getTime() - msgTs < 120_000;
+
+    lastSenderId = msg.sender_id;
+    lastTimestamp = msgTs;
 
     // If this message row already exists, skip recreation — just ensure order
     const existing = existingNodes.get(msg.id);
     if (existing) {
+      existing.classList.toggle('group-first', !sameGroup);
+      existing.classList.toggle('group-middle', sameGroup && !!nextSameGroup);
+      existing.classList.toggle('group-last', sameGroup && !nextSameGroup);
+      existing.classList.toggle('group-solo', !sameGroup && !nextSameGroup);
       // Update status icon (delivery/read receipts may have changed)
       const metaEl = existing.querySelector('.message-meta');
       if (metaEl && isMine) {
@@ -1183,7 +1226,8 @@ function renderMessages(messages: Message[]) {
       return;
     }
 
-    div.className = `message-row ${isMine ? 'mine' : 'theirs'}`;
+    const groupClass = !sameGroup && !nextSameGroup ? 'group-solo' : !sameGroup ? 'group-first' : nextSameGroup ? 'group-middle' : 'group-last';
+    div.className = `message-row ${isMine ? 'mine' : 'theirs'} ${groupClass}`;
     div.setAttribute('role', 'article');
     div.setAttribute('aria-label', `${isMine ? 'You' : 'Message'} at ${formatTime(msg.created_at)}`);
 
@@ -1396,8 +1440,8 @@ async function sendMessageHandler() {
         reply_to: replyTo,
         priority: msgPriority !== 'normal' ? msgPriority : undefined,
       };
-    } else if (conv?.type === 'group' && conv.members.length > 2) {
-      // Group encryption with Sender Keys
+    } else if (conv?.type === 'group') {
+      // Group encryption with Sender Keys (any group, including 2-member)
       const groupEnc = await groupEncrypt(state.activeConversationId, conv.members, text);
       payload = {
         conversation_id: state.activeConversationId,
@@ -1411,17 +1455,9 @@ async function sendMessageHandler() {
         priority: msgPriority !== 'normal' ? msgPriority : undefined,
       };
     } else {
-      // Fallback for group or unknown
-      payload = {
-        conversation_id: state.activeConversationId,
-        ciphertext: text,
-        iv: '',
-        ratchet_header: '',
-        message_nonce: messageNonce,
-        expires_in: expiresIn,
-        reply_to: replyTo,
-        priority: msgPriority !== 'normal' ? msgPriority : undefined,
-      };
+      // No valid encryption path available — refuse to send plaintext
+      console.error('Cannot send: no encryption session available for this conversation');
+      return;
     }
 
     // Optimistic: add message to local view
@@ -1474,16 +1510,17 @@ async function sendGifMessage(conversationId: string, gifUrl: string, previewUrl
 
   try {
     let payload: Parameters<typeof api.sendMessage>[0];
-    if (recipientUserId) {
+    if (conv?.type === 'group') {
+      const groupEnc = await groupEncrypt(conversationId, conv.members, gifPayload);
+      payload = { conversation_id: conversationId, ciphertext: groupEnc.ciphertext, iv: groupEnc.iv, ratchet_header: groupEnc.ratchet_header, message_type: 'gif' };
+    } else if (recipientUserId) {
       const encrypted = await encryptMessage(conversationId, recipientUserId, gifPayload);
       const enc = encrypted as unknown as Record<string, unknown>;
       const headerObj = enc.x3dh ? { ...encrypted.header, x3dh: enc.x3dh } : encrypted.header;
       payload = { conversation_id: conversationId, ciphertext: encrypted.ciphertext, iv: encrypted.iv, ratchet_header: JSON.stringify(headerObj), message_type: 'gif' };
-    } else if (conv?.type === 'group' && conv.members.length > 2) {
-      const groupEnc = await groupEncrypt(conversationId, conv.members, gifPayload);
-      payload = { conversation_id: conversationId, ciphertext: groupEnc.ciphertext, iv: groupEnc.iv, ratchet_header: groupEnc.ratchet_header, message_type: 'gif' };
     } else {
-      payload = { conversation_id: conversationId, ciphertext: gifPayload, iv: '', ratchet_header: '', message_type: 'gif' };
+      showToast('Cannot send: no encryption session', 'error');
+      return;
     }
 
     // Optimistic local add
@@ -1652,7 +1689,6 @@ async function connectWebSocket(conversationId: string) {
           case 'typing': {
             const typingEl = document.querySelector('.chat-header-status');
             if (typingEl) {
-              // Decrypt encrypted typing indicator
               const enc = data.payload.e as string | undefined;
               if (enc) {
                 decryptMeta(conversationId, enc).then(meta => {
@@ -1663,13 +1699,8 @@ async function connectWebSocket(conversationId: string) {
                     }, 3000);
                   }
                 }).catch(() => {});
-              } else if (data.payload.isTyping) {
-                // Fallback for unencrypted (backward compat)
-                typingEl.replaceChildren(parseHTML(`<span class="typing-indicator"><span></span><span></span><span></span></span> typing...`));
-                setTimeout(() => {
-                  if (typingEl) typingEl.replaceChildren(parseHTML(`<span style="font-size:8px">🔒</span> End-to-end encrypted`));
-                }, 3000);
               }
+              // Unencrypted typing indicators are silently dropped
             }
             break;
           }
@@ -1695,7 +1726,6 @@ async function connectWebSocket(conversationId: string) {
           }
 
           case 'read_receipt': {
-            // Decrypt and mark messages as read
             const enc = data.payload.e as string | undefined;
             const applyReceipts = (ids: string[]) => {
               ids.forEach((id: string) => {
@@ -1709,10 +1739,8 @@ async function connectWebSocket(conversationId: string) {
                 const ids = meta.messageIds as string[] | undefined;
                 if (ids) applyReceipts(ids);
               }).catch(() => {});
-            } else {
-              const msgIds = data.payload.messageIds as string[] | undefined;
-              if (msgIds) applyReceipts(msgIds);
             }
+            // Unencrypted read receipts are silently dropped
             break;
           }
 
@@ -1796,16 +1824,33 @@ async function connectWebSocket(conversationId: string) {
 
           case 'reaction': {
             const { message_id, user_id, encrypted_reaction } = data.payload;
-            updateReactionUI(message_id, user_id, encrypted_reaction);
+            let reactionEmoji = encrypted_reaction;
+            if (encrypted_reaction && user_id !== localStorage.getItem('rocchat_user_id')) {
+              try { reactionEmoji = await decryptProfileField(encrypted_reaction); } catch { reactionEmoji = encrypted_reaction; }
+            }
+            updateReactionUI(message_id, user_id, reactionEmoji);
             break;
           }
 
           case 'message_edit': {
-            const { message_id, encrypted } = data.payload;
+            const { message_id, encrypted, sender_id: editSenderId } = data.payload;
             const editMsgs = state.messages.get(conversationId);
             const editMsg = editMsgs?.find(m => m.id === message_id);
             if (editMsg) {
-              editMsg.ciphertext = encrypted;
+              let editDisplay = '[Unable to decrypt]';
+              try {
+                const encObj = typeof encrypted === 'string' ? JSON.parse(encrypted) : encrypted;
+                const rh = encObj.ratchet_header || '';
+                if (isGroupEncrypted(typeof rh === 'string' ? rh : JSON.stringify(rh))) {
+                  editDisplay = await groupDecrypt(conversationId, editSenderId || editMsg.sender_id, encObj.ciphertext, typeof rh === 'string' ? rh : JSON.stringify(rh));
+                } else if (encObj.iv && rh) {
+                  const hdr = typeof rh === 'string' ? JSON.parse(rh) : rh;
+                  editDisplay = await decryptMessage(conversationId, { header: hdr, ciphertext: encObj.ciphertext, iv: encObj.iv, tag: encObj.tag || hdr.tag || '' });
+                }
+              } catch {
+                editDisplay = '[Unable to decrypt]';
+              }
+              editMsg.ciphertext = editDisplay;
               editMsg.edited_at = Date.now();
               renderMessages(editMsgs!);
             }
@@ -1972,13 +2017,10 @@ function showNewChatDialog(container: HTMLElement) {
   createGroupBtn.addEventListener('click', async () => {
     if (selectedMembers.length < 1) return;
     const groupName = (overlay.querySelector('#group-name-input') as HTMLInputElement).value.trim() || 'Group';
-    // Generate a temporary conversation ID for key derivation, then use it
-    const tempId = crypto.randomUUID();
-    const encMeta = await encryptGroupMeta(tempId, { name: groupName });
+    const encMeta = await encryptProfileField(groupName);
     const convRes = await api.createConversation({
       type: 'group',
       member_ids: selectedMembers.map(m => m.userId),
-      name: groupName,
       encrypted_meta: encMeta,
     });
     if (convRes.ok) {
@@ -2114,10 +2156,6 @@ function renderTierBadge(accountTier?: string): string {
     // Golden Roc Wings — pair of small gold wings wrapping bottom of avatar
     return `<span class="tier-badge premium-wings" style="position:absolute;bottom:-4px;left:50%;transform:translateX(-50%);font-size:14px;filter:drop-shadow(0 0 4px rgba(212,175,55,0.4));animation:wingPulse 3s ease-in-out infinite" title="Premium">\u{1F985}</span>`;
   }
-  if (accountTier === 'business') {
-    // Crowned Roc with Shield — shield + crown
-    return `<span class="tier-badge business-badge" style="position:absolute;top:-6px;left:50%;transform:translateX(-50%);font-size:11px;filter:drop-shadow(0 0 4px rgba(212,175,55,0.5));animation:wingPulse 3s ease-in-out infinite" title="Business">\u{1F451}</span>`;
-  }
   return '';
 }
 
@@ -2126,7 +2164,7 @@ function renderAvatar(name: string, avatarUrl?: string, userId?: string, size = 
   const initials = name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
   const badge = renderDonorBadge(userId);
   const tierBadge = renderTierBadge(accountTier);
-  const borderStyle = accountTier === 'premium' ? 'border:2px solid #D4AF37;' : accountTier === 'business' ? 'border:2.5px solid #D4AF37;' : '';
+  const borderStyle = accountTier === 'premium' ? 'border:2px solid #D4AF37;' : '';
   const isOnline = userId ? onlineUsers.has(userId) : false;
   const presenceDot = userId ? `<span class="presence-dot${isOnline ? ' online' : ''}" data-uid="${userId}"></span>` : '';
   if (avatarUrl && userId) {
@@ -2743,6 +2781,17 @@ function formatTime(iso: string): string {
   if (diff < 86400_000) return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   if (diff < 604800_000) return d.toLocaleDateString([], { weekday: 'short' });
   return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+}
+
+function formatDateLabel(d: Date): string {
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const msgDay = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  const diff = today.getTime() - msgDay.getTime();
+  if (diff === 0) return 'Today';
+  if (diff === 86400_000) return 'Yesterday';
+  if (diff < 604800_000) return d.toLocaleDateString([], { weekday: 'long' });
+  return d.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
 }
 
 function tryParseGif(text: string): { type: string; url: string; preview?: string; width?: number; height?: number } | null {
@@ -3427,8 +3476,8 @@ function showFileUpload(conversationId: string, initialFile?: File) {
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
           'Content-Type': 'application/octet-stream',
           'x-conversation-id': conversationId,
-          'x-encrypted-filename': file.name,
-          'x-encrypted-mimetype': sniffedMime,
+          'x-encrypted-filename': await encryptProfileField(file.name),
+          'x-encrypted-mimetype': await encryptProfileField(sniffedMime),
         },
         body: new Uint8Array(encrypted),
       });
@@ -3998,13 +4047,8 @@ function showMessageContextMenu(e: MouseEvent, msgId: string, isMine: boolean, c
 
 async function reactToMsg(msgId: string, conversationId: string, emoji: string) {
   try {
-    // Encrypt the reaction emoji
-    const conv = state.conversations.find(c => c.id === conversationId);
-    const recipientId = (conv as any)?.members?.find((m: any) => m.user_id !== localStorage.getItem('rocchat_user_id'))?.user_id || '';
-    const session = await getOrCreateSession(conversationId, recipientId);
-    const encrypted = await encryptMessage(conversationId, recipientId, emoji);
-    await api.addReaction(msgId, encrypted.ciphertext);
-    // Optimistic UI
+    const encryptedReaction = await encryptProfileField(emoji);
+    await api.addReaction(msgId, encryptedReaction);
     updateReactionUI(msgId, localStorage.getItem('rocchat_user_id') || '', emoji);
   } catch {
     showToast('Failed to react', 'error');
@@ -4016,17 +4060,8 @@ function updateReactionUI(msgId: string, userId: string, reaction: string | null
   if (!row) return;
   const myId = localStorage.getItem('rocchat_user_id') || '';
 
-  // Reactions are E2EE — the inbound `reaction` string is the *ciphertext*
-  // for everyone except the local user (whose optimistic UI passes the
-  // plaintext emoji directly). We therefore aggregate by ciphertext for
-  // remote users and by plaintext for the local user. This avoids the
-  // earlier behaviour of rendering the base64 ciphertext directly to the
-  // bubble. A future commit will pre-decrypt remote reactions via the
-  // ratchet session for the conversation; until then we render a generic
-  // emoji glyph for remote reactions whose plaintext we cannot recover.
-  const isLocal = userId === myId;
-  const display = isLocal ? reaction : (reaction ? '✨' : null);
-  const groupKey = isLocal ? (reaction || '') : `remote:${reaction?.slice(0, 16) || ''}`;
+  const display = reaction;
+  const groupKey = reaction || '';
 
   // Remove this user's previous reaction (toggle / replace semantics).
   const previous = row.querySelector(`[data-reaction-user="${userId}"]`);
@@ -4108,10 +4143,23 @@ function startEditMessage(msgId: string, conversationId: string) {
     }
     try {
       const conv = state.conversations.find(c => c.id === conversationId);
-      const recipientId = (conv as any)?.members?.find((m: any) => m.user_id !== localStorage.getItem('rocchat_user_id'))?.user_id || '';
-      await getOrCreateSession(conversationId, recipientId);
-      const encrypted = await encryptMessage(conversationId, recipientId, newText);
-      await api.editMessage(msgId, encrypted.ciphertext);
+      let encPayload: string;
+      if (conv?.type === 'group') {
+        const groupEnc = await groupEncrypt(conversationId, conv.members, newText);
+        encPayload = JSON.stringify({ ciphertext: groupEnc.ciphertext, iv: groupEnc.iv, ratchet_header: groupEnc.ratchet_header, message_type: 'text' });
+      } else {
+        const recipientId = (conv as any)?.members?.find((m: any) => m.user_id !== localStorage.getItem('rocchat_user_id'))?.user_id || '';
+        await getOrCreateSession(conversationId, recipientId);
+        const encrypted = await encryptMessage(conversationId, recipientId, newText);
+        const enc = encrypted as unknown as Record<string, unknown>;
+        const headerObj = {
+          ...encrypted.header,
+          tag: encrypted.tag,
+          ...(enc.x3dh ? { x3dh: enc.x3dh } : {}),
+        };
+        encPayload = JSON.stringify({ ciphertext: encrypted.ciphertext, iv: encrypted.iv, tag: encrypted.tag, ratchet_header: JSON.stringify(headerObj), message_type: 'text' });
+      }
+      await api.editMessage(msgId, encPayload);
       textEl.textContent = newText;
       input.replaceWith(textEl);
       // Add edited indicator

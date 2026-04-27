@@ -159,7 +159,7 @@ fun CallOverlay() {
             }
 
             Spacer(Modifier.height(16.dp))
-            Text("🔒 DTLS-SRTP encrypted", color = RocColors.Turquoise, fontSize = 11.sp)
+            Text("🔒 End-to-end encrypted", color = RocColors.Turquoise, fontSize = 11.sp)
             Spacer(Modifier.height(20.dp))
         }
     }
@@ -275,7 +275,7 @@ fun CallsHistoryTab() {
                     Spacer(Modifier.height(8.dp))
                     Text("Voice and video calls are end-to-end encrypted.", color = RocColors.TextSecondary, fontSize = 14.sp, textAlign = TextAlign.Center)
                     Spacer(Modifier.height(12.dp))
-                    Text("🔒 DTLS-SRTP + E2E signaling + verification", color = RocColors.Turquoise, fontSize = 11.sp)
+                    Text("🔒 E2E encrypted · AES-256-GCM", color = RocColors.Turquoise, fontSize = 11.sp)
                 }
             }
         } else {

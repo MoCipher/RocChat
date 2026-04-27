@@ -2,7 +2,11 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' wss: https://rocchat-api.spoass.workers.dev https://ntfy.roc.family; worker-src 'self'; manifest-src 'self';" />
+  <!-- Meta CSP mirrors public/_headers for defense-in-depth so the policy still
+       applies when index.html is served outside the CDN (e.g. local file open,
+       in-app webview). frame-ancestors / Trusted Types live in the response
+       header only — meta CSP can't enforce them. -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; connect-src 'self' wss://chat.mocipher.com wss://rocchat-api.spoass.workers.dev https://chat.mocipher.com https://rocchat-api.spoass.workers.dev https://ntfy.roc.family; img-src 'self' data: blob:; media-src 'self' blob:; base-uri 'none'; form-action 'self'; manifest-src 'self'; worker-src 'self'; object-src 'none'" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content" />
   <meta name="theme-color" content="#D4AF37" />
   <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0D1117" />
@@ -47,7 +51,7 @@
 </head>
 <body>
   <a class="skip-link" href="#app">Skip to content</a>
-  <div class="offline-banner" id="offline-banner" role="alert">You are offline — messages will be queued</div>
+  <div class="offline-banner" id="offline-banner" role="status" aria-live="polite" aria-hidden="true">You are offline — messages will be queued</div>
   <!-- Loading screen — outside #app so replaceChildren can't destroy it -->
   <div id="loading-screen" class="loading-screen">
     <div class="loading-particles" aria-hidden="true">

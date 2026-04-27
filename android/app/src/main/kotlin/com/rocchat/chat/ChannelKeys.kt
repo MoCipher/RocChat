@@ -4,9 +4,12 @@ import android.content.Context
 import android.util.Base64
 import com.rocchat.crypto.SecureStorage
 import com.rocchat.network.APIClient
+import org.json.JSONArray
 import org.json.JSONObject
 import java.net.URL
 import java.security.KeyFactory
+import java.security.KeyPairGenerator
+import java.security.SecureRandom
 import java.security.spec.PKCS8EncodedKeySpec
 import java.security.spec.X509EncodedKeySpec
 import javax.crypto.Cipher
@@ -154,5 +157,161 @@ object ChannelKeys {
             cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(key, "AES"), GCMParameterSpec(GCM_TAG_LENGTH_BITS, iv))
             cipher.doFinal(combined)
         } catch (_: Exception) { null }
+    }
+
+    /**
+     * AES-256-GCM seal returning `(iv, ciphertext, tag)` separately so the
+     * envelope/post wire format matches the web's `aesGcmEncrypt` helper.
+     * Generates a fresh 12-byte IV per call.
+     */
+    private fun aesGcmSeal(plaintext: ByteArray, key: ByteArray): Triple<ByteArray, ByteArray, ByteArray> {
+        val iv = ByteArray(12)
+        SecureRandom().nextBytes(iv)
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(Cipher.ENCRYPT_MODE, SecretKeySpec(key, "AES"), GCMParameterSpec(GCM_TAG_LENGTH_BITS, iv))
+        val out = cipher.doFinal(plaintext)
+        // GCM in JCA appends a 16-byte tag at the end of the ciphertext.
+        val tagLen = GCM_TAG_LENGTH_BITS / 8
+        val ct = out.copyOfRange(0, out.size - tagLen)
+        val tag = out.copyOfRange(out.size - tagLen, out.size)
+        return Triple(iv, ct, tag)
+    }
+
+    /**
+     * Encrypted post wire format — mirrors web's `EncryptedPost`.
+     */
+    data class EncryptedPost(
+        val ciphertextB64: String,
+        val ivB64: String,
+        val tagB64: String,
+        val keyVersion: Int,
+    ) {
+        /** JSON `ratchet_header` consumed by web/iOS decoders. */
+        val ratchetHeaderJson: String get() = JSONObject().apply {
+            put("cv", 1)
+            put("v", keyVersion)
+            put("tag", tagB64)
+        }.toString()
+    }
+
+    /**
+     * Encrypt a plaintext post body using the channel symmetric key.
+     * Wire format mirrors `web/src/crypto/channel-keys.ts#encryptPost`:
+     *   postKey = HKDF(channelKey, salt=channelId, info="rocchat-channel-post-v1")
+     *   (iv, ct, tag) = AES-GCM(postKey, plaintext)
+     *   ratchet_header = { cv: 1, v: keyVersion, tag: <b64 tag> }
+     *
+     * Returns null if the channel key isn't available locally yet (caller
+     * should fall back to legacy plaintext base64 to keep posting working).
+     */
+    fun encryptPost(context: Context, channelId: String, plaintext: String): EncryptedPost? {
+        val channelKey = getChannelKey(context, channelId) ?: return null
+        val postKey = hkdfSha256(channelKey, channelId.toByteArray(), POST_INFO, 32)
+        return try {
+            val (iv, ct, tag) = aesGcmSeal(plaintext.toByteArray(Charsets.UTF_8), postKey)
+            EncryptedPost(
+                ciphertextB64 = Base64.encodeToString(ct, Base64.NO_WRAP),
+                ivB64 = Base64.encodeToString(iv, Base64.NO_WRAP),
+                tagB64 = Base64.encodeToString(tag, Base64.NO_WRAP),
+                keyVersion = 1,
+            )
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    /**
+     * Per-recipient ECIES wrap of the channel symmetric key, mirroring
+     * `iosChannelCrypto.wrapForRecipient` and the web wrap path. Generates
+     * a fresh ephemeral X25519 keypair, derives a wrap key via HKDF, and
+     * AES-GCM-seals the channel key. Returns the envelope dict suitable for
+     * inclusion in `POST /api/channels/:id/keys`.
+     */
+    private fun wrapForRecipient(
+        channelKey: ByteArray,
+        recipientId: String,
+        recipientIdentityDhPubRaw: ByteArray,
+        channelId: String,
+        keyVersion: Int,
+    ): JSONObject? {
+        return try {
+            val gen = KeyPairGenerator.getInstance("XDH")
+            // Default XDH provider on Android = X25519. No NamedParameterSpec
+            // needed (and it isn't available pre-API-33).
+            val pair = gen.generateKeyPair()
+            val ephPriv = pair.private
+            val ephPubX509 = pair.public.encoded
+            // Strip the 12-byte SubjectPublicKeyInfo prefix to get raw 32-byte X25519 pub.
+            val rawPubLen = ephPubX509.size - 12
+            if (rawPubLen != 32) return null
+            val ephPubRaw = ephPubX509.copyOfRange(12, ephPubX509.size)
+
+            // ECDH(ephemeral_priv, recipient_identity_dh_pub) → 32-byte shared secret.
+            val kf = KeyFactory.getInstance("XDH")
+            val x509Prefix = byteArrayOf(0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x6e, 0x03, 0x21, 0x00)
+            val recipientPub = kf.generatePublic(X509EncodedKeySpec(x509Prefix + recipientIdentityDhPubRaw))
+            val ka = KeyAgreement.getInstance("XDH")
+            ka.init(ephPriv)
+            ka.doPhase(recipientPub, true)
+            val ss = ka.generateSecret()
+
+            val wrapKey = hkdfSha256(ss, channelId.toByteArray(), WRAP_INFO, 32)
+            val (iv, ct, tag) = aesGcmSeal(channelKey, wrapKey)
+
+            JSONObject().apply {
+                put("recipient_id", recipientId)
+                put("ephemeral_pub", Base64.encodeToString(ephPubRaw, Base64.NO_WRAP))
+                put("ciphertext", Base64.encodeToString(ct, Base64.NO_WRAP))
+                put("iv", Base64.encodeToString(iv, Base64.NO_WRAP))
+                put("tag", Base64.encodeToString(tag, Base64.NO_WRAP))
+                put("key_version", keyVersion)
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    /**
+     * Distribute the cached channel key to every pending subscriber listed
+     * by `GET /api/channels/:id/keys/pending`. Idempotent — safe to call
+     * before each post; only members without an envelope receive one.
+     * Runs synchronously and uses HttpsURLConnection (call from IO thread).
+     * Returns the number of envelopes uploaded.
+     */
+    fun distributeChannelKeyToPending(context: Context, channelId: String): Int {
+        val channelKey = getChannelKey(context, channelId) ?: return 0
+        val token = APIClient.sessionToken ?: return 0
+        return try {
+            val conn = URL("$BASE/api/channels/$channelId/keys/pending").openConnection() as HttpsURLConnection
+            conn.setRequestProperty("Authorization", "Bearer $token")
+            conn.connectTimeout = 10_000
+            conn.readTimeout = 15_000
+            if (conn.responseCode != 200) return 0
+            val json = JSONObject(conn.inputStream.bufferedReader().readText())
+            val recipients: JSONArray = json.optJSONArray("recipients") ?: return 0
+            val keyVersion = json.optInt("key_version", 1)
+
+            val envelopes = JSONArray()
+            for (i in 0 until recipients.length()) {
+                val r = recipients.getJSONObject(i)
+                val userId = r.optString("user_id", "")
+                val dhB64 = r.optString("identity_dh_key", "")
+                if (userId.isEmpty() || dhB64.isEmpty()) continue
+                val dhPub = try { Base64.decode(dhB64, Base64.NO_WRAP) } catch (_: Exception) { continue }
+                val env = wrapForRecipient(channelKey, userId, dhPub, channelId, keyVersion) ?: continue
+                envelopes.put(env)
+            }
+            if (envelopes.length() == 0) return 0
+
+            val uploadConn = URL("$BASE/api/channels/$channelId/keys").openConnection() as HttpsURLConnection
+            uploadConn.requestMethod = "POST"
+            uploadConn.setRequestProperty("Authorization", "Bearer $token")
+            uploadConn.setRequestProperty("Content-Type", "application/json")
+            uploadConn.doOutput = true
+            uploadConn.outputStream.write(JSONObject().put("envelopes", envelopes).toString().toByteArray())
+            if (uploadConn.responseCode == 200) envelopes.length() else 0
+        } catch (_: Exception) {
+            0
+        }
     }
 }

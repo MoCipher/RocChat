@@ -338,12 +338,19 @@ class CallManager: ObservableObject {
                     "iv": envelope.iv,
                     "ratchet_header": envelope.ratchetHeader
                 ]
+                // conversationId rides in cleartext so the recipient can find
+                // the pairwise ratchet session even when the message arrives
+                // over the user-inbox WS (not conversation-scoped).
                 let payload: [String: Any] = [
                     "callId": callId,
                     "targetUserId": targetUserId,
+                    "conversationId": convId,
                     "encryptedSignaling": encryptedSignaling
                 ]
                 let message: [String: Any] = ["type": type, "payload": payload]
+                // Prefer the inbox WS so the call reaches the callee even if
+                // they don't have this conversation open.
+                if InboxWebSocket.shared.send(message) { return }
                 guard let data = try? JSONSerialization.data(withJSONObject: message),
                       let str = String(data: data, encoding: .utf8) else { return }
                 ws?.send(.string(str)) { _ in }
@@ -358,9 +365,15 @@ class CallManager: ObservableObject {
         guard let encSig = payload["encryptedSignaling"] as? [String: Any],
               let ct = encSig["ciphertext"] as? String,
               let iv = encSig["iv"] as? String,
-              let rh = encSig["ratchet_header"] as? String,
-              let convId = overrideConvId ?? conversationId else {
+              let rh = encSig["ratchet_header"] as? String else {
             return payload // plaintext fallback
+        }
+        // Resolve conversationId in priority order: explicit override
+        // (ChatRoom path), cleartext field on payload (inbox-WS path),
+        // current call state.
+        let cleartextConv = (payload["conversationId"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+        guard let convId = overrideConvId ?? cleartextConv ?? conversationId else {
+            return payload
         }
         do {
             let decrypted = try SessionManager.shared.decryptMessage(
@@ -371,6 +384,7 @@ class CallManager: ObservableObject {
                 result["callId"] = payload["callId"]
                 result["targetUserId"] = payload["targetUserId"]
                 result["fromUserId"] = payload["fromUserId"]
+                result["conversationId"] = convId
                 return result
             }
         } catch { /* fallback */ }
@@ -505,6 +519,9 @@ class CallManager: ObservableObject {
                 "frame": b64
             ]
         ]
+        // Prefer the inbox WS — when both peers are on it, frames arrive
+        // regardless of which conversation either side has open.
+        if InboxWebSocket.shared.send(msg) { return }
         guard let jsonData = try? JSONSerialization.data(withJSONObject: msg),
               let str = String(data: jsonData, encoding: .utf8) else { return }
         ws?.send(.string(str)) { _ in }
@@ -629,7 +646,6 @@ class CallManager: ObservableObject {
 
     private func sendVideoFrame(jpeg: Data) {
         guard let callId = callId, !remoteUserId.isEmpty else { return }
-        guard let ws = ws else { return }
         videoSeq &+= 1
         var tagged = Data([0x01])
         tagged.append(jpeg)
@@ -640,7 +656,10 @@ class CallManager: ObservableObject {
             "frame": tagged.base64EncodedString()
         ]
         let msg: [String: Any] = ["type": "call_video", "payload": payload]
-        guard let data = try? JSONSerialization.data(withJSONObject: msg),
+        // Prefer the inbox WS so the call works across conversations.
+        if InboxWebSocket.shared.send(msg) { return }
+        guard let ws = ws,
+              let data = try? JSONSerialization.data(withJSONObject: msg),
               let str = String(data: data, encoding: .utf8) else { return }
         ws.send(.string(str)) { _ in }
     }

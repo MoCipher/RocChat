@@ -5,7 +5,7 @@
  * Bindings: D1 (DB), R2 (MEDIA), KV (sessions/rate-limits), Durable Objects (CHAT_ROOM).
  */
 
-import { handleAuth } from './auth.js';
+import { handleAuth, handleRecoveryStart, handleRecoveryComplete } from './auth.js';
 import { handleRefresh } from './auth.js';
 import { handleMessages } from './messages.js';
 import { handleKeys } from './keys.js';
@@ -20,16 +20,18 @@ import { handleGroups } from './groups.js';
 import { handleChannels } from './channels.js';
 import { createPowChallenge, getPowDifficulty } from './pow.js';
 import { ChatRoom } from './durable-objects/ChatRoom.js';
+import { UserInbox } from './durable-objects/UserInbox.js';
 import { verifySession, rateLimit, jsonResponse, errorResponse, isOriginAllowed, apiError, logEvent } from './middleware.js';
 import type { Session } from './middleware.js';
 
-export { ChatRoom };
+export { ChatRoom, UserInbox };
 
 export interface Env {
   DB: D1Database;
   MEDIA: R2Bucket;
   KV: KVNamespace;
   CHAT_ROOM: DurableObjectNamespace;
+  USER_INBOX: DurableObjectNamespace;
   TURN_SECRET?: string;
   TURN_SERVER?: string;
   POW_DIFFICULTY?: string;
@@ -115,6 +117,29 @@ export default {
         const refRl = await rateLimit(env, `ip:${refIp}`, '/api/auth/refresh');
         if (!refRl.ok) return withCors(new Response(JSON.stringify({ error: 'Too many refresh attempts', code: 'RATE_LIMITED', retry_after: refRl.retryAfter ?? 60 }), { status: 429, headers: { 'Content-Type': 'application/json', 'Retry-After': String(refRl.retryAfter ?? 60) } }));
         return withCors(await handleRefresh(request, env));
+      }
+
+      // ── Mnemonic-based password recovery (unauthenticated) ──
+      // Rate limited per IP and per username via the middleware bucket below.
+      if (path === '/api/recovery/start' && request.method === 'POST') {
+        const recIp = request.headers.get('CF-Connecting-IP') || 'unknown';
+        const recRl = await rateLimit(env, `ip:${recIp}`, '/api/recovery/start');
+        if (!recRl.ok) return withCors(new Response(JSON.stringify({ error: 'Too many recovery attempts', code: 'RATE_LIMITED', retry_after: recRl.retryAfter ?? 600 }), { status: 429, headers: { 'Content-Type': 'application/json', 'Retry-After': String(recRl.retryAfter ?? 600) } }));
+        try {
+          const bodyClone = await request.clone().json() as { username?: string };
+          if (bodyClone.username) {
+            const userKey = `recovery:user:${String(bodyClone.username).toLowerCase().slice(0, 64)}`;
+            const userRl = await rateLimit(env, userKey, '/api/recovery/start/user');
+            if (!userRl.ok) return withCors(new Response(JSON.stringify({ error: 'Too many recovery attempts for this account', code: 'RATE_LIMITED', retry_after: userRl.retryAfter ?? 1800 }), { status: 429, headers: { 'Content-Type': 'application/json', 'Retry-After': String(userRl.retryAfter ?? 1800) } }));
+          }
+        } catch { /* body parse failed — handler will reject */ }
+        return withCors(await handleRecoveryStart(request, env));
+      }
+      if (path === '/api/recovery/complete' && request.method === 'POST') {
+        const recIp = request.headers.get('CF-Connecting-IP') || 'unknown';
+        const recRl = await rateLimit(env, `ip:${recIp}`, '/api/recovery/complete');
+        if (!recRl.ok) return withCors(new Response(JSON.stringify({ error: 'Too many recovery attempts', code: 'RATE_LIMITED', retry_after: recRl.retryAfter ?? 600 }), { status: 429, headers: { 'Content-Type': 'application/json', 'Retry-After': String(recRl.retryAfter ?? 600) } }));
+        return withCors(await handleRecoveryComplete(request, env));
       }
       if (path === '/api/health') {
         try {
@@ -234,6 +259,50 @@ export default {
       // WebSocket upgrade — BEFORE general auth check because browsers
       // cannot set Authorization headers on WebSocket connections.
       // Auth is verified via query params instead.
+
+      // Per-user inbox WS — long-lived, always-on. Carries call signaling
+      // (call_offer/answer/ICE/end/audio/video) so calls reach the recipient
+      // regardless of which conversation they currently have open.
+      if (path.startsWith('/api/ws/user/') && request.headers.get('Upgrade') === 'websocket') {
+        const targetUserId = path.split('/api/ws/user/')[1];
+        if (!targetUserId) {
+          return withCors(errorResponse('Missing user ID', 400));
+        }
+
+        const wsToken = url.searchParams.get('token');
+        const wsTicket = url.searchParams.get('ticket');
+        const wsUserId = url.searchParams.get('userId');
+
+        let wsSessionUserId: string | null = null;
+        if (wsTicket) {
+          const ticketData = await env.KV.get(`ws-ticket:${wsTicket}`, 'json') as { userId: string; deviceId: string } | null;
+          if (ticketData) {
+            wsSessionUserId = ticketData.userId;
+            await env.KV.delete(`ws-ticket:${wsTicket}`);
+          }
+        } else if (wsToken && wsUserId) {
+          const wsSession = await env.KV.get(`session:${wsToken}`, 'json') as {
+            userId: string; deviceId: string; expiresAt: number;
+          } | null;
+          if (wsSession && wsSession.userId === wsUserId && Date.now() / 1000 <= wsSession.expiresAt) {
+            wsSessionUserId = wsSession.userId;
+          }
+        }
+
+        if (!wsSessionUserId) return withCors(errorResponse('Invalid session', 401));
+        // Users can only open their own inbox
+        if (wsSessionUserId !== targetUserId) return withCors(errorResponse('Forbidden', 403));
+
+        const wsDeviceId = url.searchParams.get('deviceId') || 'web';
+        const doUrl = new URL(request.url);
+        doUrl.searchParams.set('userId', wsSessionUserId);
+        doUrl.searchParams.set('deviceId', wsDeviceId);
+        doUrl.searchParams.set('routerAuthed', '1');
+        const inboxId = env.USER_INBOX.idFromName(wsSessionUserId);
+        const inbox = env.USER_INBOX.get(inboxId);
+        return inbox.fetch(new Request(doUrl.toString(), request));
+      }
+
       if (path.startsWith('/api/ws/') && request.headers.get('Upgrade') === 'websocket') {
         const conversationId = path.split('/api/ws/')[1];
         if (!conversationId) {
@@ -638,18 +707,32 @@ export default {
       }
 
       // ── Recovery vault ─────────────────────────────────────────────
-      // Upload encrypted key bundle (encrypted with BIP39 recovery key)
+      // Upload encrypted key bundle (encrypted with BIP39 recovery key).
+      // Accepts both legacy `{ blob }` and new `{ blob, verifier }` shapes.
+      // The verifier is SHA-256(domain || recoveryKey) and is required for
+      // the unauthenticated `/recovery/complete` flow to prove possession of
+      // the BIP39 mnemonic without revealing it server-side.
       if (path === '/api/recovery/vault' && request.method === 'POST') {
-        const body = (await request.json()) as { blob?: string };
+        const body = (await request.json()) as { blob?: string; verifier?: string };
         if (!body.blob) return withCors(errorResponse('Missing blob', 400));
-        await env.KV.put(`recovery_vault:${session.userId}`, body.blob);
+        const stored = JSON.stringify({
+          blob: body.blob,
+          verifier: typeof body.verifier === 'string' ? body.verifier : null,
+        });
+        await env.KV.put(`recovery_vault:${session.userId}`, stored);
         return withCors(jsonResponse({ ok: true }));
       }
 
-      // Download recovery vault blob (for mnemonic-based recovery)
+      // Download recovery vault blob (for mnemonic-based recovery).
+      // Accepts both legacy raw-blob and new JSON shape for forward compat.
       if (path === '/api/recovery/vault' && request.method === 'GET') {
-        const blob = await env.KV.get(`recovery_vault:${session.userId}`);
-        if (!blob) return withCors(errorResponse('No recovery vault found', 404));
+        const raw = await env.KV.get(`recovery_vault:${session.userId}`);
+        if (!raw) return withCors(errorResponse('No recovery vault found', 404));
+        let blob = raw;
+        try {
+          const parsed = JSON.parse(raw) as { blob?: string };
+          if (parsed && typeof parsed.blob === 'string') blob = parsed.blob;
+        } catch { /* legacy raw-blob format */ }
         return withCors(jsonResponse({ blob }));
       }
 

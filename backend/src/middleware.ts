@@ -62,6 +62,10 @@ export async function rateLimit(
   // make the abuse pattern (mass downloading vaults across leaked sessions)
   // expensive and observable.
   else if (path === '/api/recovery/vault') { limit = 10; window = 3600; bucket = '/api/recovery/vault'; }
+  // Public recovery endpoints — much tighter than authenticated vault access.
+  else if (path === '/api/recovery/start') { limit = 5; window = 600; bucket = '/api/recovery/start'; }
+  else if (path === '/api/recovery/start/user') { limit = 5; window = 1800; bucket = '/api/recovery/start/user'; }
+  else if (path === '/api/recovery/complete') { limit = 5; window = 600; bucket = '/api/recovery/complete'; }
   else if (path.startsWith('/api/media')) { limit = 20; window = 3600; bucket = '/api/media'; }
   else if (path.startsWith('/api/contacts/search')) { limit = 10; window = 60; bucket = '/api/contacts/search'; }
   else if (path === '/api/ws/ticket') { limit = 30; window = 60; bucket = '/api/ws/ticket'; }

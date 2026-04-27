@@ -67,6 +67,13 @@ private func aesGcmOpen(ciphertext: Data, key: Data, iv: Data, tag: Data) throws
     return try AES.GCM.open(box, using: SymmetricKey(data: key))
 }
 
+/// AES-256-GCM seal returning `(iv, ciphertext, tag)` separately so the
+/// envelope/post wire format matches the web's `aesGcmEncrypt` helper.
+private func aesGcmSeal(plaintext: Data, key: Data) throws -> (iv: Data, ciphertext: Data, tag: Data) {
+    let sealed = try AES.GCM.seal(plaintext, using: SymmetricKey(data: key))
+    return (Data(sealed.nonce), sealed.ciphertext, sealed.tag)
+}
+
 /// X25519 ECDH using CryptoKit. Returns the raw 32-byte shared secret.
 private func channelDH(privateKey: Data, publicKey: Data) throws -> Data {
     let priv = try Curve25519.KeyAgreement.PrivateKey(rawRepresentation: privateKey)
@@ -159,5 +166,161 @@ enum ChannelCrypto {
             return nil
         }
         return String(data: plaintext, encoding: .utf8)
+    }
+
+    /// Encrypted post wire format — mirrors web's `EncryptedPost`.
+    struct EncryptedPost {
+        let ciphertext: String   // base64
+        let iv: String           // base64
+        let tag: String          // base64
+        let keyVersion: Int
+
+        /// Build the JSON `ratchet_header` consumed by web/Android decoders.
+        var ratchetHeaderJSON: String {
+            let header: [String: Any] = ["cv": 1, "v": keyVersion, "tag": tag]
+            guard let data = try? JSONSerialization.data(withJSONObject: header, options: [.sortedKeys]),
+                  let str = String(data: data, encoding: .utf8) else {
+                return "{\"cv\":1,\"v\":\(keyVersion),\"tag\":\"\(tag)\"}"
+            }
+            return str
+        }
+    }
+
+    enum EncryptError: Error {
+        case missingChannelKey
+        case sealFailed
+    }
+
+    /// Encrypt a plaintext post body with the channel symmetric key.
+    /// Wire format matches `web/src/crypto/channel-keys.ts#encryptPost`:
+    ///   postKey = HKDF(channelKey, salt=channelId, info="rocchat-channel-post-v1")
+    ///   (iv, ct, tag) = AES-GCM(postKey, plaintext)
+    ///   ratchet_header = { cv: 1, v: keyVersion, tag: <b64 tag> }
+    static func encryptPost(channelId: String, plaintext: String) async throws -> EncryptedPost {
+        guard let channelKey = try await getChannelKey(channelId: channelId) else {
+            throw EncryptError.missingChannelKey
+        }
+        let salt = channelId.data(using: .utf8) ?? Data()
+        let info = "rocchat-channel-post-v1".data(using: .utf8) ?? Data()
+        let postKey = channelHKDF(ikm: channelKey, salt: salt, info: info, length: 32)
+        let pt = plaintext.data(using: .utf8) ?? Data()
+        let sealed: (iv: Data, ciphertext: Data, tag: Data)
+        do { sealed = try aesGcmSeal(plaintext: pt, key: postKey) }
+        catch { throw EncryptError.sealFailed }
+        return EncryptedPost(
+            ciphertext: sealed.ciphertext.base64EncodedString(),
+            iv: sealed.iv.base64EncodedString(),
+            tag: sealed.tag.base64EncodedString(),
+            keyVersion: 1,
+        )
+    }
+
+    /// Per-recipient ECIES wrap of the channel symmetric key. Matches the
+    /// envelope shape stored at `channel_key_envelopes` and the unwrap path
+    /// used by `getChannelKey`.
+    struct WrappedEnvelope {
+        let recipientId: String
+        let ephemeralPub: String
+        let ciphertext: String
+        let iv: String
+        let tag: String
+        let keyVersion: Int
+
+        var asDict: [String: Any] {
+            [
+                "recipient_id": recipientId,
+                "ephemeral_pub": ephemeralPub,
+                "ciphertext": ciphertext,
+                "iv": iv,
+                "tag": tag,
+                "key_version": keyVersion,
+            ]
+        }
+    }
+
+    /// Wrap a 32-byte channel key for a single recipient using ECIES on
+    /// X25519 + HKDF + AES-GCM. The envelope can be uploaded as-is via
+    /// POST `/api/channels/:id/keys`.
+    static func wrapForRecipient(
+        channelKey: Data,
+        recipientId: String,
+        recipientIdentityDHPub: Data,
+        channelId: String,
+        keyVersion: Int = 1,
+    ) throws -> WrappedEnvelope {
+        // Generate a fresh ephemeral X25519 key pair for this wrap.
+        let ephPriv = Curve25519.KeyAgreement.PrivateKey()
+        let ephPubData = ephPriv.publicKey.rawRepresentation
+        // ECDH(ephemeral_priv, recipient_identity_dh_pub) → shared secret
+        let recipientPub = try Curve25519.KeyAgreement.PublicKey(rawRepresentation: recipientIdentityDHPub)
+        let ss = try ephPriv.sharedSecretFromKeyAgreement(with: recipientPub)
+        let ssData = ss.withUnsafeBytes { Data($0) }
+        // HKDF → AES-GCM seal of channelKey
+        let salt = channelId.data(using: .utf8) ?? Data()
+        let info = "rocchat-channel-key-wrap-v1".data(using: .utf8) ?? Data()
+        let wrapKey = channelHKDF(ikm: ssData, salt: salt, info: info, length: 32)
+        let sealed = try aesGcmSeal(plaintext: channelKey, key: wrapKey)
+        return WrappedEnvelope(
+            recipientId: recipientId,
+            ephemeralPub: ephPubData.base64EncodedString(),
+            ciphertext: sealed.ciphertext.base64EncodedString(),
+            iv: sealed.iv.base64EncodedString(),
+            tag: sealed.tag.base64EncodedString(),
+            keyVersion: keyVersion,
+        )
+    }
+
+    /// Distribute the cached channel key to every pending subscriber listed
+    /// by `GET /api/channels/:id/keys/pending`. Idempotent — safe to call
+    /// before each post; only members without an envelope receive one.
+    /// Returns the number of envelopes uploaded.
+    @discardableResult
+    static func distributeChannelKeyToPending(channelId: String) async throws -> Int {
+        guard let channelKey = try await getChannelKey(channelId: channelId) else {
+            throw EncryptError.missingChannelKey
+        }
+        guard let token = SecureStorage.shared.get(forKey: "session_token")
+            ?? UserDefaults.standard.string(forKey: "sessionToken"),
+              let pendingURL = URL(string: "\(APIConfig.baseURL)/api/channels/\(channelId)/keys/pending") else {
+            return 0
+        }
+        var req = URLRequest(url: pendingURL)
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        let (data, resp) = try await APIClient.shared.session.data(for: req)
+        guard let http = resp as? HTTPURLResponse, http.statusCode == 200 else { return 0 }
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let recipients = json["recipients"] as? [[String: Any]] else { return 0 }
+        let keyVersion = (json["key_version"] as? Int) ?? 1
+
+        var envelopes: [[String: Any]] = []
+        for r in recipients {
+            guard let userId = r["user_id"] as? String,
+                  let dhB64 = r["identity_dh_key"] as? String,
+                  let dhPub = Data(base64Encoded: dhB64) else { continue }
+            do {
+                let env = try wrapForRecipient(
+                    channelKey: channelKey,
+                    recipientId: userId,
+                    recipientIdentityDHPub: dhPub,
+                    channelId: channelId,
+                    keyVersion: keyVersion,
+                )
+                envelopes.append(env.asDict)
+            } catch {
+                // Skip individual recipients on failure rather than failing the whole batch.
+                continue
+            }
+        }
+        if envelopes.isEmpty { return 0 }
+
+        guard let uploadURL = URL(string: "\(APIConfig.baseURL)/api/channels/\(channelId)/keys") else { return 0 }
+        var post = URLRequest(url: uploadURL)
+        post.httpMethod = "POST"
+        post.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        post.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        post.httpBody = try JSONSerialization.data(withJSONObject: ["envelopes": envelopes])
+        let (_, postResp) = try await APIClient.shared.session.data(for: post)
+        guard let postHttp = postResp as? HTTPURLResponse, postHttp.statusCode == 200 else { return 0 }
+        return envelopes.count
     }
 }

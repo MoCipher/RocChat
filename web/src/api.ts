@@ -462,15 +462,52 @@ export function fetchKeyBundle(requestId: string) {
 
 // ── Recovery vault ──
 
-export function uploadRecoveryVault(blob: string) {
+export function uploadRecoveryVault(blob: string, verifier?: string) {
   return req<{ ok: boolean }>('/recovery/vault', {
     method: 'POST',
-    body: JSON.stringify({ blob }),
+    body: JSON.stringify(verifier ? { blob, verifier } : { blob }),
   });
 }
 
 export function getRecoveryVault() {
   return req<{ blob: string }>('/recovery/vault');
+}
+
+// ── Mnemonic-based password recovery (unauthenticated) ──
+
+export function recoveryStart(payload: {
+  username: string;
+  pow_token: string;
+  pow_nonce: string;
+}) {
+  return req<{
+    blob: string;
+    salt: string;
+    identity_key: string;
+    challenge: string;
+    requires_verifier: boolean;
+  }>('/recovery/start', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export function recoveryComplete(payload: {
+  username: string;
+  challenge: string;
+  new_auth_hash: string;
+  new_salt: string;
+  new_encrypted_keys: string;
+  new_recovery_blob?: string;
+  new_recovery_verifier?: string;
+  recovery_verifier: string;
+  pow_token: string;
+  pow_nonce: string;
+}) {
+  return req<{ ok: boolean }>('/recovery/complete', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
 }
 
 // ── Keys ──

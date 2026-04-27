@@ -126,3 +126,46 @@ export async function decryptForRecovery(
   const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: iv as BufferSource }, recoveryKey, ct as BufferSource);
   return new Uint8Array(pt);
 }
+
+/**
+ * Derive a 32-byte vault recovery key from BIP39 entropy via HKDF-SHA256.
+ *
+ * Returns the raw bytes (not a CryptoKey) so callers can hand the key to the
+ * generic `encryptPrivateKeys` / `decryptPrivateKeys` helpers, which expect a
+ * `Uint8Array`. Same parameters as `deriveRecoveryKey` so the two derivations
+ * are interchangeable for AES-GCM operations.
+ */
+export async function deriveRecoveryRawKey(entropy: Uint8Array): Promise<Uint8Array> {
+  const enc = new TextEncoder();
+  const baseKey = await crypto.subtle.importKey('raw', entropy as BufferSource, 'HKDF', false, ['deriveBits']);
+  const bits = await crypto.subtle.deriveBits(
+    {
+      name: 'HKDF',
+      hash: 'SHA-256',
+      salt: enc.encode('rocchat-recovery'),
+      info: enc.encode('rocchat-vault-recovery-key'),
+    },
+    baseKey,
+    256,
+  );
+  return new Uint8Array(bits);
+}
+
+/**
+ * Compute the recovery verifier: SHA-256(domain || recoveryKey).
+ *
+ * Uploaded alongside the recovery vault so the unauthenticated recovery flow
+ * can prove possession of the BIP39 mnemonic without revealing it server-side.
+ * Returns a base64 string suitable for transport.
+ */
+export async function deriveRecoveryVerifier(recoveryKey: Uint8Array): Promise<string> {
+  const domain = new TextEncoder().encode('rocchat:recovery:verifier:v1');
+  const buf = new Uint8Array(domain.length + recoveryKey.length);
+  buf.set(domain, 0);
+  buf.set(recoveryKey, domain.length);
+  const hash = await crypto.subtle.digest('SHA-256', buf as BufferSource);
+  const bytes = new Uint8Array(hash);
+  let bin = '';
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  return btoa(bin);
+}

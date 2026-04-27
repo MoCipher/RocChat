@@ -22,6 +22,36 @@ struct RocChatApp: App {
                             .onAppear {
                                 requestPushNotifications()
                                 Task { await KeyRotationManager.shared.performMaintenance() }
+                                // Open the always-on user-inbox WS so calls
+                                // reach us no matter which conversation is open.
+                                InboxWebSocket.shared.connect()
+                                InboxWebSocket.shared.addListener { type, payload in
+                                    Task { @MainActor in
+                                        let cm = CallManager.shared
+                                        switch type {
+                                        case "call_offer":
+                                            cm.handleIncomingOffer(
+                                                payload: payload,
+                                                conversationId: (payload["conversationId"] as? String) ?? "",
+                                                ws: InboxWebSocket.shared.task,
+                                            )
+                                        case "call_answer":
+                                            cm.handleCallAnswer(payload: payload)
+                                        case "call_ice":
+                                            cm.handleIceCandidate(payload: payload)
+                                        case "call_end":
+                                            cm.handleCallEnd(payload: payload)
+                                        case "call_audio":
+                                            cm.handleCallAudio(payload: payload)
+                                        case "call_video":
+                                            cm.handleCallVideo(payload: payload)
+                                        case "call_p2p_candidate":
+                                            cm.handleP2PCandidate(payload: payload)
+                                        default:
+                                            break
+                                        }
+                                    }
+                                }
                             }
                     } else {
                         AuthView()

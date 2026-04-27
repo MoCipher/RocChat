@@ -227,6 +227,40 @@ function initAfterUnlock() {
   bootstrapVapidKey().then(() => registerWebPush());
   showOnboardingIfNeeded();
 
+  // Open the always-on user-inbox WS so call signaling reaches us no matter
+  // which conversation we have open. Inbox messages dispatch into the call
+  // manager via the listener registered below.
+  import('./inbox-ws.js').then(({ connectInbox, onInboxMessage, getInboxWs }) => {
+    connectInbox();
+    onInboxMessage((msg) => {
+      // Lazy-load the call module on first signal — keeps the auth bundle small.
+      import('./calls/calls.js').then((mod) => {
+        switch (msg.type) {
+          case 'call_offer':
+            mod.handleIncomingCallOffer(msg.payload, null, getInboxWs());
+            break;
+          case 'call_answer':
+            mod.handleCallAnswer(msg.payload);
+            break;
+          case 'call_ice':
+            mod.handleIceCandidate(msg.payload);
+            break;
+          case 'call_end':
+            mod.handleCallEnd(msg.payload);
+            break;
+          case 'call_audio':
+            mod.handleCallAudio(msg.payload);
+            break;
+          case 'call_video':
+            mod.handleCallVideo(msg.payload);
+            break;
+          default:
+            break;
+        }
+      });
+    });
+  });
+
   // Listen for REFILL_KEYS signal from SW (triggered by periodic sync)
   navigator.serviceWorker?.addEventListener('message', (evt: MessageEvent<{ type?: string; remaining?: number }>) => {
     if (evt.data?.type === 'REFILL_KEYS') {

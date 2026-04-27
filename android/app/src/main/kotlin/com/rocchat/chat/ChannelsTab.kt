@@ -530,13 +530,40 @@ private fun ChannelDetailScreen(channelId: String, channelName: String, onBack: 
             confirmButton = {
                 TextButton(onClick = {
                     scope.launch {
-                        val ct = android.util.Base64.encodeToString(content.toByteArray(), android.util.Base64.NO_WRAP)
+                        // Try the E2E path first: top up envelopes for any new
+                        // subscribers, then encrypt with the channel symmetric
+                        // key and submit {ciphertext, iv, ratchet_header}
+                        // matching the web/iOS wire format. Fall back to legacy
+                        // base64-plaintext if no channel key is available.
+                        var ciphertext = android.util.Base64.encodeToString(
+                            content.toByteArray(), android.util.Base64.NO_WRAP,
+                        )
+                        var iv = ""
+                        var ratchetHeader = "{}"
+                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                            try { ChannelKeys.distributeChannelKeyToPending(context, channelId) } catch (_: Exception) {}
+                            ChannelKeys.encryptPost(context, channelId, content)?.let { enc ->
+                                ciphertext = enc.ciphertextB64
+                                iv = enc.ivB64
+                                ratchetHeader = enc.ratchetHeaderJson
+                            }
+                        }
                         if (isScheduled) {
                             val schedAt = (System.currentTimeMillis() / 1000) + 3600
-                            val body = JSONObject().apply { put("ciphertext", ct); put("iv", ""); put("scheduled_at", schedAt) }
+                            val body = JSONObject().apply {
+                                put("ciphertext", ciphertext)
+                                put("iv", iv)
+                                put("ratchet_header", ratchetHeader)
+                                put("scheduled_at", schedAt)
+                            }
                             apiPostBody("/api/channels/$channelId/schedule", body.toString())
                         } else {
-                            val body = JSONObject().apply { put("ciphertext", ct); put("iv", ""); put("ratchet_header", "{}"); put("message_type", "text") }
+                            val body = JSONObject().apply {
+                                put("ciphertext", ciphertext)
+                                put("iv", iv)
+                                put("ratchet_header", ratchetHeader)
+                                put("message_type", "text")
+                            }
                             apiPostBody("/api/channels/$channelId/post", body.toString())
                         }
                         showPostDialog = false; showScheduleDialog = false

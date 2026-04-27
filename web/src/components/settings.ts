@@ -1074,6 +1074,10 @@ export function renderSettings(container: HTMLElement) {
   // Logout
   document.getElementById('logout-btn')?.addEventListener('click', async () => {
     try { await api.logout(); } catch { /* continue with local cleanup */ }
+    try {
+      const { disconnectInbox } = await import('../inbox-ws.js');
+      disconnectInbox();
+    } catch { /* inbox not loaded — fine */ }
     api.setToken(null);
     api.setRefreshToken(null);
     localStorage.removeItem('rocchat_user_id');

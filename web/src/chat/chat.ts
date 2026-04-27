@@ -318,12 +318,20 @@ window.addEventListener('online', () => {
     flushMessageQueue().finally(() => { flushInProgress = false; });
   }
   showToast('Back online', 'success');
-  document.getElementById('offline-banner')?.classList.remove('visible');
+  const banner = document.getElementById('offline-banner');
+  if (banner) {
+    banner.classList.remove('visible');
+    banner.setAttribute('aria-hidden', 'true');
+  }
 });
 
 window.addEventListener('offline', () => {
   showToast('You are offline — messages will be queued', 'error');
-  document.getElementById('offline-banner')?.classList.add('visible');
+  const banner = document.getElementById('offline-banner');
+  if (banner) {
+    banner.classList.add('visible');
+    banner.setAttribute('aria-hidden', 'false');
+  }
 });
 
 // Warn before navigating away with messages still in the send queue.

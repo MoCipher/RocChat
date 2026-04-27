@@ -100,6 +100,25 @@ class MainActivity : FragmentActivity() {
                         }
                         // Key maintenance: SPK rotation + prekey replenishment
                         com.rocchat.crypto.KeyRotationManager.performMaintenance(this@MainActivity)
+
+                        // Always-on user-inbox WS so calls reach us regardless
+                        // of which conversation is currently open.
+                        com.rocchat.calls.InboxWebSocket.addListener { type, payload ->
+                            when (type) {
+                                "call_offer" -> com.rocchat.calls.CallManager.handleIncomingOffer(
+                                    payload,
+                                    payload.optString("conversationId"),
+                                    com.rocchat.calls.InboxWebSocket.task,
+                                )
+                                "call_answer" -> com.rocchat.calls.CallManager.handleCallAnswer(payload)
+                                "call_ice" -> com.rocchat.calls.CallManager.handleIceCandidate(payload)
+                                "call_end" -> com.rocchat.calls.CallManager.handleCallEnd(payload)
+                                "call_audio" -> com.rocchat.calls.CallManager.handleCallAudio(payload)
+                                "call_video" -> com.rocchat.calls.CallManager.handleCallVideo(payload)
+                                "call_p2p_candidate" -> com.rocchat.calls.CallManager.handleP2PCandidate(payload)
+                            }
+                        }
+                        com.rocchat.calls.InboxWebSocket.connect(this@MainActivity)
                     }
                 }
 
@@ -166,6 +185,7 @@ class MainActivity : FragmentActivity() {
                                 kotlinx.coroutines.MainScope().launch {
                                     try { APIClient.postPublic("/auth/logout", org.json.JSONObject()) } catch (_: Exception) {}
                                 }
+                                com.rocchat.calls.InboxWebSocket.disconnect()
                                 APIClient.sessionToken = null
                                 APIClient.refreshToken = null
                                 APIClient.clearPersistedAuth()

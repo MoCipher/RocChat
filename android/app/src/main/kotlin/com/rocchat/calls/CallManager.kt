@@ -491,12 +491,20 @@ object CallManager {
                     .put("ciphertext", envelope.ciphertext)
                     .put("iv", envelope.iv)
                     .put("ratchet_header", envelope.ratchetHeader)
+                // conversationId rides in cleartext so the recipient can find
+                // the pairwise ratchet session even when this message arrives
+                // over the user-inbox WS (not conversation-scoped).
                 val payload = JSONObject()
                     .put("callId", callIdVal)
                     .put("targetUserId", targetUserId)
+                    .put("conversationId", convId)
                     .put("encryptedSignaling", encryptedSignaling)
                 val msg = JSONObject().put("type", type).put("payload", payload)
-                ws?.send(msg.toString())
+                // Prefer the inbox WS — call reaches the callee no matter what
+                // conversation they currently have open.
+                if (!InboxWebSocket.send(msg)) {
+                    ws?.send(msg.toString())
+                }
             } catch (_: Exception) {
                 sendSignal(type, extra)
             }
@@ -508,7 +516,11 @@ object CallManager {
         val ct = encSig.optString("ciphertext")
         val iv = encSig.optString("iv")
         val rh = encSig.optString("ratchet_header")
-        val convId = overrideConvId ?: conversationId ?: return payload
+        // Resolve conversationId in priority order: explicit override (from
+        // ChatRoom path), cleartext field on payload (inbox-WS path), then
+        // current call state.
+        val cleartextConv = payload.optString("conversationId").takeIf { it.isNotEmpty() }
+        val convId = overrideConvId ?: cleartextConv ?: conversationId ?: return payload
         val ctx = appContext ?: return payload
         if (ct.isEmpty() || iv.isEmpty() || rh.isEmpty()) return payload
         return try {
@@ -517,6 +529,7 @@ object CallManager {
             result.put("callId", payload.optString("callId"))
             result.put("targetUserId", payload.optString("targetUserId"))
             result.put("fromUserId", payload.optString("fromUserId"))
+            result.put("conversationId", convId)
             result
         } catch (_: Exception) {
             payload

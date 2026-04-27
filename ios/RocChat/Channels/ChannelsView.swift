@@ -452,14 +452,41 @@ struct ChannelPostSheet: View {
 
     private func send() async {
         isSending = true
-        let ciphertext = Data(content.utf8).base64EncodedString()
+        // Try the E2E path first: top up envelopes for any new subscribers,
+        // then encrypt with the channel symmetric key and post {ciphertext,
+        // iv, ratchet_header} matching the web wire format. Fall back to
+        // legacy base64-plaintext if no channel key is available so admins
+        // can still post on accounts without identity DH keys yet.
+        var ciphertext = Data(content.utf8).base64EncodedString()
+        var iv = ""
+        var ratchetHeader = "{}"
+        do {
+            try? await ChannelCrypto.distributeChannelKeyToPending(channelId: channelId)
+            let enc = try await ChannelCrypto.encryptPost(channelId: channelId, plaintext: content)
+            ciphertext = enc.ciphertext
+            iv = enc.iv
+            ratchetHeader = enc.ratchetHeaderJSON
+        } catch {
+            // Legacy plaintext path — already initialized above.
+        }
+
         if isScheduled {
             let schedAt = Int(scheduleDate.timeIntervalSince1970)
-            let body: [String: Any] = ["ciphertext": ciphertext, "iv": "", "scheduled_at": schedAt]
+            let body: [String: Any] = [
+                "ciphertext": ciphertext,
+                "iv": iv,
+                "ratchet_header": ratchetHeader,
+                "scheduled_at": schedAt,
+            ]
             let bodyData = try? JSONSerialization.data(withJSONObject: body)
             let _ = await apiRequest(path: "/api/channels/\(channelId)/schedule", method: "POST", body: bodyData)
         } else {
-            let body: [String: Any] = ["ciphertext": ciphertext, "iv": "", "ratchet_header": "{}", "message_type": "text"]
+            let body: [String: Any] = [
+                "ciphertext": ciphertext,
+                "iv": iv,
+                "ratchet_header": ratchetHeader,
+                "message_type": "text",
+            ]
             let bodyData = try? JSONSerialization.data(withJSONObject: body)
             let _ = await apiRequest(path: "/api/channels/\(channelId)/post", method: "POST", body: bodyData)
         }

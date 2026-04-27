@@ -16,7 +16,12 @@ import {
   decryptPrivateKeys,
 } from '../crypto/client-crypto.js';
 import { toBase64, fromBase64, generateX25519KeyPair } from '@rocchat/shared';
-import { generateRecoveryPhrase } from '../crypto/recovery-phrase.js';
+import {
+  generateRecoveryPhrase,
+  entropyFromMnemonic,
+  deriveRecoveryRawKey,
+  deriveRecoveryVerifier,
+} from '../crypto/recovery-phrase.js';
 import { setKeyMaterial } from '../crypto/session-manager.js';
 import { putSecretString } from '../crypto/secure-store.js';
 
@@ -61,6 +66,13 @@ export function renderAuth(container: HTMLElement, onSuccess: () => void) {
       else handleRegister();
     });
 
+    // Bind "Forgot passphrase?" — only present in login mode
+    container.querySelector('#forgot-link')?.addEventListener('click', (e) => {
+      e.preventDefault();
+      const usernameEl = container.querySelector('#username') as HTMLInputElement | null;
+      showRecoveryFlow(usernameEl?.value?.trim() || '');
+    });
+
     if (mode === 'register') initPowWidget();
   }
 
@@ -77,6 +89,9 @@ export function renderAuth(container: HTMLElement, onSuccess: () => void) {
           <label class="form-label" for="passphrase">Passphrase</label>
           <input class="form-input" id="passphrase" name="passphrase" type="password"
                  autocomplete="current-password" placeholder="Your secure passphrase" required />
+          <div class="form-hint" style="text-align:right;margin-top:var(--sp-1)">
+            <a id="forgot-link" href="#" style="font-size:var(--text-xs);color:var(--text-secondary)">Forgot passphrase?</a>
+          </div>
         </div>
         <button class="btn-primary" type="submit" id="submit-btn">Sign In</button>
       </form>
@@ -386,7 +401,7 @@ export function renderAuth(container: HTMLElement, onSuccess: () => void) {
       }
 
       // Generate and display recovery phrase
-      const { mnemonic } = await generateRecoveryPhrase();
+      const { mnemonic, entropy } = await generateRecoveryPhrase();
 
       // Store encrypted mnemonic for future recovery verification
       const { aesGcmEncrypt } = await import('@rocchat/shared');
@@ -399,6 +414,18 @@ export function renderAuth(container: HTMLElement, onSuccess: () => void) {
       packed.set(ciphertext, iv.length);
       packed.set(tag, iv.length + ciphertext.length);
       localStorage.setItem('rocchat_recovery_enc', toBase64(packed));
+
+      // Upload an encrypted recovery vault so the user can self-service
+      // password recovery from any device using only their 12-word mnemonic.
+      // The vault is AES-GCM-encrypted with a key derived from the BIP39
+      // entropy; the server only ever sees opaque ciphertext + a verifier
+      // hash. Failures here are non-fatal — the user still has their phrase.
+      try {
+        const recoveryRawKey = await deriveRecoveryRawKey(entropy);
+        const recoveryBlob = await encryptPrivateKeys(recoveryRawKey, bundle, identityDHKeyPair);
+        const verifier = await deriveRecoveryVerifier(recoveryRawKey);
+        await api.uploadRecoveryVault(recoveryBlob, verifier);
+      } catch { /* non-fatal — user can still recover via their phrase by re-uploading on next login */ }
 
       showRecoveryPhrase(mnemonic, () => {
         mode = 'login';
@@ -447,6 +474,237 @@ export function renderAuth(container: HTMLElement, onSuccess: () => void) {
     const btn = container.querySelector('#recovery-continue') as HTMLButtonElement;
     ack.addEventListener('change', () => { btn.disabled = !ack.checked; });
     btn.addEventListener('click', onContinue);
+  }
+
+  /**
+   * Forgot-passphrase flow:
+   *   1. Verify the user's username + 12-word mnemonic locally.
+   *   2. Fetch the encrypted recovery vault from /recovery/start.
+   *   3. Decrypt vault locally using the mnemonic-derived recovery key.
+   *   4. Re-derive a fresh vault key from the new passphrase, re-encrypt the
+   *      private key bundle, and POST /recovery/complete to swap auth_hash.
+   *   5. Server invalidates ALL existing sessions and the user logs in fresh.
+   *
+   * The mnemonic, derived recovery key, and decrypted private keys NEVER
+   * leave the device. The server only sees opaque ciphertext + a verifier.
+   */
+  function showRecoveryFlow(prefilledUsername: string) {
+    container.replaceChildren(parseHTML(`
+      <div class="auth-screen">
+        <div class="auth-card">
+          <div class="auth-logo">
+            <img src="/favicon.svg" width="48" height="48" alt="RocChat" />
+            <h1>Recover access</h1>
+            <p class="auth-subtitle">Enter your 12-word recovery phrase to set a new passphrase. Your existing devices will be signed out.</p>
+          </div>
+          <div id="recovery-error" class="auth-error hidden"></div>
+          <form id="recovery-form">
+            <div class="form-group">
+              <label class="form-label" for="rec-username">Username</label>
+              <input class="form-input" id="rec-username" name="rec-username" autocomplete="username"
+                     placeholder="@noor" required minlength="3" maxlength="24" autocapitalize="off" value="${prefilledUsername.replace(/[<>"']/g, '')}" />
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="rec-mnemonic">Recovery phrase</label>
+              <textarea class="form-input" id="rec-mnemonic" name="rec-mnemonic"
+                     placeholder="word one word two ... (12 words separated by spaces)" required rows="3"
+                     style="resize:vertical;min-height:80px;font-family:var(--font-mono,monospace)"></textarea>
+              <div class="form-hint">12 words, lowercase, separated by spaces. Order matters.</div>
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="rec-new-pass">New passphrase</label>
+              <input class="form-input" id="rec-new-pass" name="rec-new-pass" type="password"
+                     autocomplete="new-password" placeholder="Min 16 characters" required minlength="16" />
+              <div class="form-hint">This replaces your old passphrase on every device.</div>
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="rec-new-pass-confirm">Confirm new passphrase</label>
+              <input class="form-input" id="rec-new-pass-confirm" name="rec-new-pass-confirm" type="password"
+                     autocomplete="new-password" placeholder="Repeat" required />
+            </div>
+            <div id="rec-status" style="font-size:var(--text-xs);color:var(--text-tertiary);margin-bottom:var(--sp-2)"></div>
+            <button class="btn-primary" type="submit" id="rec-submit">Recover account</button>
+            <button type="button" class="btn-ghost" id="rec-cancel" style="margin-top:var(--sp-2);width:100%">Back to sign in</button>
+          </form>
+        </div>
+      </div>
+    `));
+
+    const errEl = container.querySelector('#recovery-error') as HTMLElement;
+    const statusEl = container.querySelector('#rec-status') as HTMLElement;
+    const submitBtn = container.querySelector('#rec-submit') as HTMLButtonElement;
+    const cancelBtn = container.querySelector('#rec-cancel') as HTMLButtonElement;
+    const form = container.querySelector('#recovery-form') as HTMLFormElement;
+
+    function showRecError(msg: string) {
+      errEl.textContent = msg;
+      errEl.classList.remove('hidden');
+    }
+    function setRecLoading(on: boolean, label?: string) {
+      submitBtn.disabled = on;
+      submitBtn.textContent = on ? (label || 'Recovering…') : 'Recover account';
+      cancelBtn.disabled = on;
+    }
+
+    cancelBtn.addEventListener('click', () => {
+      mode = 'login';
+      render();
+    });
+
+    form.addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      errEl.classList.add('hidden');
+      const username = (container.querySelector('#rec-username') as HTMLInputElement).value.trim().toLowerCase();
+      const mnemonicRaw = (container.querySelector('#rec-mnemonic') as HTMLTextAreaElement).value.trim();
+      const newPass = (container.querySelector('#rec-new-pass') as HTMLInputElement).value;
+      const newPassConfirm = (container.querySelector('#rec-new-pass-confirm') as HTMLInputElement).value;
+
+      if (!username) { showRecError('Enter your username.'); return; }
+      if (newPass.length < 16) { showRecError('New passphrase must be at least 16 characters.'); return; }
+      if (newPass !== newPassConfirm) { showRecError('Passphrases do not match.'); return; }
+
+      const mnemonic = mnemonicRaw.toLowerCase().replace(/\s+/g, ' ').trim();
+      const wordCount = mnemonic.split(' ').filter(Boolean).length;
+      if (wordCount !== 12) { showRecError('Recovery phrase must be exactly 12 words.'); return; }
+
+      setRecLoading(true, 'Verifying phrase…');
+      try {
+        // 1. Re-derive recovery key from mnemonic locally
+        const entropy = await entropyFromMnemonic(mnemonic);
+        if (!entropy) {
+          showRecError('Recovery phrase is invalid. Check spelling and word order.');
+          setRecLoading(false);
+          return;
+        }
+        const recoveryRawKey = await deriveRecoveryRawKey(entropy);
+        const verifier = await deriveRecoveryVerifier(recoveryRawKey);
+
+        // 2. Solve PoW + fetch the encrypted vault
+        statusEl.textContent = 'Solving proof-of-work…';
+        const startPow = await solvePowIfAvailable();
+        if (!startPow.token || !startPow.nonce) {
+          showRecError('Could not obtain proof-of-work challenge. Try again.');
+          setRecLoading(false);
+          return;
+        }
+        statusEl.textContent = 'Fetching encrypted vault…';
+        const startRes = await api.recoveryStart({
+          username,
+          pow_token: startPow.token,
+          pow_nonce: startPow.nonce,
+        });
+        if (!startRes.ok) {
+          const data = startRes.data as { error?: string };
+          showRecError(data?.error || 'No recovery vault found for this username.');
+          setRecLoading(false);
+          return;
+        }
+        if (!startRes.data.requires_verifier) {
+          showRecError('This account was registered before recovery vaults were available. Please sign in normally and re-enable recovery in Settings.');
+          setRecLoading(false);
+          return;
+        }
+
+        // 3. Decrypt the vault locally
+        statusEl.textContent = 'Decrypting vault…';
+        let recoveredKeys;
+        try {
+          recoveredKeys = await decryptPrivateKeys(recoveryRawKey, startRes.data.blob);
+        } catch {
+          showRecError('Recovery phrase does not match this account.');
+          setRecLoading(false);
+          return;
+        }
+
+        // 4. Re-encrypt the bundle under the new passphrase
+        statusEl.textContent = 'Re-encrypting under new passphrase…';
+        const newSalt = generateSalt();
+        const newAuthSalt = new TextEncoder().encode(`rocchat:${username}`);
+        const newAuthHash = await deriveAuthHash(newPass, newAuthSalt);
+        const newVaultKey = await deriveVaultKey(newPass, newAuthSalt);
+
+        // Synthetic LocalKeyBundle for `encryptPrivateKeys`. Public keys + SPK
+        // signature are NOT serialized into the encrypted blob — only the
+        // private halves + identity DH — so we satisfy the type with empty
+        // placeholders. The recovered identity private already gives us full
+        // E2E session continuity; SPK signature regenerates on next normal
+        // login (it's bumped on every SPK rotation).
+        const empty = new Uint8Array(0);
+        const recoveredBundle = {
+          identityKeyPair: {
+            publicKey: fromBase64(startRes.data.identity_key),
+            privateKey: recoveredKeys.identityPrivateKey,
+          },
+          signedPreKey: {
+            id: 0,
+            keyPair: {
+              publicKey: empty,
+              privateKey: recoveredKeys.signedPreKeyPrivateKey,
+            },
+            signature: empty,
+          },
+          oneTimePreKeys: recoveredKeys.oneTimePreKeys.map((k) => ({
+            id: k.id,
+            keyPair: { publicKey: empty, privateKey: k.privateKey },
+          })),
+        };
+        const identityDH = recoveredKeys.identityDHPublicKey && recoveredKeys.identityDHPrivateKey
+          ? {
+              publicKey: recoveredKeys.identityDHPublicKey,
+              privateKey: recoveredKeys.identityDHPrivateKey,
+            }
+          : undefined;
+        const newEncryptedKeys = await encryptPrivateKeys(newVaultKey, recoveredBundle, identityDH);
+        // Re-bundle the recovery vault too so the next recovery run still works
+        const newRecoveryBlob = await encryptPrivateKeys(recoveryRawKey, recoveredBundle, identityDH);
+
+        // 5. Submit /recovery/complete (with a fresh PoW solution)
+        statusEl.textContent = 'Finalising recovery…';
+        const completePow = await solvePowIfAvailable();
+        if (!completePow.token || !completePow.nonce) {
+          showRecError('Proof-of-work failed. Try again.');
+          setRecLoading(false);
+          return;
+        }
+        const completeRes = await api.recoveryComplete({
+          username,
+          challenge: startRes.data.challenge,
+          new_auth_hash: toBase64(newAuthHash),
+          new_salt: toBase64(newSalt),
+          new_encrypted_keys: newEncryptedKeys,
+          new_recovery_blob: newRecoveryBlob,
+          new_recovery_verifier: verifier,
+          recovery_verifier: verifier,
+          pow_token: completePow.token,
+          pow_nonce: completePow.nonce,
+        });
+        if (!completeRes.ok) {
+          const data = completeRes.data as { error?: string };
+          showRecError(data?.error || 'Recovery failed. Try again later.');
+          setRecLoading(false);
+          return;
+        }
+
+        // Done — bring user back to login with success message.
+        mode = 'login';
+        render();
+        const successEl = container.querySelector('#auth-error') as HTMLElement | null;
+        if (successEl) {
+          successEl.textContent = 'Passphrase reset. Sign in with your new passphrase.';
+          successEl.classList.remove('hidden');
+          successEl.style.color = 'var(--success)';
+          successEl.style.background = 'rgba(30, 166, 114, 0.1)';
+          successEl.style.borderColor = 'rgba(30, 166, 114, 0.2)';
+        }
+        const userInput = container.querySelector('#username') as HTMLInputElement | null;
+        if (userInput) userInput.value = username;
+      } catch {
+        showRecError('Recovery failed. Please try again.');
+      } finally {
+        setRecLoading(false);
+        statusEl.textContent = '';
+      }
+    });
   }
 
   render();

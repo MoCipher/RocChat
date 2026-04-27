@@ -100,7 +100,10 @@ async function encryptSignaling(payload: Record<string, unknown>): Promise<Recor
       callState.remoteUserId,
       JSON.stringify(sensitiveData),
     );
-    return { callId, targetUserId, encryptedSignaling: encrypted };
+    // conversationId rides in cleartext so the recipient can find the
+    // pairwise ratchet session even when the message arrives over the
+    // user-inbox WS (which is not conversation-scoped).
+    return { callId, targetUserId, conversationId: callState.conversationId, encryptedSignaling: encrypted };
   } catch {
     return payload;
   }
@@ -111,12 +114,20 @@ async function decryptSignaling(
   conversationId?: string,
 ): Promise<Record<string, unknown>> {
   if (!payload.encryptedSignaling) return payload;
-  const convId = conversationId || callState.conversationId;
+  const convId = conversationId
+    || (payload.conversationId as string | undefined)
+    || callState.conversationId;
   if (!convId) return payload;
   try {
     const decrypted = await decryptMessage(convId, payload.encryptedSignaling as any);
     const data = JSON.parse(decrypted);
-    return { ...data, callId: payload.callId, targetUserId: payload.targetUserId, fromUserId: payload.fromUserId };
+    return {
+      ...data,
+      callId: payload.callId,
+      targetUserId: payload.targetUserId,
+      fromUserId: payload.fromUserId,
+      conversationId: convId,
+    };
   } catch {
     return payload;
   }
@@ -238,12 +249,15 @@ export async function startOutgoingCall(
   callType: 'voice' | 'video', ws: WebSocket,
 ) {
   if (callState.status !== 'idle') return;
-  // Note: video is treated as voice on the wire — native peers don't yet
-  // ship a video media stack, so a "video" 1:1 with native would silently
-  // fail to render. UI label can stay 'video' but transport is audio.
+  // Prefer the user-inbox WS so calls reach the callee even if they don't
+  // currently have this conversation open. Fall back to the conversation WS
+  // if the inbox isn't connected (e.g. transient disconnect).
+  const { getInboxWs } = await import('../inbox-ws.js');
+  const inbox = getInboxWs();
+  const signalWs = inbox || ws;
   Object.assign(callState, {
     callId: randomId(), conversationId, remoteUserId, remoteName, callType,
-    status: 'outgoing', ws,
+    status: 'outgoing', ws: signalWs,
   });
   showCallOverlay();
   try {
@@ -251,20 +265,24 @@ export async function startOutgoingCall(
     const offerPayload = await encryptSignaling({
       callId: callState.callId, callType, targetUserId: remoteUserId, timestamp: Date.now(),
     });
-    ws.send(JSON.stringify({ type: 'call_offer', payload: offerPayload }));
+    signalWs.send(JSON.stringify({ type: 'call_offer', payload: offerPayload }));
   } catch (err) { handleMediaError(err); }
 }
 
 // ── Incoming Call ──
 
-export async function handleIncomingCallOffer(payload: Record<string, unknown>, conversationId: string, ws: WebSocket | null) {
+export async function handleIncomingCallOffer(payload: Record<string, unknown>, conversationId: string | null, ws: WebSocket | null) {
+  // Resolve conversationId from payload if not passed (inbox-WS path).
+  const convId = conversationId || (payload.conversationId as string | undefined) || '';
   if (callState.status !== 'idle' || !ws) {
-    ws?.send(JSON.stringify({ type: 'call_end', payload: { callId: payload.callId, reason: 'busy', targetUserId: payload.fromUserId }}));
+    ws?.send(JSON.stringify({ type: 'call_end', payload: { callId: payload.callId, reason: 'busy', targetUserId: payload.fromUserId, conversationId: convId }}));
     return;
   }
-  const decrypted = await decryptSignaling(payload, conversationId);
+  const decrypted = await decryptSignaling(payload, convId);
   Object.assign(callState, {
-    callId: decrypted.callId, conversationId, remoteUserId: decrypted.fromUserId || payload.fromUserId,
+    callId: decrypted.callId,
+    conversationId: convId,
+    remoteUserId: decrypted.fromUserId || payload.fromUserId,
     remoteName: ((decrypted.fromUserId || payload.fromUserId) as string).slice(0, 8),
     callType: (decrypted.callType as 'voice' | 'video') || 'voice',
     status: 'incoming', ws,

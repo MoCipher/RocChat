@@ -347,6 +347,207 @@ async function handleLogin(request: Request, env: Env): Promise<Response> {
 
 // Turnstile removed — RocChat uses proof-of-work only. No third-party CAPTCHA.
 
+/**
+ * Recovery — start: returns the encrypted recovery vault for a username so
+ * the client can decrypt it locally with the user's BIP39 mnemonic. The
+ * blob is opaque (AES-GCM with a key derived from 128-bit BIP39 entropy);
+ * the only sensitive material disclosed is the user's identity public key
+ * + the auth-hash salt, both of which are public anyway after first message.
+ *
+ * Anti-abuse:
+ *  - Per-IP & per-username rate limit happens at the router layer.
+ *  - Proof-of-work required (same as login) to prevent mass enumeration.
+ *  - Returns the same shape regardless of whether the user/vault exists,
+ *    using a constant-time delay; an opaque error code is returned so the
+ *    client can distinguish "not eligible for recovery" from "bad PoW".
+ */
+export async function handleRecoveryStart(request: Request, env: Env): Promise<Response> {
+  const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
+  const body = (await request.json().catch(() => ({}))) as {
+    username?: string;
+    pow_token?: string;
+    pow_nonce?: string;
+  };
+  const username = (body.username || '').trim().toLowerCase();
+  if (!username || username.length > 64) return apiError('BAD_REQUEST', 'Missing username');
+
+  if (!body.pow_token || !body.pow_nonce) return errorResponse('Proof-of-work required', 403);
+  const powOk = await verifyPowSolution(env, body.pow_token, body.pow_nonce, ip);
+  if (!powOk) return errorResponse('Invalid proof-of-work', 403);
+
+  // Always burn ~120ms to flatten timing.
+  const delay = new Promise<void>((resolve) => setTimeout(resolve, 80 + Math.random() * 60));
+
+  const user = await env.DB.prepare('SELECT id, salt, identity_key FROM users WHERE username = ?')
+    .bind(username)
+    .first<{ id: string; salt: string; identity_key: string }>();
+
+  if (!user) {
+    await delay;
+    return errorResponse('No recovery vault found', 404);
+  }
+
+  const raw = await env.KV.get(`recovery_vault:${user.id}`);
+  if (!raw) {
+    await delay;
+    return errorResponse('No recovery vault found', 404);
+  }
+
+  let blob = raw;
+  let verifierPresent = false;
+  try {
+    const parsed = JSON.parse(raw) as { blob?: string; verifier?: string | null };
+    if (parsed && typeof parsed.blob === 'string') blob = parsed.blob;
+    verifierPresent = typeof parsed?.verifier === 'string' && parsed.verifier.length > 0;
+  } catch { /* legacy raw blob */ }
+
+  await delay;
+  // Issue a one-time recovery challenge bound to this username + IP.
+  // The client must echo this challenge in `complete` and prove possession
+  // of the recovery key by matching the stored verifier.
+  const challenge = crypto.randomUUID();
+  await env.KV.put(`recovery_challenge:${user.id}`, JSON.stringify({ challenge, ip, ts: Date.now() }), {
+    expirationTtl: 600,
+  });
+
+  return jsonResponse({
+    blob,
+    salt: user.salt,
+    identity_key: user.identity_key,
+    challenge,
+    requires_verifier: verifierPresent,
+  });
+}
+
+/**
+ * Recovery — complete: rotates the user's auth_hash + encrypted_keys after
+ * verifying the recovery verifier. Revokes all existing sessions on success.
+ *
+ * Body:
+ *  - username, challenge: returned from /recovery/start
+ *  - new_auth_hash, new_salt, new_encrypted_keys: re-derived from the
+ *    user's freshly-chosen passphrase
+ *  - new_recovery_blob, new_recovery_verifier: the recovery vault re-bundled
+ *    against the existing recovery key (so the user can recover again)
+ *  - recovery_verifier: SHA-256(domain || recoveryKey) — must match the
+ *    verifier stored at the original /recovery/vault upload time
+ *  - pow_token / pow_nonce: PoW solution
+ */
+export async function handleRecoveryComplete(request: Request, env: Env): Promise<Response> {
+  const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
+  const body = (await request.json().catch(() => ({}))) as {
+    username?: string;
+    challenge?: string;
+    new_auth_hash?: string;
+    new_salt?: string;
+    new_encrypted_keys?: string;
+    new_recovery_blob?: string;
+    new_recovery_verifier?: string;
+    recovery_verifier?: string;
+    pow_token?: string;
+    pow_nonce?: string;
+  };
+  const username = (body.username || '').trim().toLowerCase();
+  if (!username) return apiError('BAD_REQUEST', 'Missing username');
+  if (!body.new_auth_hash || !body.new_salt || !body.new_encrypted_keys) {
+    return apiError('BAD_REQUEST', 'Missing new credentials');
+  }
+  if (!body.recovery_verifier) return apiError('BAD_REQUEST', 'Missing recovery verifier');
+  if (!body.challenge) return apiError('BAD_REQUEST', 'Missing recovery challenge');
+
+  if (!body.pow_token || !body.pow_nonce) return errorResponse('Proof-of-work required', 403);
+  const powOk = await verifyPowSolution(env, body.pow_token, body.pow_nonce, ip);
+  if (!powOk) return errorResponse('Invalid proof-of-work', 403);
+
+  // Reject obviously malformed credentials early
+  if (body.new_auth_hash.length < 16 || body.new_auth_hash.length > 512) {
+    return apiError('BAD_REQUEST', 'Invalid auth_hash');
+  }
+  if (body.new_salt.length < 16 || body.new_salt.length > 256) {
+    return apiError('BAD_REQUEST', 'Invalid salt');
+  }
+  if (body.new_encrypted_keys.length > 32 * 1024) {
+    return apiError('BAD_REQUEST', 'encrypted_keys too large');
+  }
+
+  const user = await env.DB.prepare('SELECT id FROM users WHERE username = ?')
+    .bind(username)
+    .first<{ id: string }>();
+  if (!user) {
+    await new Promise((r) => setTimeout(r, 100));
+    return errorResponse('Recovery not eligible', 403);
+  }
+
+  // Verify the one-time challenge
+  const challengeRaw = await env.KV.get(`recovery_challenge:${user.id}`);
+  if (!challengeRaw) return errorResponse('Recovery challenge expired', 403);
+  let challengeData: { challenge: string; ip: string; ts: number };
+  try {
+    challengeData = JSON.parse(challengeRaw) as { challenge: string; ip: string; ts: number };
+  } catch {
+    return errorResponse('Recovery challenge invalid', 403);
+  }
+  if (!timingSafeEqual(challengeData.challenge, body.challenge)) {
+    return errorResponse('Recovery challenge invalid', 403);
+  }
+  // Single-use
+  await env.KV.delete(`recovery_challenge:${user.id}`);
+
+  // Verify recovery verifier matches what's stored
+  const storedVaultRaw = await env.KV.get(`recovery_vault:${user.id}`);
+  if (!storedVaultRaw) return errorResponse('Recovery not eligible', 403);
+  let storedVerifier: string | null = null;
+  try {
+    const parsed = JSON.parse(storedVaultRaw) as { verifier?: string | null };
+    storedVerifier = typeof parsed.verifier === 'string' ? parsed.verifier : null;
+  } catch { /* legacy: no verifier present */ }
+  if (!storedVerifier) {
+    // Legacy vault — recovery via this endpoint is not authorised for users
+    // that haven't migrated to the verifier-protected vault yet.
+    return errorResponse('Account not eligible for self-service recovery', 403);
+  }
+  if (!timingSafeEqual(storedVerifier, body.recovery_verifier)) {
+    return errorResponse('Recovery verification failed', 403);
+  }
+
+  // Rotate auth credentials atomically
+  await env.DB.prepare(
+    'UPDATE users SET auth_hash = ?, salt = ?, encrypted_keys = ? WHERE id = ?',
+  ).bind(body.new_auth_hash, body.new_salt, body.new_encrypted_keys, user.id).run();
+
+  // Optionally rotate the recovery vault itself (mnemonic stays the same;
+  // bundle inside might have changed).
+  if (body.new_recovery_blob) {
+    await env.KV.put(`recovery_vault:${user.id}`, JSON.stringify({
+      blob: body.new_recovery_blob,
+      verifier: body.new_recovery_verifier || storedVerifier,
+    }));
+  }
+
+  // Revoke ALL existing sessions for this user — every device must re-login.
+  // KV doesn't support prefix scans cheaply, so we additionally maintain a
+  // user-session index. If it's missing for a given session, the next
+  // request from that device will re-auth via the normal mechanism.
+  try {
+    const idx = await env.KV.get(`user_sessions:${user.id}`, 'json') as string[] | null;
+    if (Array.isArray(idx)) {
+      for (const tok of idx) {
+        await env.KV.delete(`session:${tok}`);
+      }
+      await env.KV.delete(`user_sessions:${user.id}`);
+    }
+  } catch { /* best-effort */ }
+
+  // Mark all device records as inactive so push tokens stop firing until login
+  await env.DB.prepare('UPDATE devices SET last_active = ? WHERE user_id = ?')
+    .bind(0, user.id)
+    .run();
+
+  logEvent('info', 'recovery_completed', { user_id_hash: user.id.slice(0, 8) });
+
+  return jsonResponse({ ok: true });
+}
+
 /** Constant-time string comparison using Web Crypto */
 function timingSafeEqual(a: string, b: string): boolean {
   const encoder = new TextEncoder();

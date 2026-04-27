@@ -2555,11 +2555,7 @@ struct ConversationView: View {
             let deviceId = "ios"
 
             guard let ticket = await fetchWsTicket(),
-                  let wsBase = APIClient.shared.websocketBaseURL,
-                  var components = URLComponents(
-                    url: wsBase.appendingPathComponent("api/ws/\(conversation.id)"),
-                    resolvingAgainstBaseURL: false
-                  ) else { return }
+                  var components = URLComponents(string: "wss://rocchat-api.spoass.workers.dev/api/ws/\(conversation.id)") else { return }
             components.queryItems = [
                 URLQueryItem(name: "userId", value: userId),
                 URLQueryItem(name: "deviceId", value: deviceId),

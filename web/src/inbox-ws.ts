@@ -50,7 +50,7 @@ export async function connectInbox(): Promise<WebSocket | null> {
   manuallyClosed = false;
 
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const wsHost = location.host;
+  const wsHost = location.hostname === 'localhost' ? location.host : 'rocchat-api.spoass.workers.dev';
   const deviceId = localStorage.getItem('rocchat_device_id') || 'web';
 
   let url: string | null = null;

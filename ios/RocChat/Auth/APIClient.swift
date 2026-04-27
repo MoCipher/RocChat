@@ -77,19 +77,6 @@ class APIClient {
         self.refreshToken = SecureStorage.shared.get(forKey: "refresh_token")
     }
 
-    var websocketBaseURL: URL? {
-        guard var components = URLComponents(string: baseURL) else { return nil }
-        components.path = ""
-        components.query = nil
-        components.fragment = nil
-        if components.scheme == "https" {
-            components.scheme = "wss"
-        } else if components.scheme == "http" {
-            components.scheme = "ws"
-        }
-        return components.url
-    }
-
     func webSocketTask(with url: URL) -> URLSessionWebSocketTask {
         session.webSocketTask(with: url)
     }

@@ -615,8 +615,9 @@ RocChat **does not use Google's WebRTC framework, libwebrtc, GoogleWebRTC, or an
 
 Call offers, answers, and ICE candidates flow over the **user-inbox WebSocket** (preferred) or the conversation WebSocket and are double-encrypted (outer TLS + inner Double Ratchet) before the server sees them. The user-inbox WebSocket (`/api/ws/user/:userId`) is an always-on per-user connection managed by the `UserInbox` Durable Object; it forwards signaling to the callee's connected devices regardless of which conversation view is open. If the inbox WS is unavailable, the conversation WS is used as a fallback:
 
-Web clients must resolve signaling WebSocket host from the active app origin
-to keep ticket issuance and WS delivery on the same backend origin.
+Web and iOS clients use the dedicated Worker WS host for signaling
+(`wss://rocchat-api.spoass.workers.dev`) to ensure reliable WebSocket upgrade
+behavior for both conversation and user-inbox channels.
 
 ```
 signal_msg = DoubleRatchet.encrypt({

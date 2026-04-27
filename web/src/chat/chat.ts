@@ -1551,9 +1551,9 @@ async function connectWebSocket(conversationId: string) {
   if (!token || !userId) return;
 
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  // Use the current origin for WS so signaling stays on the same backend
-  // origin as the authenticated HTTP API/ticket flow.
-  const wsHost = location.host;
+  // Connect directly to the Worker backend — the Pages Function proxy
+  // cannot handle WebSocket upgrade requests (fetch() strips Upgrade header).
+  const wsHost = location.hostname === 'localhost' ? location.host : 'rocchat-api.spoass.workers.dev';
   const deviceId = localStorage.getItem('rocchat_device_id') || 'web';
 
   // Get a short-lived WS ticket to avoid putting session token in the URL

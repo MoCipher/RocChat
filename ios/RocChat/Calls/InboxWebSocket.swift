@@ -42,14 +42,7 @@ final class InboxWebSocket {
                 scheduleReconnect()
                 return
             }
-            guard let wsBase = APIClient.shared.websocketBaseURL else {
-                scheduleReconnect()
-                return
-            }
-            guard var components = URLComponents(
-                url: wsBase.appendingPathComponent("api/ws/user/\(userId)"),
-                resolvingAgainstBaseURL: false
-            ) else {
+            guard var components = URLComponents(string: "wss://rocchat-api.spoass.workers.dev/api/ws/user/\(userId)") else {
                 scheduleReconnect()
                 return
             }

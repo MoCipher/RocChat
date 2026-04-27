@@ -455,10 +455,10 @@ Additional plaintext leaks and cross-platform inconsistencies eliminated:
   allowing robust decryption of iOS-originated `encryptedSignaling` payloads.
 - Fixed ICE server auth token lookup on web calls to use the active
   session-scoped token source, preventing unauthenticated ICE fetch failures.
-- Web call WebSocket endpoints (conversation + inbox) now resolve to the
-  current origin host (`location.host`) instead of a hardcoded worker domain,
-  preventing cross-origin signaling split where callers/callees connect to
-  different backends.
+- Web and iOS call WebSocket endpoints use the dedicated Worker WS host
+  (`rocchat-api.spoass.workers.dev`) for conversation and inbox signaling.
+  This avoids relying on front-end proxy paths that may not support WebSocket
+  upgrade semantics in all environments.
 
 ### Business feature removal
 - Removed Business-tier backend/API entrypoints and client surfaces from active

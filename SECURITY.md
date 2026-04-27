@@ -469,6 +469,13 @@ Additional plaintext leaks and cross-platform inconsistencies eliminated:
   or reconnect windows.
 - Web network status banner is now non-interactive even when visible, avoiding
   accidental pointer-event interception over top-bar call controls.
+- Web inbox connection helper now waits for a true OPEN state (with timeout)
+  before returning a socket to call-start logic, preventing CONNECTING-state
+  races that caused immediate call-start failures.
+- iOS `CallManager.startCall` no longer hard-requires a non-nil conversation WS
+  at tap-time; encrypted call signaling can proceed via inbox WS path, and
+  incoming-offer handling now tolerates missing conversation WS by reusing
+  inbox socket state.
 
 ### Business feature removal
 - Removed Business-tier backend/API entrypoints and client surfaces from active

@@ -37,8 +37,11 @@ const CALL_TYPES = new Set([
  * is already open or connecting.
  */
 export async function connectInbox(): Promise<WebSocket | null> {
-  if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+  if (ws && ws.readyState === WebSocket.OPEN) {
     return ws;
+  }
+  if (ws && ws.readyState === WebSocket.CONNECTING) {
+    return waitForOpen(ws);
   }
   if (isConnecting) return null;
 
@@ -67,13 +70,15 @@ export async function connectInbox(): Promise<WebSocket | null> {
     return null;
   }
 
+  let created: WebSocket;
   try {
-    ws = new WebSocket(url);
+    created = new WebSocket(url);
   } catch {
     isConnecting = false;
     scheduleReconnect();
     return null;
   }
+  ws = created;
 
   ws.addEventListener('open', () => {
     isConnecting = false;
@@ -100,7 +105,35 @@ export async function connectInbox(): Promise<WebSocket | null> {
     // 'close' will fire next; let it handle reconnect logic.
   });
 
-  return ws;
+  return waitForOpen(created);
+}
+
+function waitForOpen(socket: WebSocket, timeoutMs = 3000): Promise<WebSocket | null> {
+  if (socket.readyState === WebSocket.OPEN) return Promise.resolve(socket);
+  if (socket.readyState !== WebSocket.CONNECTING) return Promise.resolve(null);
+  return new Promise((resolve) => {
+    const onOpen = () => {
+      cleanup();
+      resolve(socket);
+    };
+    const onCloseOrError = () => {
+      cleanup();
+      resolve(null);
+    };
+    const timer = window.setTimeout(() => {
+      cleanup();
+      resolve(null);
+    }, timeoutMs);
+    const cleanup = () => {
+      clearTimeout(timer);
+      socket.removeEventListener('open', onOpen);
+      socket.removeEventListener('close', onCloseOrError);
+      socket.removeEventListener('error', onCloseOrError);
+    };
+    socket.addEventListener('open', onOpen);
+    socket.addEventListener('close', onCloseOrError);
+    socket.addEventListener('error', onCloseOrError);
+  });
 }
 
 function scheduleReconnect(): void {

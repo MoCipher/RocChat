@@ -625,6 +625,10 @@ feedback (not silent failure) and retry via inbox WS fallback where possible.
 Transient connectivity banners must not intercept pointer input over call
 controls; status UI should be non-blocking.
 
+Inbox WS connection helpers should only hand sockets to call initiation after
+the transport reaches OPEN state (or timeout), to avoid CONNECTING race
+conditions during call setup.
+
 ```
 signal_msg = DoubleRatchet.encrypt({
   type: "call_offer",

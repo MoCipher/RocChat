@@ -129,7 +129,7 @@ class CallManager: ObservableObject {
     // MARK: - Outgoing Call
 
     func startCall(conversationId: String, remoteUserId: String, remoteName: String,
-                   callType: CallType, ws: URLSessionWebSocketTask) {
+                   callType: CallType, ws: URLSessionWebSocketTask?) {
         guard callStatus == .idle else { return }
 
         self.callId = UUID().uuidString
@@ -161,7 +161,8 @@ class CallManager: ObservableObject {
     // MARK: - Incoming Call
 
     func handleIncomingOffer(payload: [String: Any], conversationId: String, ws: URLSessionWebSocketTask?) {
-        guard callStatus == .idle, let ws = ws else {
+        let signalWs = ws ?? InboxWebSocket.shared.task
+        guard callStatus == .idle, let signalWs = signalWs else {
             // Busy — reject
             if let callId = payload["callId"] as? String, let from = payload["fromUserId"] as? String {
                 sendSignal(type: "call_end", extra: ["callId": callId, "reason": "busy", "targetUserId": from])
@@ -177,7 +178,7 @@ class CallManager: ObservableObject {
         self.remoteName = String(self.remoteUserId.prefix(8))
         self.callType = CallType(rawValue: (decrypted["callType"] as? String) ?? "voice") ?? .voice
         self.callStatus = .incoming
-        self.ws = ws
+        self.ws = signalWs
         self.pendingSdp = decrypted["sdp"] as? String
 
         configureAudioSession()

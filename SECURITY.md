@@ -451,6 +451,8 @@ Additional plaintext leaks and cross-platform inconsistencies eliminated:
 ### Signaling format interoperability hardening (web <-> iOS)
 - Web call signaling now serializes Double Ratchet headers into
   `ratchet_header` string format expected by native clients.
+- Web signaling payloads now include AES-GCM `tag` explicitly and embed it in
+  serialized ratchet headers for native decrypt compatibility.
 - Web decrypt path now accepts both serialized-string and object header forms,
   allowing robust decryption of iOS-originated `encryptedSignaling` payloads.
 - Fixed ICE server auth token lookup on web calls to use the active
@@ -462,6 +464,9 @@ Additional plaintext leaks and cross-platform inconsistencies eliminated:
 - Web call start/incoming handlers now hard-fail with visible UX feedback when
   no signaling socket is open, and prefer inbox WS fallback when conversation
   WS is unavailable. This removes silent no-op call button behavior.
+- iOS conversation toolbar call actions now fall back to inbox WS when
+  conversation WS is not yet connected, preventing no-op taps in cold-start
+  or reconnect windows.
 
 ### Business feature removal
 - Removed Business-tier backend/API entrypoints and client surfaces from active

@@ -1340,7 +1340,7 @@ struct ConversationView: View {
         ToolbarItemGroup(placement: .topBarTrailing) {
             if conversation.isGroup {
                 Button(action: {
-                    if let task = wsTask {
+                    if let task = wsTask ?? InboxWebSocket.shared.task {
                         let memberIds = conversation.members.map { $0.userId }
                         CallManager.shared.startGroupCall(
                             conversationId: conversation.id,
@@ -1355,7 +1355,7 @@ struct ConversationView: View {
             } else {
                 Button(action: {
                     let others = conversation.members.filter { $0.userId != userId }
-                    if let peer = others.first, let task = wsTask {
+                    if let peer = others.first, let task = wsTask ?? InboxWebSocket.shared.task {
                         CallManager.shared.startCall(
                             conversationId: conversation.id,
                             remoteUserId: peer.userId,
@@ -1369,7 +1369,7 @@ struct ConversationView: View {
                 }
                 Button(action: {
                     let others = conversation.members.filter { $0.userId != userId }
-                    if let peer = others.first, let task = wsTask {
+                    if let peer = others.first, let task = wsTask ?? InboxWebSocket.shared.task {
                         CallManager.shared.startCall(
                             conversationId: conversation.id,
                             remoteUserId: peer.userId,

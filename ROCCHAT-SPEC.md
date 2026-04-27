@@ -630,6 +630,10 @@ signal_msg = DoubleRatchet.encrypt({
 })
 ```
 
+Serialized signaling envelopes must carry AES-GCM auth tag data (either as
+`tag` field or equivalent in the serialized ratchet header) so receivers can
+decrypt across platform implementations.
+
 Server relays opaque ciphertext. It cannot learn IP addresses, SDP, or call duration.
 
 #### Layer 2 — RocP2P Transport

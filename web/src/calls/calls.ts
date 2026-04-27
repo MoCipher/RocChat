@@ -103,12 +103,15 @@ async function encryptSignaling(payload: Record<string, unknown>): Promise<Recor
     JSON.stringify(sensitiveData),
   );
   const enc = encrypted as unknown as Record<string, unknown>;
-  const headerObj = enc.x3dh ? { ...encrypted.header, x3dh: enc.x3dh } : encrypted.header;
+  const headerObj = enc.x3dh
+    ? { ...encrypted.header, tag: encrypted.tag, x3dh: enc.x3dh }
+    : { ...encrypted.header, tag: encrypted.tag };
   return {
     callId, targetUserId, conversationId: callState.conversationId,
     encryptedSignaling: {
       ciphertext: encrypted.ciphertext,
       iv: encrypted.iv,
+      tag: encrypted.tag,
       ratchet_header: JSON.stringify(headerObj),
     },
   };
@@ -163,9 +166,11 @@ async function encryptGroupSignaling(
   if (targetUserId && typeof targetUserId === 'string') {
     const encrypted = await encryptMessage(convId, targetUserId, JSON.stringify(sensitiveData));
     const enc = encrypted as unknown as Record<string, unknown>;
-    const headerObj = enc.x3dh ? { ...encrypted.header, x3dh: enc.x3dh } : encrypted.header;
+    const headerObj = enc.x3dh
+      ? { ...encrypted.header, tag: encrypted.tag, x3dh: enc.x3dh }
+      : { ...encrypted.header, tag: encrypted.tag };
     return { callId, targetUserId, encryptedSignaling: {
-      ciphertext: encrypted.ciphertext, iv: encrypted.iv, ratchet_header: JSON.stringify(headerObj),
+      ciphertext: encrypted.ciphertext, iv: encrypted.iv, tag: encrypted.tag, ratchet_header: JSON.stringify(headerObj),
     } };
   }
   if (members?.length) {

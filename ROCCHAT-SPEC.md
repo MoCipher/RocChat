@@ -622,6 +622,9 @@ behavior for both conversation and user-inbox channels.
 If a signaling socket is not yet open, clients must present explicit user
 feedback (not silent failure) and retry via inbox WS fallback where possible.
 
+Transient connectivity banners must not intercept pointer input over call
+controls; status UI should be non-blocking.
+
 ```
 signal_msg = DoubleRatchet.encrypt({
   type: "call_offer",

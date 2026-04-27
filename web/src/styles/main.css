@@ -3632,7 +3632,7 @@ html[data-channel="roc"] .top-bar::after {
 .network-banner.visible {
   transform: translateY(0);
   opacity: 1;
-  pointer-events: auto;
+  pointer-events: none;
 }
 .network-banner.offline {
   background: var(--danger);

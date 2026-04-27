@@ -467,6 +467,8 @@ Additional plaintext leaks and cross-platform inconsistencies eliminated:
 - iOS conversation toolbar call actions now fall back to inbox WS when
   conversation WS is not yet connected, preventing no-op taps in cold-start
   or reconnect windows.
+- Web network status banner is now non-interactive even when visible, avoiding
+  accidental pointer-event interception over top-bar call controls.
 
 ### Business feature removal
 - Removed Business-tier backend/API entrypoints and client surfaces from active

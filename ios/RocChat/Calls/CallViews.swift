@@ -173,6 +173,18 @@ struct CallOverlay: View {
                 }
             }
             HStack(spacing: 28) {
+            if callManager.isGroupCall {
+                Button(action: { callManager.toggleHandRaise() }) {
+                    ZStack {
+                        Circle()
+                            .fill(callManager.groupHandRaised ? Color.white.opacity(0.3) : Color.white.opacity(0.1))
+                            .frame(width: 52, height: 52)
+                        Image(systemName: callManager.groupHandRaised ? "hand.raised.fill" : "hand.raised")
+                            .font(.title3)
+                            .foregroundColor(.white)
+                    }
+                }
+            }
             // Mute
             Button(action: { callManager.toggleMute() }) {
                 ZStack {

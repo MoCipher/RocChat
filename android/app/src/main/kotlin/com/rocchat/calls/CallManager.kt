@@ -72,6 +72,7 @@ object CallManager {
     var groupHostUserId by mutableStateOf("")
     var groupRoomLocked by mutableStateOf(false)
     var groupMediaMode by mutableStateOf("mesh")
+    var groupHandRaised by mutableStateOf(false)
     private val maxMeshPeers = 5 // 6 total including self
 
     private var callId: String? = null
@@ -814,6 +815,7 @@ object CallManager {
         this.groupHostUserId = appContext?.getSharedPreferences("rocchat", Context.MODE_PRIVATE)?.getString("user_id", "") ?: ""
         this.groupRoomLocked = false
         this.groupMediaMode = if (members.size > 2) "sfu" else "mesh"
+        this.groupHandRaised = false
         this.startTime = System.currentTimeMillis()
 
         startDurationTimer()
@@ -844,6 +846,7 @@ object CallManager {
         this.groupHostUserId = fromUserId
         this.groupRoomLocked = false
         this.groupMediaMode = decrypted.optString("mode", "mesh")
+        this.groupHandRaised = false
         this.startTime = System.currentTimeMillis()
 
         startDurationTimer()
@@ -898,6 +901,7 @@ object CallManager {
         groupHostUserId = ""
         groupRoomLocked = false
         groupMediaMode = "mesh"
+        groupHandRaised = false
         endCall("hangup", notify = false)
     }
 
@@ -914,6 +918,11 @@ object CallManager {
         if (groupHostUserId.isEmpty() || myId != groupHostUserId) return
         groupRoomLocked = !groupRoomLocked
         sendGroupSignal(if (groupRoomLocked) "meeting_host_lock_room" else "meeting_host_unlock_room", mapOf("callId" to (callId ?: "")))
+    }
+
+    fun toggleHandRaise() {
+        groupHandRaised = !groupHandRaised
+        sendGroupSignal(if (groupHandRaised) "meeting_raise_hand" else "meeting_lower_hand", mapOf("callId" to (callId ?: "")))
     }
 
     private fun addGroupPeer(userId: String) {

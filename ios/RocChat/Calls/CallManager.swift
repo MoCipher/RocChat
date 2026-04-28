@@ -77,6 +77,7 @@ class CallManager: ObservableObject {
     @Published var groupHostUserId: String = ""
     @Published var groupRoomLocked: Bool = false
     @Published var groupMediaMode: String = "mesh"
+    @Published var groupHandRaised: Bool = false
     private let maxMeshPeers = 5 // 6 total including self
 
     private var callId: String?
@@ -752,6 +753,7 @@ class CallManager: ObservableObject {
         self.groupHostUserId = UserDefaults.standard.string(forKey: "user_id") ?? ""
         self.groupRoomLocked = false
         self.groupMediaMode = members.count > 2 ? "sfu" : "mesh"
+        self.groupHandRaised = false
         self.startTime = Date()
 
         configureAudioSession()
@@ -783,6 +785,7 @@ class CallManager: ObservableObject {
         self.groupHostUserId = fromUserId
         self.groupRoomLocked = false
         self.groupMediaMode = (decrypted["mode"] as? String) ?? "mesh"
+        self.groupHandRaised = false
         self.startTime = Date()
 
         configureAudioSession()
@@ -859,6 +862,7 @@ class CallManager: ObservableObject {
         groupHostUserId = ""
         groupRoomLocked = false
         groupMediaMode = "mesh"
+        groupHandRaised = false
         endCall(reason: "hangup", notify: false)
     }
 
@@ -875,6 +879,11 @@ class CallManager: ObservableObject {
         guard myId == groupHostUserId else { return }
         groupRoomLocked.toggle()
         sendGroupSignal(type: groupRoomLocked ? "meeting_host_lock_room" : "meeting_host_unlock_room", extra: ["callId": callId ?? ""])
+    }
+
+    func toggleHandRaise() {
+        groupHandRaised.toggle()
+        sendGroupSignal(type: groupHandRaised ? "meeting_raise_hand" : "meeting_lower_hand", extra: ["callId": callId ?? ""])
     }
 
     private func addGroupPeer(userId: String, isInitiator: Bool) {

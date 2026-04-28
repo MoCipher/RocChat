@@ -221,6 +221,20 @@ private fun ActiveControls() {
         )
     }
     Row(horizontalArrangement = Arrangement.spacedBy(20.dp), verticalAlignment = Alignment.CenterVertically) {
+        if (CallManager.isGroupCall) {
+            IconButton(
+                onClick = { CallManager.toggleHandRaise() },
+                modifier = Modifier
+                    .size(52.dp)
+                    .clip(CircleShape)
+                    .background(if (CallManager.groupHandRaised) Color.White.copy(0.3f) else Color.White.copy(0.1f))
+            ) {
+                Icon(
+                    if (CallManager.groupHandRaised) Icons.Default.PanTool else Icons.Default.BackHand,
+                    contentDescription = "Hand raise", tint = Color.White, modifier = Modifier.size(24.dp)
+                )
+            }
+        }
         // Mute
         IconButton(
             onClick = { CallManager.toggleMute() },

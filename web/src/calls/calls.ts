@@ -811,13 +811,14 @@ interface GroupCallState {
   meetingId: string | null;
   hostUserId: string | null;
   locked: boolean;
+  handRaised: boolean;
 }
 
 const groupState: GroupCallState = {
   callId: null, conversationId: null, callType: 'voice', status: 'idle',
   mode: 'mesh',
   peers: new Map(), localStream: null, ws: null, startTime: null,
-  muted: false, cameraOff: false, timerInterval: null, meetingId: null, hostUserId: null, locked: false,
+  muted: false, cameraOff: false, timerInterval: null, meetingId: null, hostUserId: null, locked: false, handRaised: false,
 };
 
 const MAX_MESH_PEERS = 5; // 6 total including self
@@ -829,7 +830,7 @@ function resetGroupState() {
     callId: null, conversationId: null, status: 'idle',
     mode: 'mesh',
     peers: new Map(), localStream: null, ws: null, startTime: null,
-    muted: false, cameraOff: false, timerInterval: null, meetingId: null, hostUserId: null, locked: false,
+    muted: false, cameraOff: false, timerInterval: null, meetingId: null, hostUserId: null, locked: false, handRaised: false,
   });
 }
 
@@ -1092,6 +1093,7 @@ function groupOverlayHTML(): string {
         <button class="btn-secondary" id="gcall-lock">${groupState.locked ? 'Unlock room' : 'Lock room'}</button>
       </div>` : ''}
       <div class="call-controls" style="display:flex;gap:var(--sp-4);justify-content:center">
+        <button class="call-control-btn ${groupState.handRaised ? 'active' : ''}" id="gcall-hand"><i data-lucide="${groupState.handRaised ? 'hand-metal' : 'hand'}" style="width:24px;height:24px"></i></button>
         <button class="call-control-btn ${groupState.muted ? 'active' : ''}" id="gcall-mute"><i data-lucide="${groupState.muted ? 'mic-off' : 'mic'}" style="width:24px;height:24px"></i></button>
         ${isV ? `<button class="call-control-btn ${groupState.cameraOff ? 'active' : ''}" id="gcall-camera"><i data-lucide="${groupState.cameraOff ? 'video-off' : 'video'}" style="width:24px;height:24px"></i></button>` : ''}
         <button class="call-btn call-btn-decline" id="gcall-hangup"><i data-lucide="phone-off" style="width:24px;height:24px"></i></button>
@@ -1121,6 +1123,12 @@ function bindGroupEvents() {
     groupState.cameraOff = !groupState.cameraOff;
     groupState.localStream?.getVideoTracks().forEach((t) => { t.enabled = !groupState.cameraOff; });
     updateGroupOverlay();
+  });
+  document.getElementById('gcall-hand')?.addEventListener('click', async () => {
+    groupState.handRaised = !groupState.handRaised;
+    updateGroupOverlay();
+    if (!groupState.meetingId) return;
+    await sendMeetingEvent(groupState.meetingId, groupState.handRaised ? 'raise_hand' : 'lower_hand').catch(() => {});
   });
   document.getElementById('gcall-mute-all')?.addEventListener('click', async () => {
     if (!groupState.meetingId) return;

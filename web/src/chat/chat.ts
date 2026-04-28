@@ -153,6 +153,19 @@ export function getPlaintextCacheSnapshot(): Record<string, string> {
 // Per-conversation "last decrypted message" for sidebar preview text.
 // Keys: conversationId → { ts: epoch-ms, preview: display string }
 const lastConvPreview = new Map<string, { ts: number; preview: string }>();
+const decryptQueue = new Map<string, Promise<unknown>>();
+
+function enqueueDecrypt<T>(conversationId: string, work: () => Promise<T>): Promise<T> {
+  const prev = decryptQueue.get(conversationId) || Promise.resolve();
+  const next = prev
+    .catch(() => undefined)
+    .then(work)
+    .finally(() => {
+      if (decryptQueue.get(conversationId) === next) decryptQueue.delete(conversationId);
+    });
+  decryptQueue.set(conversationId, next as Promise<unknown>);
+  return next;
+}
 
 function buildConvPreview(plaintext: string): string {
   try {
@@ -1294,16 +1307,16 @@ function renderMessages(messages: Message[]) {
         return;
       }
 
-      const decryptPromise = isGroupEncrypted(msg.ratchet_header)
-        ? groupDecrypt(msg.conversation_id, msg.sender_id, msg.ciphertext, msg.ratchet_header)
-        : decryptMessage(msg.conversation_id, {
-            header,
-            ciphertext: msg.ciphertext,
-            iv: msg.iv,
-            tag: msg.tag || header.tag || '',
-          } as EncryptedMessage);
-
-      decryptPromise
+      enqueueDecrypt(msg.conversation_id, () => (
+        isGroupEncrypted(msg.ratchet_header)
+          ? groupDecrypt(msg.conversation_id, msg.sender_id, msg.ciphertext, msg.ratchet_header)
+          : decryptMessage(msg.conversation_id, {
+              header,
+              ciphertext: msg.ciphertext,
+              iv: msg.iv,
+              tag: msg.tag || header.tag || '',
+            } as EncryptedMessage)
+      ))
         .then((plaintext) => {
           cachePlaintext(msg.id, plaintext, msg.conversation_id, msg.created_at);
           const snippet = plaintext.length > 80 ? plaintext.slice(0, 80) + '…' : plaintext;

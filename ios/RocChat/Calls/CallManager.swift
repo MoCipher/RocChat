@@ -78,6 +78,10 @@ class CallManager: ObservableObject {
     @Published var groupRoomLocked: Bool = false
     @Published var groupMediaMode: String = "mesh"
     @Published var groupHandRaised: Bool = false
+    @Published var groupRaisedQueue: [String] = []
+    @Published var groupLobbyQueue: [String] = []
+    @Published var groupActiveSpeakerUserId: String = ""
+    @Published var groupRoles: [String: String] = [:]
     private let maxMeshPeers = 5 // 6 total including self
 
     private var callId: String?
@@ -754,6 +758,10 @@ class CallManager: ObservableObject {
         self.groupRoomLocked = false
         self.groupMediaMode = members.count > 2 ? "sfu" : "mesh"
         self.groupHandRaised = false
+        self.groupRaisedQueue = []
+        self.groupLobbyQueue = []
+        self.groupActiveSpeakerUserId = ""
+        self.groupRoles = [self.groupHostUserId: "host"]
         self.startTime = Date()
 
         configureAudioSession()
@@ -786,6 +794,10 @@ class CallManager: ObservableObject {
         self.groupRoomLocked = false
         self.groupMediaMode = (decrypted["mode"] as? String) ?? "mesh"
         self.groupHandRaised = false
+        self.groupRaisedQueue = []
+        self.groupLobbyQueue = []
+        self.groupActiveSpeakerUserId = ""
+        self.groupRoles = fromUserId.isEmpty ? [:] : [fromUserId: "host"]
         self.startTime = Date()
 
         configureAudioSession()
@@ -808,6 +820,7 @@ class CallManager: ObservableObject {
         guard !userId.isEmpty, groupPeers[userId] == nil else { return }
         guard groupPeers.count < maxMeshPeers else { return }
         groupParticipants.append(userId)
+        groupRoles[userId] = groupRoles[userId] ?? "participant"
         addGroupPeer(userId: userId, isInitiator: shouldBeInitiator(remoteUserId: userId))
     }
 
@@ -817,6 +830,9 @@ class CallManager: ObservableObject {
         peer.transport?.stop()
         groupPeers.removeValue(forKey: userId)
         groupParticipants.removeAll { $0 == userId }
+        groupRoles.removeValue(forKey: userId)
+        groupRaisedQueue.removeAll { $0 == userId }
+        groupLobbyQueue.removeAll { $0 == userId }
         if groupPeers.isEmpty {
             endGroupCall(notify: false)
         }
@@ -863,6 +879,10 @@ class CallManager: ObservableObject {
         groupRoomLocked = false
         groupMediaMode = "mesh"
         groupHandRaised = false
+        groupRaisedQueue = []
+        groupLobbyQueue = []
+        groupActiveSpeakerUserId = ""
+        groupRoles = [:]
         endCall(reason: "hangup", notify: false)
     }
 
@@ -881,8 +901,29 @@ class CallManager: ObservableObject {
         sendGroupSignal(type: groupRoomLocked ? "meeting_host_lock_room" : "meeting_host_unlock_room", extra: ["callId": callId ?? ""])
     }
 
+    func admitLobbyUser(_ userId: String) {
+        groupLobbyQueue.removeAll { $0 == userId }
+        sendGroupSignal(type: "meeting_lobby_admit", extra: ["callId": callId ?? "", "targetUserId": userId])
+    }
+
+    func denyLobbyUser(_ userId: String) {
+        groupLobbyQueue.removeAll { $0 == userId }
+        sendGroupSignal(type: "meeting_lobby_deny", extra: ["callId": callId ?? "", "targetUserId": userId])
+    }
+
+    func removeParticipant(_ userId: String) {
+        groupParticipants.removeAll { $0 == userId }
+        groupPeers[userId]?.transport?.stop()
+        groupPeers.removeValue(forKey: userId)
+        groupRoles.removeValue(forKey: userId)
+        sendGroupSignal(type: "meeting_host_remove_participant", extra: ["callId": callId ?? "", "targetUserId": userId])
+    }
+
     func toggleHandRaise() {
         groupHandRaised.toggle()
+        let myId = UserDefaults.standard.string(forKey: "user_id") ?? ""
+        if groupHandRaised && !myId.isEmpty && !groupRaisedQueue.contains(myId) { groupRaisedQueue.append(myId) }
+        if !groupHandRaised { groupRaisedQueue.removeAll { $0 == myId } }
         sendGroupSignal(type: groupHandRaised ? "meeting_raise_hand" : "meeting_lower_hand", extra: ["callId": callId ?? ""])
     }
 
@@ -1024,6 +1065,9 @@ extension CallManager: P2PTransportDelegate {
             guard let self = self, self.callStatus == .connected,
                   let player = self.playerNode else { return }
             self.trackInboundAudioTiming()
+            if self.isGroupCall, let firstPeer = self.groupParticipants.first {
+                self.groupActiveSpeakerUserId = firstPeer
+            }
             let data = self.decodeInboundAudio(pcm)
             let frameCount = AVAudioFrameCount(data.count / MemoryLayout<Int16>.size)
             guard frameCount > 0,

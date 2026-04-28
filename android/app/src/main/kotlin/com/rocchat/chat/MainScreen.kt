@@ -83,6 +83,7 @@ import com.google.zxing.common.HybridBinarizer
 import com.rocchat.calls.CallManager
 import com.rocchat.calls.CallOverlay
 import com.rocchat.calls.CallsHistoryTab
+import com.rocchat.calls.MeetingsHubTab
 import com.rocchat.crypto.GroupSessionManager
 import com.rocchat.crypto.SessionManager
 import com.rocchat.network.APIClient
@@ -269,13 +270,20 @@ fun MainScreen(onLogout: () -> Unit) {
                 NavigationBarItem(
                     selected = selectedTab == 2,
                     onClick = { selectedTab = 2 },
-                    icon = { Icon(Icons.Default.Campaign, contentDescription = "Channels") },
-                    label = { Text("Channels") },
+                    icon = { Icon(Icons.Default.Groups, contentDescription = "Meetings") },
+                    label = { Text("Meetings") },
                     colors = navItemColors,
                 )
                 NavigationBarItem(
                     selected = selectedTab == 3,
                     onClick = { selectedTab = 3 },
+                    icon = { Icon(Icons.Default.Campaign, contentDescription = "Channels") },
+                    label = { Text("Channels") },
+                    colors = navItemColors,
+                )
+                NavigationBarItem(
+                    selected = selectedTab == 4,
+                    onClick = { selectedTab = 4 },
                     icon = { Icon(Icons.Default.Person, contentDescription = "Profile") },
                     label = { Text("Profile") },
                     colors = navItemColors,
@@ -294,8 +302,9 @@ fun MainScreen(onLogout: () -> Unit) {
                     snackbarHostState = snackbarHostState,
                 )
                 1 -> CallsHistoryTab()
-                2 -> ChannelsTab()
-                3 -> SettingsTab(onLogout = onLogout)
+                2 -> MeetingsHubTab()
+                3 -> ChannelsTab()
+                4 -> SettingsTab(onLogout = onLogout)
             }
             CallOverlay()
         }

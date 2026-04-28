@@ -320,9 +320,17 @@ private fun ActiveControls() {
             Column(Modifier.fillMaxWidth().padding(16.dp)) {
                 Text("Participants", fontWeight = FontWeight.Bold, fontSize = 18.sp)
                 Spacer(Modifier.height(8.dp))
-                Text("You", color = RocColors.TextSecondary)
-                CallManager.groupParticipants.forEach {
-                    Text(it, color = RocColors.TextSecondary)
+                Text("You · ${if ((LocalContext.current.getSharedPreferences("rocchat", Context.MODE_PRIVATE).getString("user_id", "") ?: "") == CallManager.groupHostUserId) "host" else "participant"}", color = RocColors.TextSecondary)
+                CallManager.groupParticipants.forEach { uid ->
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text("$uid · ${CallManager.groupRoles[uid] ?: "participant"}", color = RocColors.TextSecondary, modifier = Modifier.weight(1f))
+                        if (CallManager.groupActiveSpeakerUserId == uid) {
+                            Text("speaking", color = RocColors.Turquoise, fontSize = 11.sp, modifier = Modifier.padding(end = 8.dp))
+                        }
+                        if (isHost) {
+                            OutlinedButton(onClick = { CallManager.removeParticipant(uid) }) { Text("Remove") }
+                        }
+                    }
                 }
                 Spacer(Modifier.height(12.dp))
             }
@@ -336,7 +344,21 @@ private fun ActiveControls() {
                 OutlinedButton(onClick = { CallManager.toggleGroupRoomLock() }, modifier = Modifier.fillMaxWidth()) {
                     Text(if (CallManager.groupRoomLocked) "Unlock room" else "Lock room")
                 }
-                OutlinedButton(onClick = { }, modifier = Modifier.fillMaxWidth()) { Text("Admit lobby users") }
+                Text("Raised hand queue", color = RocColors.TextSecondary, fontSize = 12.sp)
+                if (CallManager.groupRaisedQueue.isEmpty()) Text("None", color = RocColors.TextSecondary)
+                CallManager.groupRaisedQueue.forEachIndexed { idx, uid ->
+                    Text("#${idx + 1} $uid", color = RocColors.TextSecondary, fontSize = 12.sp)
+                }
+                Text("Lobby waiting room", color = RocColors.TextSecondary, fontSize = 12.sp)
+                if (CallManager.groupLobbyQueue.isEmpty()) Text("No one waiting", color = RocColors.TextSecondary)
+                CallManager.groupLobbyQueue.forEach { uid ->
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text(uid, color = RocColors.TextSecondary, modifier = Modifier.weight(1f))
+                        OutlinedButton(onClick = { CallManager.admitLobbyUser(uid) }) { Text("Admit") }
+                        Spacer(Modifier.width(6.dp))
+                        OutlinedButton(onClick = { CallManager.denyLobbyUser(uid) }) { Text("Deny") }
+                    }
+                }
             }
         }
     }
@@ -397,6 +419,42 @@ fun CallsHistoryTab() {
                         )
                     }
                     HorizontalDivider(modifier = Modifier.padding(start = 68.dp), color = Color.White.copy(alpha = 0.06f))
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun MeetingsHubTab() {
+    Column(modifier = Modifier.fillMaxSize()) {
+        TopAppBar(title = { Text("Meetings", fontWeight = FontWeight.Bold) })
+        LazyColumn(
+            modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+            contentPadding = PaddingValues(vertical = 12.dp),
+        ) {
+            item {
+                Card(shape = RoundedCornerShape(16.dp)) {
+                    Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("Instant meeting", fontWeight = FontWeight.SemiBold)
+                        Text("Start secure voice/video sessions with host moderation and waiting-room flow.", color = RocColors.TextSecondary, fontSize = 13.sp)
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Button(onClick = {}) { Text("Voice") }
+                            OutlinedButton(onClick = {}) { Text("Video") }
+                        }
+                    }
+                }
+            }
+            item {
+                Card(shape = RoundedCornerShape(16.dp)) {
+                    Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text("Meeting controls", fontWeight = FontWeight.SemiBold)
+                        Text("• Active speaker indicators", color = RocColors.TextSecondary, fontSize = 13.sp)
+                        Text("• Raised hand queue ordering", color = RocColors.TextSecondary, fontSize = 13.sp)
+                        Text("• Host moderation and lobby admit/deny", color = RocColors.TextSecondary, fontSize = 13.sp)
+                    }
                 }
             }
         }

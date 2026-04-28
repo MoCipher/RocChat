@@ -16,7 +16,7 @@ import { randomId } from '@rocchat/shared';
 import { encryptMessage, decryptMessage } from '../crypto/session-manager.js';
 import { groupEncrypt, groupDecrypt } from '../crypto/group-session-manager.js';
 import { getSecretString, putSecretString } from '../crypto/secure-store.js';
-import { createMeeting, sendMeetingEvent } from '../api.js';
+import { createMeeting, sendMeetingEvent, getMeetingState, listMeetings } from '../api.js';
 import { VoiceWS } from './voice-ws.js';
 import { VideoWS } from './video-ws.js';
 
@@ -245,9 +245,20 @@ async function addCallRecord(record: CallRecord): Promise<void> {
 
 export async function renderCalls(container: HTMLElement) {
   const history = await getCallHistory();
+  let meetingRows = '';
+  try {
+    const rsp = await listMeetings();
+    meetingRows = (rsp.data.meetings || []).slice(0, 6).map((m) =>
+      `<div class="conversation-item"><div class="conversation-info"><div class="conversation-name">${esc(m.title || 'Meeting')}</div><div class="conversation-preview">${esc(m.status)} · ${esc(m.media_mode)}</div></div><button class="btn-secondary" data-join-meeting="${esc(m.id)}">Join</button></div>`
+    ).join('');
+  } catch { meetingRows = ''; }
   container.replaceChildren(parseHTML(`
     <div class="panel-list">
       <div class="panel-header"><h2>Calls</h2></div>
+      <div class="settings-section" style="margin-bottom:var(--sp-3)">
+        <h3>Meetings</h3>
+        <div class="meeting-list">${meetingRows || '<div style="color:var(--text-tertiary)">No scheduled meetings yet.</div>'}</div>
+      </div>
       <div class="calls-list" id="calls-list">
         ${history.length === 0 ? `
           <div class="empty-state" style="padding:var(--sp-8)">
@@ -282,6 +293,13 @@ export async function renderCalls(container: HTMLElement) {
     </div>
   `));
   if (typeof (window as any).lucide !== 'undefined') (window as any).lucide.createIcons();
+  container.querySelectorAll('[data-join-meeting]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const id = (btn as HTMLElement).getAttribute('data-join-meeting');
+      if (!id) return;
+      showGroupNotice(`Meeting ${id.slice(0, 8)} entry opened from Calls.`);
+    });
+  });
 }
 
 // ── Outgoing Call ──
@@ -814,13 +832,16 @@ interface GroupCallState {
   handRaised: boolean;
   panel: 'none' | 'participants' | 'host';
   lobbyQueue: string[];
+  raisedQueue: string[];
+  activeSpeakerUserId: string | null;
+  roles: Map<string, 'host' | 'moderator' | 'participant' | 'viewer'>;
 }
 
 const groupState: GroupCallState = {
   callId: null, conversationId: null, callType: 'voice', status: 'idle',
   mode: 'mesh',
   peers: new Map(), localStream: null, ws: null, startTime: null,
-  muted: false, cameraOff: false, timerInterval: null, meetingId: null, hostUserId: null, locked: false, handRaised: false, panel: 'none', lobbyQueue: [],
+  muted: false, cameraOff: false, timerInterval: null, meetingId: null, hostUserId: null, locked: false, handRaised: false, panel: 'none', lobbyQueue: [], raisedQueue: [], activeSpeakerUserId: null, roles: new Map(),
 };
 
 const MAX_MESH_PEERS = 5; // 6 total including self
@@ -832,7 +853,7 @@ function resetGroupState() {
     callId: null, conversationId: null, status: 'idle',
     mode: 'mesh',
     peers: new Map(), localStream: null, ws: null, startTime: null,
-    muted: false, cameraOff: false, timerInterval: null, meetingId: null, hostUserId: null, locked: false, handRaised: false, panel: 'none', lobbyQueue: [],
+    muted: false, cameraOff: false, timerInterval: null, meetingId: null, hostUserId: null, locked: false, handRaised: false, panel: 'none', lobbyQueue: [], raisedQueue: [], activeSpeakerUserId: null, roles: new Map(),
   });
 }
 
@@ -854,6 +875,7 @@ export async function startGroupCall(
   Object.assign(groupState, {
     callId: randomId(), conversationId, callType, mode, status: 'starting', ws, hostUserId,
   });
+  if (hostUserId) groupState.roles.set(hostUserId, 'host');
   try {
     const meeting = await createMeeting(conversationId, `Group ${callType} meeting`, mode);
     groupState.meetingId = meeting.data.meeting_id;
@@ -931,6 +953,10 @@ export async function handleGroupCallStart(payload: Record<string, unknown>, con
     mode: (decrypted.mode as 'mesh' | 'sfu') || 'mesh',
     status: 'active', ws,
   });
+  if (fromUserId) {
+    groupState.hostUserId = fromUserId;
+    groupState.roles.set(fromUserId, 'host');
+  }
   try {
     groupState.localStream = await navigator.mediaDevices.getUserMedia({
       audio: true, video: groupState.callType === 'video',
@@ -953,6 +979,7 @@ export async function handleGroupCallJoin(payload: Record<string, unknown>) {
   const userId = payload.fromUserId as string;
   if (groupState.peers.has(userId)) return;
   if (groupState.mode === 'mesh' && groupState.peers.size >= MAX_MESH_PEERS) return;
+  groupState.roles.set(userId, groupState.roles.get(userId) || 'participant');
   // Determine who creates the offer: lexicographically lower userId is the offerer
   const myId = localStorage.getItem('rocchat_user_id') || '';
   const iAmOfferer = myId < userId;
@@ -1003,6 +1030,8 @@ export function handleGroupCallLeave(payload: Record<string, unknown>) {
   if (!peer) return;
   peer.pc.close();
   groupState.peers.delete(userId);
+  groupState.roles.delete(userId);
+  groupState.raisedQueue = groupState.raisedQueue.filter((id) => id !== userId);
   updateGroupOverlay();
   if (groupState.peers.size === 0) endGroupCall(false);
 }
@@ -1028,6 +1057,13 @@ async function createGroupPeer(userId: string, name: string, createOffer: boolea
 
   pc.ontrack = (e) => {
     peer.remoteStream = e.streams[0] || new MediaStream([e.track]);
+    if (e.track.kind === 'audio') {
+      groupState.activeSpeakerUserId = userId;
+      setTimeout(() => {
+        if (groupState.activeSpeakerUserId === userId) groupState.activeSpeakerUserId = null;
+        updateGroupOverlay();
+      }, 2200);
+    }
     updateGroupOverlay();
   };
 
@@ -1117,12 +1153,18 @@ function groupOverlayHTML(): string {
   const myId = localStorage.getItem('rocchat_user_id') || '';
   const isHost = !!groupState.hostUserId && groupState.hostUserId === myId;
   const roster = Array.from(groupState.peers.values())
-    .map((p) => `<div style="font-size:12px;color:var(--text-secondary)">${esc(p.name)} ${p.userId === groupState.hostUserId ? '· host' : ''}</div>`)
+    .map((p) => {
+      const role = groupState.roles.get(p.userId) || 'participant';
+      const speaking = groupState.activeSpeakerUserId === p.userId ? ' · speaking' : '';
+      return `<div style="font-size:12px;color:var(--text-secondary)">${esc(p.name)} · ${role}${speaking}</div>`;
+    })
     .join('');
+  const raisedQueue = groupState.raisedQueue.map((uid, idx) => `<div>#${idx + 1} ${uid.slice(0, 8)}</div>`).join('');
+  const lobby = groupState.lobbyQueue.map((uid) => `<div style="display:flex;justify-content:space-between;gap:8px"><span>${uid.slice(0, 8)}</span><span><button class="btn-secondary" data-admit="${uid}">Admit</button><button class="btn-secondary" data-deny="${uid}">Deny</button></span></div>`).join('');
   const panel = groupState.panel === 'participants'
     ? `<div class="meeting-panel"><h3>Participants</h3><div class="meeting-list"><div>You ${isHost ? '· host' : ''}</div>${roster}</div></div>`
     : groupState.panel === 'host'
-      ? `<div class="meeting-panel"><h3>Host moderation</h3><div class="meeting-list"><button class="btn-secondary" id="gcall-admit-all">Admit all lobby users</button><button class="btn-secondary" id="gcall-remove-last">Remove last participant</button></div></div>`
+      ? `<div class="meeting-panel"><h3>Host moderation</h3><div class="meeting-list"><button class="btn-secondary" id="gcall-admit-all">Admit all lobby users</button><button class="btn-secondary" id="gcall-remove-last">Remove last participant</button><div style="margin-top:8px"><strong>Raised hand queue</strong>${raisedQueue || '<div>None</div>'}</div><div style="margin-top:8px"><strong>Lobby waiting room</strong>${lobby || '<div>No one waiting</div>'}</div></div></div>`
       : '';
   return `
     <div class="call-card" style="min-width:360px;max-width:800px;width:90%;">
@@ -1184,6 +1226,9 @@ function bindGroupEvents() {
   });
   document.getElementById('gcall-hand')?.addEventListener('click', async () => {
     groupState.handRaised = !groupState.handRaised;
+    const myId = localStorage.getItem('rocchat_user_id') || '';
+    if (groupState.handRaised && myId && !groupState.raisedQueue.includes(myId)) groupState.raisedQueue.push(myId);
+    if (!groupState.handRaised && myId) groupState.raisedQueue = groupState.raisedQueue.filter((id) => id !== myId);
     updateGroupOverlay();
     if (!groupState.meetingId) return;
     await sendMeetingEvent(groupState.meetingId, groupState.handRaised ? 'raise_hand' : 'lower_hand').catch(() => {});
@@ -1212,6 +1257,8 @@ function bindGroupEvents() {
     if (!groupState.meetingId) return;
     await sendMeetingEvent(groupState.meetingId, 'lobby_admit').catch(() => {});
     showGroupNotice('Lobby admit-all sent');
+    groupState.lobbyQueue = [];
+    updateGroupOverlay();
   });
   document.getElementById('gcall-remove-last')?.addEventListener('click', async () => {
     if (!groupState.meetingId) return;
@@ -1219,6 +1266,27 @@ function bindGroupEvents() {
     if (!last) return;
     await sendMeetingEvent(groupState.meetingId, 'host_remove_participant', { target_user_id: last.userId }).catch(() => {});
     showGroupNotice(`Remove request sent for ${last.name}`);
+    groupState.peers.delete(last.userId);
+    groupState.roles.delete(last.userId);
+    updateGroupOverlay();
+  });
+  document.querySelectorAll('[data-admit]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const uid = (btn as HTMLElement).getAttribute('data-admit');
+      if (!uid || !groupState.meetingId) return;
+      await sendMeetingEvent(groupState.meetingId, 'lobby_admit', { target_user_id: uid }).catch(() => {});
+      groupState.lobbyQueue = groupState.lobbyQueue.filter((u) => u !== uid);
+      updateGroupOverlay();
+    });
+  });
+  document.querySelectorAll('[data-deny]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const uid = (btn as HTMLElement).getAttribute('data-deny');
+      if (!uid || !groupState.meetingId) return;
+      await sendMeetingEvent(groupState.meetingId, 'lobby_deny', { target_user_id: uid }).catch(() => {});
+      groupState.lobbyQueue = groupState.lobbyQueue.filter((u) => u !== uid);
+      updateGroupOverlay();
+    });
   });
 }
 
@@ -1230,3 +1298,18 @@ function startGroupTimer() {
     if (el) el.textContent = fmtDur(Math.floor((Date.now() - groupState.startTime) / 1000));
   }, 1000);
 }
+
+setInterval(() => {
+  if (!groupState.meetingId || groupState.status !== 'active') return;
+  getMeetingState(groupState.meetingId).then((res) => {
+    const meeting = (res.data as { meeting?: { participants?: Record<string, { inLobby?: boolean; role?: string }> } }).meeting;
+    const participants = meeting?.participants || {};
+    groupState.lobbyQueue = Object.entries(participants).filter(([, p]) => p.inLobby).map(([uid]) => uid);
+    Object.entries(participants).forEach(([uid, p]) => {
+      const role = (p.role || 'participant') as 'host' | 'moderator' | 'participant' | 'viewer';
+      groupState.roles.set(uid, role);
+      if (role === 'host') groupState.hostUserId = uid;
+    });
+    if (document.getElementById('group-call-overlay')) updateGroupOverlay();
+  }).catch(() => {});
+}, 6000);

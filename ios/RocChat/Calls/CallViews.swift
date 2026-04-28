@@ -262,11 +262,25 @@ struct CallOverlay: View {
         .sheet(isPresented: $showParticipantsSheet) {
             NavigationStack {
                 List {
-                    Text("You")
+                    HStack {
+                        Text("You")
+                        Spacer()
+                        Text((UserDefaults.standard.string(forKey: "user_id") ?? "") == callManager.groupHostUserId ? "host" : "participant")
+                            .foregroundColor(.rocGold)
+                    }
                     ForEach(Array(callManager.groupPeers.keys), id: \.self) { userId in
                         HStack {
                             Text(userId)
-                            if userId == callManager.groupHostUserId { Text("Host").foregroundColor(.rocGold) }
+                            Spacer()
+                            Text(callManager.groupRoles[userId] ?? (userId == callManager.groupHostUserId ? "host" : "participant"))
+                                .foregroundColor(.rocGold)
+                            if callManager.groupActiveSpeakerUserId == userId {
+                                Text("speaking").foregroundColor(.turquoise).font(.caption)
+                            }
+                            if (UserDefaults.standard.string(forKey: "user_id") ?? "") == callManager.groupHostUserId {
+                                Button("Remove") { callManager.removeParticipant(userId) }
+                                    .buttonStyle(.bordered)
+                            }
                         }
                     }
                 }
@@ -283,10 +297,33 @@ struct CallOverlay: View {
                         callManager.toggleGroupRoomLock()
                     }
                     .buttonStyle(.bordered)
-                    Button("Admit lobby users") {
-                        // Placeholder for upcoming lobby admit flow.
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Raised hand queue").font(.subheadline).foregroundColor(.secondary)
+                        if callManager.groupRaisedQueue.isEmpty {
+                            Text("None").foregroundColor(.secondary)
+                        } else {
+                            ForEach(callManager.groupRaisedQueue, id: \.self) { uid in
+                                Text(uid).font(.caption)
+                            }
+                        }
                     }
-                    .buttonStyle(.bordered)
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Lobby waiting room").font(.subheadline).foregroundColor(.secondary)
+                        if callManager.groupLobbyQueue.isEmpty {
+                            Text("No one waiting").foregroundColor(.secondary)
+                        } else {
+                            ForEach(callManager.groupLobbyQueue, id: \.self) { uid in
+                                HStack {
+                                    Text(uid).font(.caption)
+                                    Spacer()
+                                    Button("Admit") { callManager.admitLobbyUser(uid) }
+                                        .buttonStyle(.bordered)
+                                    Button("Deny") { callManager.denyLobbyUser(uid) }
+                                        .buttonStyle(.bordered)
+                                }
+                            }
+                        }
+                    }
                     Spacer()
                 }
                 .padding()
@@ -392,6 +429,49 @@ struct CallsHistoryView: View {
 
     private func formatDuration(_ seconds: Int) -> String {
         String(format: "%02d:%02d", seconds / 60, seconds % 60)
+    }
+}
+
+struct MeetingsHubView: View {
+    @ObservedObject var callManager = CallManager.shared
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(spacing: 14) {
+                    GroupBox("Instant meeting") {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Start secure voice/video meetings with host moderation and waiting room controls.")
+                                .font(.subheadline)
+                                .foregroundColor(.secondary)
+                            HStack {
+                                Button("Voice") { }
+                                    .buttonStyle(.borderedProminent)
+                                Button("Video") { }
+                                    .buttonStyle(.bordered)
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    GroupBox("Meeting controls") {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Label("Active speaker indicator", systemImage: "waveform")
+                            Label("Raised hand queue", systemImage: "hand.raised.fill")
+                            Label("Host moderation and lobby", systemImage: "person.2.badge.gearshape")
+                        }
+                        .foregroundColor(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    GroupBox("Current call") {
+                        Text(callManager.callStatus == .idle ? "No active meeting." : "In meeting · \(callManager.groupMediaMode.uppercased())")
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                .padding()
+            }
+            .navigationTitle("Meetings")
+        }
     }
 }
 

@@ -151,19 +151,26 @@ struct MainTabView: View {
                 }
                 .tag(1)
 
+            MeetingsHubView()
+                .tabItem {
+                    Image(systemName: "person.3.fill")
+                    Text("Meetings")
+                }
+                .tag(2)
+
             ChannelsView()
                 .tabItem {
                     Image(systemName: "megaphone.fill")
                     Text("Channels")
                 }
-                .tag(2)
+                .tag(3)
 
             SettingsView()
                 .tabItem {
                     Image(systemName: "person.circle.fill")
                     Text("Profile")
                 }
-                .tag(3)
+                .tag(4)
         }
         .tint(.rocGold)
         .overlay {

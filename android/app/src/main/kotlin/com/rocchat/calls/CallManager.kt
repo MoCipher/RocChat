@@ -73,6 +73,10 @@ object CallManager {
     var groupRoomLocked by mutableStateOf(false)
     var groupMediaMode by mutableStateOf("mesh")
     var groupHandRaised by mutableStateOf(false)
+    var groupRaisedQueue by mutableStateOf(listOf<String>())
+    var groupLobbyQueue by mutableStateOf(listOf<String>())
+    var groupActiveSpeakerUserId by mutableStateOf("")
+    var groupRoles by mutableStateOf(mapOf<String, String>())
     private val maxMeshPeers = 5 // 6 total including self
 
     private var callId: String? = null
@@ -795,6 +799,10 @@ object CallManager {
 
         override fun p2pDidReceiveAudio(pcm: ByteArray) {
             if (callStatus != "connected") return
+            if (isGroupCall) {
+                val speaker = groupParticipants.firstOrNull().orEmpty()
+                if (speaker.isNotEmpty()) groupActiveSpeakerUserId = speaker
+            }
             playIncomingPcm(pcm)
         }
     }
@@ -816,6 +824,10 @@ object CallManager {
         this.groupRoomLocked = false
         this.groupMediaMode = if (members.size > 2) "sfu" else "mesh"
         this.groupHandRaised = false
+        this.groupRaisedQueue = emptyList()
+        this.groupLobbyQueue = emptyList()
+        this.groupActiveSpeakerUserId = ""
+        this.groupRoles = if (groupHostUserId.isNotEmpty()) mapOf(groupHostUserId to "host") else emptyMap()
         this.startTime = System.currentTimeMillis()
 
         startDurationTimer()
@@ -847,6 +859,10 @@ object CallManager {
         this.groupRoomLocked = false
         this.groupMediaMode = decrypted.optString("mode", "mesh")
         this.groupHandRaised = false
+        this.groupRaisedQueue = emptyList()
+        this.groupLobbyQueue = emptyList()
+        this.groupActiveSpeakerUserId = ""
+        this.groupRoles = if (fromUserId.isNotEmpty()) mapOf(fromUserId to "host") else emptyMap()
         this.startTime = System.currentTimeMillis()
 
         startDurationTimer()
@@ -866,6 +882,7 @@ object CallManager {
         if (userId.isEmpty() || groupPeers.containsKey(userId)) return
         if (groupPeers.size >= maxMeshPeers) return
         groupParticipants = groupParticipants + userId
+        groupRoles = groupRoles + (userId to (groupRoles[userId] ?: "participant"))
         addGroupPeer(userId)
     }
 
@@ -874,6 +891,9 @@ object CallManager {
         val peer = groupPeers.remove(userId) ?: return
         peer.transport?.stop()
         groupParticipants = groupParticipants.filterNot { it == userId }
+        groupRoles = groupRoles - userId
+        groupRaisedQueue = groupRaisedQueue.filterNot { it == userId }
+        groupLobbyQueue = groupLobbyQueue.filterNot { it == userId }
         if (groupPeers.isEmpty()) endGroupCall(notify = false)
     }
 
@@ -902,6 +922,10 @@ object CallManager {
         groupRoomLocked = false
         groupMediaMode = "mesh"
         groupHandRaised = false
+        groupRaisedQueue = emptyList()
+        groupLobbyQueue = emptyList()
+        groupActiveSpeakerUserId = ""
+        groupRoles = emptyMap()
         endCall("hangup", notify = false)
     }
 
@@ -922,7 +946,29 @@ object CallManager {
 
     fun toggleHandRaise() {
         groupHandRaised = !groupHandRaised
+        val ctx = appContext
+        val myId = ctx?.getSharedPreferences("rocchat", Context.MODE_PRIVATE)?.getString("user_id", "") ?: ""
+        if (groupHandRaised && myId.isNotEmpty() && !groupRaisedQueue.contains(myId)) groupRaisedQueue = groupRaisedQueue + myId
+        if (!groupHandRaised && myId.isNotEmpty()) groupRaisedQueue = groupRaisedQueue.filterNot { it == myId }
         sendGroupSignal(if (groupHandRaised) "meeting_raise_hand" else "meeting_lower_hand", mapOf("callId" to (callId ?: "")))
+    }
+
+    fun admitLobbyUser(userId: String) {
+        groupLobbyQueue = groupLobbyQueue.filterNot { it == userId }
+        sendGroupSignal("meeting_lobby_admit", mapOf("callId" to (callId ?: ""), "targetUserId" to userId))
+    }
+
+    fun denyLobbyUser(userId: String) {
+        groupLobbyQueue = groupLobbyQueue.filterNot { it == userId }
+        sendGroupSignal("meeting_lobby_deny", mapOf("callId" to (callId ?: ""), "targetUserId" to userId))
+    }
+
+    fun removeParticipant(userId: String) {
+        groupPeers[userId]?.transport?.stop()
+        groupPeers.remove(userId)
+        groupParticipants = groupParticipants.filterNot { it == userId }
+        groupRoles = groupRoles - userId
+        sendGroupSignal("meeting_host_remove_participant", mapOf("callId" to (callId ?: ""), "targetUserId" to userId))
     }
 
     private fun addGroupPeer(userId: String) {

@@ -2006,6 +2006,50 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
   box-shadow: 0 24px 48px rgba(0,0,0,0.4);
   border: 1px solid var(--border-norm);
 }
+
+.prejoin-card {
+  border: 1px solid var(--border-norm);
+  border-radius: 16px;
+}
+
+.prejoin-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.prejoin-grid label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-secondary);
+  background: var(--bg-input);
+  border: 1px solid var(--border-weak);
+  border-radius: 10px;
+  padding: 10px;
+}
+
+.meeting-panel {
+  margin-bottom: var(--sp-3);
+  border: 1px solid var(--border-weak);
+  border-radius: 12px;
+  background: var(--bg-input);
+  padding: 10px;
+}
+
+.meeting-panel h3 {
+  color: var(--text-primary);
+  font-size: var(--text-sm);
+  margin-bottom: 8px;
+}
+
+.meeting-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+}
 .call-card-video {
   width: 90vw; max-width: 720px; height: 70vh;
   padding: 0; overflow: hidden;

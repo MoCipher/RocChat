@@ -812,13 +812,15 @@ interface GroupCallState {
   hostUserId: string | null;
   locked: boolean;
   handRaised: boolean;
+  panel: 'none' | 'participants' | 'host';
+  lobbyQueue: string[];
 }
 
 const groupState: GroupCallState = {
   callId: null, conversationId: null, callType: 'voice', status: 'idle',
   mode: 'mesh',
   peers: new Map(), localStream: null, ws: null, startTime: null,
-  muted: false, cameraOff: false, timerInterval: null, meetingId: null, hostUserId: null, locked: false, handRaised: false,
+  muted: false, cameraOff: false, timerInterval: null, meetingId: null, hostUserId: null, locked: false, handRaised: false, panel: 'none', lobbyQueue: [],
 };
 
 const MAX_MESH_PEERS = 5; // 6 total including self
@@ -830,7 +832,7 @@ function resetGroupState() {
     callId: null, conversationId: null, status: 'idle',
     mode: 'mesh',
     peers: new Map(), localStream: null, ws: null, startTime: null,
-    muted: false, cameraOff: false, timerInterval: null, meetingId: null, hostUserId: null, locked: false, handRaised: false,
+    muted: false, cameraOff: false, timerInterval: null, meetingId: null, hostUserId: null, locked: false, handRaised: false, panel: 'none', lobbyQueue: [],
   });
 }
 
@@ -843,6 +845,7 @@ function isSfuPreferred(expectedParticipants: number): boolean {
 
 export async function startGroupCall(
   conversationId: string, callType: 'voice' | 'video', ws: WebSocket, members?: string[],
+  prejoin?: { micEnabled: boolean; camEnabled: boolean },
 ) {
   if (groupState.status !== 'idle' || callState.status !== 'idle') return;
   const expectedParticipants = members?.length || 0;
@@ -860,6 +863,12 @@ export async function startGroupCall(
   try {
     groupState.localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: callType === 'video' });
   } catch (err) { handleMediaError(err); resetGroupState(); return; }
+  if (prejoin) {
+    groupState.muted = !prejoin.micEnabled;
+    groupState.cameraOff = !prejoin.camEnabled;
+    groupState.localStream?.getAudioTracks().forEach((t) => { t.enabled = prejoin.micEnabled; });
+    groupState.localStream?.getVideoTracks().forEach((t) => { t.enabled = prejoin.camEnabled; });
+  }
   groupState.status = 'active';
   groupState.startTime = Date.now();
   showGroupCallOverlay();
@@ -871,6 +880,45 @@ export async function startGroupCall(
     showGroupNotice('SFU meeting mode enabled.');
   }
   startGroupTimer();
+}
+
+export function openGroupPreJoin(
+  conversationId: string,
+  ws: WebSocket,
+  members?: string[],
+) {
+  document.getElementById('group-prejoin-modal')?.remove();
+  const el = document.createElement('div');
+  el.id = 'group-prejoin-modal';
+  el.className = 'call-overlay';
+  el.replaceChildren(parseHTML(`
+    <div class="call-card prejoin-card" style="min-width:360px;max-width:520px;width:92%">
+      <h2 style="color:var(--text-primary);margin-bottom:8px">Meeting pre-join</h2>
+      <p style="color:var(--text-secondary);margin-bottom:12px">Set your devices before entering the meeting.</p>
+      <div class="prejoin-grid">
+        <label><input type="radio" name="prejoin-type" value="voice" checked /> Voice meeting</label>
+        <label><input type="radio" name="prejoin-type" value="video" /> Video meeting</label>
+      </div>
+      <div class="prejoin-grid" style="margin-top:8px">
+        <label><input type="checkbox" id="prejoin-mic" checked /> Microphone on</label>
+        <label><input type="checkbox" id="prejoin-cam" /> Camera on</label>
+      </div>
+      <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px">
+        <button class="btn-secondary" id="prejoin-cancel">Cancel</button>
+        <button class="btn-primary" id="prejoin-join">Join meeting</button>
+      </div>
+    </div>
+  `));
+  document.body.appendChild(el);
+  const close = () => el.remove();
+  document.getElementById('prejoin-cancel')?.addEventListener('click', close);
+  document.getElementById('prejoin-join')?.addEventListener('click', async () => {
+    const type = (document.querySelector('input[name="prejoin-type"]:checked') as HTMLInputElement | null)?.value === 'video' ? 'video' : 'voice';
+    const micEnabled = !!(document.getElementById('prejoin-mic') as HTMLInputElement | null)?.checked;
+    const camEnabled = !!(document.getElementById('prejoin-cam') as HTMLInputElement | null)?.checked;
+    close();
+    await startGroupCall(conversationId, type, ws, members, { micEnabled, camEnabled });
+  });
 }
 
 export async function handleGroupCallStart(payload: Record<string, unknown>, conversationId: string, ws: WebSocket | null) {
@@ -1071,6 +1119,11 @@ function groupOverlayHTML(): string {
   const roster = Array.from(groupState.peers.values())
     .map((p) => `<div style="font-size:12px;color:var(--text-secondary)">${esc(p.name)} ${p.userId === groupState.hostUserId ? '· host' : ''}</div>`)
     .join('');
+  const panel = groupState.panel === 'participants'
+    ? `<div class="meeting-panel"><h3>Participants</h3><div class="meeting-list"><div>You ${isHost ? '· host' : ''}</div>${roster}</div></div>`
+    : groupState.panel === 'host'
+      ? `<div class="meeting-panel"><h3>Host moderation</h3><div class="meeting-list"><button class="btn-secondary" id="gcall-admit-all">Admit all lobby users</button><button class="btn-secondary" id="gcall-remove-last">Remove last participant</button></div></div>`
+      : '';
   return `
     <div class="call-card" style="min-width:360px;max-width:800px;width:90%;">
       <h2 style="color:var(--text-primary);margin-bottom:var(--sp-2)">Group ${groupState.callType} call</h2>
@@ -1092,6 +1145,11 @@ function groupOverlayHTML(): string {
         <button class="btn-secondary" id="gcall-mute-all">Mute all</button>
         <button class="btn-secondary" id="gcall-lock">${groupState.locked ? 'Unlock room' : 'Lock room'}</button>
       </div>` : ''}
+      <div style="display:flex;gap:8px;justify-content:center;margin-bottom:var(--sp-3)">
+        <button class="btn-secondary" id="gcall-participants">Participants</button>
+        ${isHost ? '<button class="btn-secondary" id="gcall-host-panel">Host tools</button>' : ''}
+      </div>
+      ${panel}
       <div class="call-controls" style="display:flex;gap:var(--sp-4);justify-content:center">
         <button class="call-control-btn ${groupState.handRaised ? 'active' : ''}" id="gcall-hand"><i data-lucide="${groupState.handRaised ? 'hand-metal' : 'hand'}" style="width:24px;height:24px"></i></button>
         <button class="call-control-btn ${groupState.muted ? 'active' : ''}" id="gcall-mute"><i data-lucide="${groupState.muted ? 'mic-off' : 'mic'}" style="width:24px;height:24px"></i></button>
@@ -1141,6 +1199,26 @@ function bindGroupEvents() {
     await sendMeetingEvent(groupState.meetingId, action).catch(() => {});
     groupState.locked = !groupState.locked;
     updateGroupOverlay();
+  });
+  document.getElementById('gcall-participants')?.addEventListener('click', () => {
+    groupState.panel = groupState.panel === 'participants' ? 'none' : 'participants';
+    updateGroupOverlay();
+  });
+  document.getElementById('gcall-host-panel')?.addEventListener('click', () => {
+    groupState.panel = groupState.panel === 'host' ? 'none' : 'host';
+    updateGroupOverlay();
+  });
+  document.getElementById('gcall-admit-all')?.addEventListener('click', async () => {
+    if (!groupState.meetingId) return;
+    await sendMeetingEvent(groupState.meetingId, 'lobby_admit').catch(() => {});
+    showGroupNotice('Lobby admit-all sent');
+  });
+  document.getElementById('gcall-remove-last')?.addEventListener('click', async () => {
+    if (!groupState.meetingId) return;
+    const last = Array.from(groupState.peers.values()).at(-1);
+    if (!last) return;
+    await sendMeetingEvent(groupState.meetingId, 'host_remove_participant', { target_user_id: last.userId }).catch(() => {});
+    showGroupNotice(`Remove request sent for ${last.name}`);
   });
 }
 

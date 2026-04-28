@@ -207,6 +207,8 @@ private fun IncomingControls() {
 @Composable
 private fun ActiveControls() {
     var showDiag by remember { mutableStateOf(false) }
+    var showParticipants by remember { mutableStateOf(false) }
+    var showHostTools by remember { mutableStateOf(false) }
     val context = LocalContext.current
     val myId = context.getSharedPreferences("rocchat", Context.MODE_PRIVATE).getString("user_id", "") ?: ""
     val isHost = CallManager.isGroupCall && CallManager.groupHostUserId.isNotEmpty() && myId == CallManager.groupHostUserId
@@ -292,18 +294,51 @@ private fun ActiveControls() {
     if (isHost) {
         Spacer(Modifier.height(12.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            OutlinedButton(onClick = { showParticipants = true }) {
+                Text("Participants")
+            }
             OutlinedButton(onClick = { CallManager.hostMuteAll() }) {
                 Text("Mute all")
             }
             OutlinedButton(onClick = { CallManager.toggleGroupRoomLock() }) {
                 Text(if (CallManager.groupRoomLocked) "Unlock room" else "Lock room")
             }
+            OutlinedButton(onClick = { showHostTools = true }) {
+                Text("Moderation")
+            }
         }
+    } else if (CallManager.isGroupCall) {
+        OutlinedButton(onClick = { showParticipants = true }) { Text("Participants") }
     }
     }
 
     if (showDiag) {
         CallDiagnosticsSheet(onDismiss = { showDiag = false })
+    }
+    if (showParticipants) {
+        ModalBottomSheet(onDismissRequest = { showParticipants = false }) {
+            Column(Modifier.fillMaxWidth().padding(16.dp)) {
+                Text("Participants", fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                Spacer(Modifier.height(8.dp))
+                Text("You", color = RocColors.TextSecondary)
+                CallManager.groupParticipants.forEach {
+                    Text(it, color = RocColors.TextSecondary)
+                }
+                Spacer(Modifier.height(12.dp))
+            }
+        }
+    }
+    if (showHostTools) {
+        ModalBottomSheet(onDismissRequest = { showHostTools = false }) {
+            Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Host Moderation", fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                Button(onClick = { CallManager.hostMuteAll() }, modifier = Modifier.fillMaxWidth()) { Text("Mute all participants") }
+                OutlinedButton(onClick = { CallManager.toggleGroupRoomLock() }, modifier = Modifier.fillMaxWidth()) {
+                    Text(if (CallManager.groupRoomLocked) "Unlock room" else "Lock room")
+                }
+                OutlinedButton(onClick = { }, modifier = Modifier.fillMaxWidth()) { Text("Admit lobby users") }
+            }
+        }
     }
 }
 

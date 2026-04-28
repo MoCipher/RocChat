@@ -2833,7 +2833,7 @@ async function startCall(conv: Conversation, callType: 'voice' | 'video') {
 }
 
 async function startGroupCallFromChat(conv: Conversation) {
-  const { startGroupCall } = await import('../calls/calls.js');
+  const { openGroupPreJoin } = await import('../calls/calls.js');
   const { connectInbox, getInboxWs } = await import('../inbox-ws.js');
   const ws = state.ws || getInboxWs() || await connectInbox();
   if (!ws || ws.readyState !== WebSocket.OPEN) {
@@ -2841,7 +2841,7 @@ async function startGroupCallFromChat(conv: Conversation) {
     return;
   }
   const memberIds = conv.members.map((m) => m.user_id);
-  startGroupCall(conv.id, 'voice', ws, memberIds);
+  openGroupPreJoin(conv.id, ws, memberIds);
 }
 
 // ── Voice & Video note recording ──

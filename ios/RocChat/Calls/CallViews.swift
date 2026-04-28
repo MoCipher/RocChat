@@ -11,6 +11,8 @@ import SwiftUI
 struct CallOverlay: View {
     @ObservedObject var callManager = CallManager.shared
     @State private var showDiagnostics = false
+    @State private var showParticipantsSheet = false
+    @State private var showHostSheet = false
 
     var body: some View {
         if callManager.callStatus != .idle {
@@ -241,13 +243,54 @@ struct CallOverlay: View {
             if callManager.isGroupCall &&
                 (UserDefaults.standard.string(forKey: "user_id") ?? "") == callManager.groupHostUserId {
                 HStack(spacing: 12) {
+                    Button("Participants") { showParticipantsSheet = true }
+                        .buttonStyle(.bordered)
                     Button("Mute all") { callManager.hostMuteAll() }
                         .buttonStyle(.borderedProminent)
                     Button(callManager.groupRoomLocked ? "Unlock room" : "Lock room") {
                         callManager.toggleGroupRoomLock()
                     }
                     .buttonStyle(.bordered)
+                    Button("Moderation") { showHostSheet = true }
+                        .buttonStyle(.bordered)
                 }
+            } else if callManager.isGroupCall {
+                Button("Participants") { showParticipantsSheet = true }
+                    .buttonStyle(.bordered)
+            }
+        }
+        .sheet(isPresented: $showParticipantsSheet) {
+            NavigationStack {
+                List {
+                    Text("You")
+                    ForEach(Array(callManager.groupPeers.keys), id: \.self) { userId in
+                        HStack {
+                            Text(userId)
+                            if userId == callManager.groupHostUserId { Text("Host").foregroundColor(.rocGold) }
+                        }
+                    }
+                }
+                .navigationTitle("Participants")
+            }
+        }
+        .sheet(isPresented: $showHostSheet) {
+            NavigationStack {
+                VStack(spacing: 12) {
+                    Text("Host Moderation").font(.headline)
+                    Button("Mute all participants") { callManager.hostMuteAll() }
+                        .buttonStyle(.borderedProminent)
+                    Button(callManager.groupRoomLocked ? "Unlock room" : "Lock room") {
+                        callManager.toggleGroupRoomLock()
+                    }
+                    .buttonStyle(.bordered)
+                    Button("Admit lobby users") {
+                        // Placeholder for upcoming lobby admit flow.
+                    }
+                    .buttonStyle(.bordered)
+                    Spacer()
+                }
+                .padding()
+                .navigationTitle("Host Tools")
             }
         }
     }

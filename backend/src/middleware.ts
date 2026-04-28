@@ -9,21 +9,49 @@ export interface Session {
   deviceId: string;
 }
 
+// ── In-memory session cache (per-isolate, avoids KV reads) ──────────
+const sessionCache = new Map<string, { session: Session; expiresAt: number; cachedAt: number }>();
+const SESSION_CACHE_TTL = 120_000; // 2 minutes
+const SESSION_CACHE_MAX = 500;
+
 export async function verifySession(request: Request, env: Env): Promise<Session | null> {
   const auth = request.headers.get('Authorization');
   if (!auth?.startsWith('Bearer ')) return null;
   const token = auth.slice(7);
   if (!token) return null;
+
+  // Check in-memory cache first
+  const now = Date.now();
+  const cached = sessionCache.get(token);
+  if (cached && now - cached.cachedAt < SESSION_CACHE_TTL && now / 1000 <= cached.expiresAt) {
+    return cached.session;
+  }
+
   const sessionData = await env.KV.get(`session:${token}`, 'json');
-  if (!sessionData) return null;
+  if (!sessionData) {
+    sessionCache.delete(token);
+    return null;
+  }
   const session = sessionData as { userId: string; deviceId: string; expiresAt: number };
   if (Date.now() / 1000 > session.expiresAt) {
+    sessionCache.delete(token);
     await env.KV.delete(`session:${token}`);
     return null;
   }
-  await env.DB.prepare('UPDATE devices SET last_active = unixepoch() WHERE id = ?')
-    .bind(session.deviceId).run();
-  return { userId: session.userId, deviceId: session.deviceId };
+
+  const result = { userId: session.userId, deviceId: session.deviceId };
+
+  // Populate cache (evict oldest if full)
+  if (sessionCache.size >= SESSION_CACHE_MAX) {
+    const oldest = sessionCache.keys().next().value;
+    if (oldest) sessionCache.delete(oldest);
+  }
+  sessionCache.set(token, { session: result, expiresAt: session.expiresAt, cachedAt: now });
+
+  // Fire-and-forget last_active update — don't block the response
+  env.DB.prepare('UPDATE devices SET last_active = unixepoch() WHERE id = ?')
+    .bind(session.deviceId).run().catch(() => {});
+  return result;
 }
 
 const ALLOWED_ORIGINS = new Set([
@@ -45,8 +73,13 @@ export function isOriginAllowed(request: Request): boolean {
   return ALLOWED_ORIGINS.has(origin);
 }
 
+// ── In-memory rate limiter (per-isolate, eliminates 2 KV ops/request) ─
+const rateLimitMap = new Map<string, number[]>();
+const RATE_LIMIT_MAP_MAX = 2000;
+let lastRateLimitPrune = Date.now();
+
 export async function rateLimit(
-  env: Env,
+  _env: Env,
   userId: string,
   path: string,
 ): Promise<{ ok: boolean; retryAfter?: number }> {
@@ -57,12 +90,7 @@ export async function rateLimit(
   else if (path === '/api/auth/login') { limit = 5; window = 300; bucket = '/api/auth/login'; }
   else if (path === '/api/auth/login/user') { limit = 5; window = 300; bucket = '/api/auth/login/user'; }
   else if (path === '/api/auth/refresh') { limit = 30; window = 300; bucket = '/api/auth/refresh'; }
-  // Recovery vault: tight bucket. Anyone with a stolen session token still
-  // can't brute-force the BIP39 mnemonic against the encrypted blob, but we
-  // make the abuse pattern (mass downloading vaults across leaked sessions)
-  // expensive and observable.
   else if (path === '/api/recovery/vault') { limit = 10; window = 3600; bucket = '/api/recovery/vault'; }
-  // Public recovery endpoints — much tighter than authenticated vault access.
   else if (path === '/api/recovery/start') { limit = 5; window = 600; bucket = '/api/recovery/start'; }
   else if (path === '/api/recovery/start/user') { limit = 5; window = 1800; bucket = '/api/recovery/start/user'; }
   else if (path === '/api/recovery/complete') { limit = 5; window = 600; bucket = '/api/recovery/complete'; }
@@ -71,21 +99,38 @@ export async function rateLimit(
   else if (path === '/api/ws/ticket') { limit = 30; window = 60; bucket = '/api/ws/ticket'; }
   else if (path.startsWith('/api/keys')) { limit = 30; window = 60; bucket = '/api/keys'; }
   else if (path.startsWith('/api/groups')) {
-    // Separate buckets for sensitive admin actions vs read operations
-    const action = path.split('/')[4] || 'default'; // e.g. promote, kick, mute, members
+    const action = path.split('/')[4] || 'default';
     limit = 30; window = 60; bucket = `/api/groups/:id/${action}`;
   }
   else { limit = 120; window = 60; bucket = path.split('/').slice(0, 4).join('/'); }
-  const key = `rl:${userId}:${bucket}`;
+
+  const key = `${userId}:${bucket}`;
   const now = Date.now();
   const windowMs = window * 1000;
-  const raw = await env.KV.get(key);
-  const timestamps: number[] = raw ? JSON.parse(raw) : [];
+
+  // Periodic prune to prevent unbounded growth
+  if (now - lastRateLimitPrune > 30_000) {
+    lastRateLimitPrune = now;
+    for (const [k, ts] of rateLimitMap) {
+      if (!ts.length || now - ts[ts.length - 1] > 3600_000) rateLimitMap.delete(k);
+    }
+  }
+  // Evict oldest entries if map is too large
+  if (rateLimitMap.size >= RATE_LIMIT_MAP_MAX) {
+    const oldest = rateLimitMap.keys().next().value;
+    if (oldest) rateLimitMap.delete(oldest);
+  }
+
+  const timestamps = rateLimitMap.get(key) ?? [];
   // Prune entries outside the window
-  const valid = timestamps.filter(t => now - t < windowMs);
-  if (valid.length >= limit) return { ok: false, retryAfter: Math.ceil((valid[0] + windowMs - now) / 1000) };
+  let start = 0;
+  while (start < timestamps.length && now - timestamps[start] >= windowMs) start++;
+  const valid = start > 0 ? timestamps.slice(start) : timestamps;
+  if (valid.length >= limit) {
+    return { ok: false, retryAfter: Math.ceil((valid[0] + windowMs - now) / 1000) };
+  }
   valid.push(now);
-  await env.KV.put(key, JSON.stringify(valid), { expirationTtl: window });
+  rateLimitMap.set(key, valid);
   return { ok: true };
 }
 

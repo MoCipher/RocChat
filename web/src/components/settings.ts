@@ -276,6 +276,29 @@ export function renderSettings(container: HTMLElement) {
               <button class="btn btn-outline font-size-btn" data-scale="1.15" style="font-size:15px;padding:4px 10px">A</button>
             </div>
           </div>
+          <div class="setting-row" style="margin-top:var(--sp-3)">
+            <div>
+              <div class="setting-label">Interface Density</div>
+              <div class="setting-desc">Set compact, comfortable, or spacious layout rhythm</div>
+            </div>
+            <select class="form-input" style="width:auto;padding:var(--sp-2) var(--sp-3)" id="density-select">
+              <option value="compact">Compact</option>
+              <option value="comfortable">Comfortable</option>
+              <option value="spacious">Spacious</option>
+            </select>
+          </div>
+          <div class="setting-row" style="margin-top:var(--sp-3)">
+            <div>
+              <div class="setting-label">Accent Palette</div>
+              <div class="setting-desc">Apply a premium accent across controls and highlights</div>
+            </div>
+            <select class="form-input" style="width:auto;padding:var(--sp-2) var(--sp-3)" id="accent-select">
+              <option value="gold">Roc Gold</option>
+              <option value="turquoise">Turquoise</option>
+              <option value="violet">Violet</option>
+              <option value="rose">Rose</option>
+            </select>
+          </div>
         </div>
 
         <div class="settings-section">
@@ -745,6 +768,24 @@ export function renderSettings(container: HTMLElement) {
   });
   // Apply saved font scale on settings open
   if (!isNaN(savedScale)) document.documentElement.style.setProperty('--roc-font-scale', String(savedScale));
+
+  const densitySelect = document.getElementById('density-select') as HTMLSelectElement | null;
+  const accentSelect = document.getElementById('accent-select') as HTMLSelectElement | null;
+  if (densitySelect) {
+    densitySelect.value = localStorage.getItem('rocchat_density') || 'comfortable';
+    densitySelect.addEventListener('change', () => {
+      localStorage.setItem('rocchat_density', densitySelect.value);
+      applyAppearancePreferences();
+    });
+  }
+  if (accentSelect) {
+    accentSelect.value = localStorage.getItem('rocchat_accent') || 'gold';
+    accentSelect.addEventListener('change', () => {
+      localStorage.setItem('rocchat_accent', accentSelect.value);
+      applyAppearancePreferences();
+    });
+  }
+  applyAppearancePreferences();
 
   // QR Code generation
   const username = localStorage.getItem('rocchat_username') || '';
@@ -2238,6 +2279,17 @@ export function applyTheme(theme: string) {
   // Also apply chat theme
   const chatTheme = localStorage.getItem('rocchat_chat_theme') || 'default';
   applyChatTheme(chatTheme);
+  applyAppearancePreferences();
+}
+
+export function applyAppearancePreferences() {
+  const root = document.documentElement;
+  const density = localStorage.getItem('rocchat_density') || 'comfortable';
+  const accent = localStorage.getItem('rocchat_accent') || 'gold';
+  root.classList.remove('density-compact', 'density-comfortable', 'density-spacious');
+  root.classList.add(`density-${density}`);
+  root.classList.remove('accent-gold', 'accent-turquoise', 'accent-violet', 'accent-rose');
+  root.classList.add(`accent-${accent}`);
 }
 
 // Check scheduled theme every minute

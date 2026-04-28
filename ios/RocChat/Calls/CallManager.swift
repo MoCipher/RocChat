@@ -253,7 +253,11 @@ class CallManager: ObservableObject {
 
     func toggleCamera() {
         isCameraOff.toggle()
-        // With WebRTC: toggle video track enabled
+        if isCameraOff {
+            stopVideoStreaming()
+        } else if callStatus == .connected && callType == .video {
+            startVideoStreaming()
+        }
     }
 
     func endCall(reason: String = "hangup", notify: Bool = true) {
@@ -670,12 +674,15 @@ class CallManager: ObservableObject {
     }
 
     func sendVideoPing() {
-        guard let callId = callId, let ws = ws else { return }
+        guard let callId = callId else { return }
         let ts = CACurrentMediaTime()
         pingTs = ts
         let tsStr = String(format: "%.3f", ts)
         let payload: [String: Any] = ["callId": callId, "targetUserId": remoteUserId, "seq": 0, "frame": "roc-ping:\(tsStr)"]
-        guard let data = try? JSONSerialization.data(withJSONObject: ["type": "call_video", "payload": payload]),
+        let msg: [String: Any] = ["type": "call_video", "payload": payload]
+        if InboxWebSocket.shared.send(msg) { return }
+        guard let ws = ws,
+              let data = try? JSONSerialization.data(withJSONObject: msg),
               let str = String(data: data, encoding: .utf8) else { return }
         ws.send(.string(str)) { _ in }
     }

@@ -17,8 +17,6 @@ interface ConnectedClient {
   ws: WebSocket;
   userId: string;
   deviceId: string;
-  token: string;
-  lastAuthCheck: number;
 }
 
 interface WsMessage {
@@ -68,14 +66,12 @@ export class ChatRoom implements DurableObject {
 
   // ── Hibernation API helpers ──────────────────────────────────────
   // Each accepted WebSocket carries a serialized attachment
-  // {userId, deviceId, token, lastAuthCheck} so we can rebuild the
-  // ConnectedClient view after the DO wakes from hibernation without
-  // needing in-memory state. `state.getWebSockets()` returns *every*
-  // socket the runtime is holding for us, including ones from a
-  // previous (now-hibernated) instance.
+  // {userId, deviceId} so we can rebuild the ConnectedClient view
+  // after the DO wakes from hibernation without needing in-memory
+  // state. Auth is validated by the router before reaching the DO.
   private clientFor(ws: WebSocket): ConnectedClient | null {
     const att = ws.deserializeAttachment() as null | {
-      userId: string; deviceId: string; token: string; lastAuthCheck: number;
+      userId: string; deviceId: string;
     };
     if (!att) return null;
     return { ws, ...att };
@@ -147,10 +143,7 @@ export class ChatRoom implements DurableObject {
     // Tag the socket so we can find it again after hibernation, and
     // attach metadata so handlers don't need an in-memory client map.
     this.state.acceptWebSocket(server, [clientKey]);
-    server.serializeAttachment({
-      userId, deviceId,
-      lastAuthCheck: Date.now(),
-    });
+    server.serializeAttachment({ userId, deviceId });
 
     // Notify others that user is online
     this.broadcast(
@@ -207,35 +200,6 @@ export class ChatRoom implements DurableObject {
 
     const sender = this.clientFor(senderWs);
     if (!sender) return;
-
-    // Re-validate session every 60 seconds to catch revoked/expired tokens
-    const SESSION_RECHECK_MS = 60_000;
-    if (Date.now() - sender.lastAuthCheck > SESSION_RECHECK_MS) {
-      const sessionData = await this.env.KV.get(`session:${sender.token}`);
-      if (!sessionData) {
-        try { senderWs.close(4001, 'Session expired'); } catch {}
-        return;
-      }
-      try {
-        const sess = JSON.parse(sessionData) as { userId: string; expiresAt: number };
-        if (sess.userId !== sender.userId || sess.expiresAt < Math.floor(Date.now() / 1000)) {
-          try { senderWs.close(4001, 'Session expired'); } catch {}
-          return;
-        }
-      } catch {
-        try { senderWs.close(4001, 'Session invalid'); } catch {}
-        return;
-      }
-      sender.lastAuthCheck = Date.now();
-      // Persist refreshed timestamp so subsequent hibernation wakes
-      // remember we just re-validated.
-      senderWs.serializeAttachment({
-        userId: sender.userId,
-        deviceId: sender.deviceId,
-        token: sender.token,
-        lastAuthCheck: sender.lastAuthCheck,
-      });
-    }
 
     // Rate-limit non-media relay messages (30/s per user) to prevent spam/amplification.
     // Media frames (audio/video) have their own per-frame budget in allowMediaFrame().

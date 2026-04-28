@@ -45,7 +45,7 @@ object MuLaw {
             exponent--
             expMask = expMask ushr 1
         }
-        val shift = if (exponent == 0) 4 else exponent + 3
+        val shift = exponent + 3
         val mantissa = (s ushr shift) and 0x0F
         return (((exponent shl 4) or mantissa).inv()) and sign and 0xFF
     }

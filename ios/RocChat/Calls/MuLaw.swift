@@ -54,7 +54,7 @@ enum MuLaw {
             exponent -= 1
             expMask >>= 1
         }
-        let mantissa = (s >> (exponent == 0 ? 4 : (exponent + 3))) & 0x0F
+        let mantissa = (s >> (exponent + 3)) & 0x0F
         let byte = ~(Int32((exponent << 4) | mantissa)) & sign
         return UInt8(truncatingIfNeeded: byte)
     }

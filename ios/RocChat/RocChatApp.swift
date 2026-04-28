@@ -6,6 +6,8 @@ struct RocChatApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @StateObject private var authVM = AuthViewModel()
     @Environment(\.scenePhase) var scenePhase
+    @AppStorage("app_theme") private var appTheme = "system"
+    @AppStorage("app_font_scale") private var appFontScale = "1.0"
     @State private var isObscured = false
     @State private var showSplash = true
     @State private var inboxListenerRegistered = false
@@ -74,8 +76,9 @@ struct RocChatApp: App {
                     }
                 }
             }
-            .preferredColorScheme(nil) // Follow system
+            .preferredColorScheme(preferredColorScheme)
             .tint(.rocGold)
+            .environment(\.dynamicTypeSize, dynamicTypeSize)
             // Screenshot / app-switcher blur overlay
             .overlay {
                 if isObscured {
@@ -96,6 +99,22 @@ struct RocChatApp: App {
                     }
                 }
             }
+        }
+    }
+
+    private var preferredColorScheme: ColorScheme? {
+        switch appTheme {
+        case "dark": return .dark
+        case "light": return .light
+        default: return nil
+        }
+    }
+
+    private var dynamicTypeSize: DynamicTypeSize {
+        switch appFontScale {
+        case "0.9": return .xSmall
+        case "1.1": return .large
+        default: return .medium
         }
     }
     

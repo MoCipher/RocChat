@@ -276,7 +276,7 @@ export async function renderCalls(container: HTMLElement) {
         <i data-lucide="phone" style="width:48px;height:48px;color:var(--text-tertiary);opacity:0.2"></i>
         <h3>Voice & Video Calls</h3>
         <p>Select a call or start one from a chat.</p>
-        <p style="font-family:var(--font-mono);font-size:var(--text-xs);color:var(--turquoise);margin-top:var(--sp-2)">3-layer encryption: DTLS-SRTP + E2E signaling + verification</p>
+        <p style="font-family:var(--font-mono);font-size:var(--text-xs);color:var(--turquoise);margin-top:var(--sp-2)">3-layer security: E2E signaling + AES-GCM media + safety verification</p>
       </div>
     </div>
   `));
@@ -399,9 +399,9 @@ export function handleCallVideo(payload: Record<string, unknown>) {
 async function startVoiceWS() {
   if (callState.voiceWS || !callState.ws || !callState.callId || !callState.remoteUserId) return;
   const v = new VoiceWS({ ws: callState.ws, callId: callState.callId, targetUserId: callState.remoteUserId });
-  callState.voiceWS = v;
   try {
     await v.start();
+    callState.voiceWS = v;
   } catch (err) {
     callState.voiceWS = null;
     handleMediaError(err);

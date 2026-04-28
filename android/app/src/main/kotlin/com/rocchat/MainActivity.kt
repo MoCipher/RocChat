@@ -31,6 +31,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.rocchat.ui.RocChatTheme
 import com.rocchat.ui.RocColors
+import com.rocchat.ui.AppThemePreference
 import com.rocchat.auth.AuthScreen
 import com.rocchat.auth.BiometricHelper
 import com.rocchat.chat.MainScreen
@@ -65,8 +66,14 @@ class MainActivity : FragmentActivity() {
         }
         val deviceIsRooted = rootResult.isRooted
         setContent {
-            RocChatTheme {
-                val prefs = getSharedPreferences("rocchat", MODE_PRIVATE)
+            val prefs = getSharedPreferences("rocchat", MODE_PRIVATE)
+            val appThemePref = when (prefs.getString("app_theme", "system")) {
+                "dark" -> AppThemePreference.DARK
+                "light" -> AppThemePreference.LIGHT
+                else -> AppThemePreference.SYSTEM
+            }
+            val fontScalePref = (prefs.getString("app_font_scale", "1.0") ?: "1.0").toFloatOrNull() ?: 1f
+            RocChatTheme(appTheme = appThemePref, fontScale = fontScalePref.coerceIn(0.9f, 1.2f)) {
                 val hasSession = SecureStorage.get(this@MainActivity, "session_token", "rocchat") != null
                 var isAuthenticated by remember { mutableStateOf(hasSession) }
                 var biometricLocked by remember {
@@ -101,24 +108,8 @@ class MainActivity : FragmentActivity() {
                         // Key maintenance: SPK rotation + prekey replenishment
                         com.rocchat.crypto.KeyRotationManager.performMaintenance(this@MainActivity)
 
-                        // Always-on user-inbox WS so calls reach us regardless
-                        // of which conversation is currently open.
-                        com.rocchat.calls.InboxWebSocket.addListener { type, payload ->
-                            when (type) {
-                                "call_offer" -> com.rocchat.calls.CallManager.handleIncomingOffer(
-                                    payload,
-                                    payload.optString("conversationId"),
-                                    com.rocchat.calls.InboxWebSocket.task,
-                                )
-                                "call_answer" -> com.rocchat.calls.CallManager.handleCallAnswer(payload)
-                                "call_ice" -> com.rocchat.calls.CallManager.handleIceCandidate(payload)
-                                "call_end" -> com.rocchat.calls.CallManager.handleCallEnd(payload)
-                                "call_audio" -> com.rocchat.calls.CallManager.handleCallAudio(payload)
-                                "call_video" -> com.rocchat.calls.CallManager.handleCallVideo(payload)
-                                "call_p2p_candidate" -> com.rocchat.calls.CallManager.handleP2PCandidate(payload)
-                            }
-                        }
-                        com.rocchat.calls.InboxWebSocket.connect(this@MainActivity)
+                        // Always-on user-inbox WS — call routing registered once (see InboxWebSocket).
+                        com.rocchat.calls.InboxWebSocket.ensureDefaultCallRouting(this@MainActivity)
                     }
                 }
 

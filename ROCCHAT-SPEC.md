@@ -615,9 +615,16 @@ RocChat **does not use Google's WebRTC framework, libwebrtc, GoogleWebRTC, or an
 
 Call offers, answers, and ICE candidates flow over the **user-inbox WebSocket** (preferred) or the conversation WebSocket and are double-encrypted (outer TLS + inner Double Ratchet) before the server sees them. The user-inbox WebSocket (`/api/ws/user/:userId`) is an always-on per-user connection managed by the `UserInbox` Durable Object; it forwards signaling to the callee's connected devices regardless of which conversation view is open. If the inbox WS is unavailable, the conversation WS is used as a fallback:
 
-Web and iOS clients use the dedicated Worker WS host for signaling
+Web, iOS, and Android clients use the dedicated Worker WS host for signaling
 (`wss://rocchat-api.spoass.workers.dev`) to ensure reliable WebSocket upgrade
 behavior for both conversation and user-inbox channels.
+
+Android matches iOS call behavior: `CallManager.startCall` / `handleIncomingOffer`
+/ group-call entry accept a nullable conversation `NativeWebSocket` and resolve
+the active signaling socket as `conversationWs ?: InboxWebSocket.task`.
+`InboxWebSocket.ensureDefaultCallRouting` registers inbox call handlers once per
+login and removes them on `disconnect()` so Compose recomposition cannot stack
+duplicate `call_offer` listeners.
 
 If a signaling socket is not yet open, clients must present explicit user
 feedback (not silent failure) and retry via inbox WS fallback where possible.
@@ -628,6 +635,21 @@ controls; status UI should be non-blocking.
 Inbox WS connection helpers should only hand sockets to call initiation after
 the transport reaches OPEN state (or timeout), to avoid CONNECTING race
 conditions during call setup.
+
+### Premium-Minimal Customization Layer (Web + iOS + Android)
+
+RocChat ships a shared customization model across all first-party clients:
+
+- **Theme mode:** `system`, `light`, `dark` (plus web `amoled` and `scheduled` windows)
+- **Font scale:** compact / default / large presets persisted per-device
+- **Density mode:** compact / comfortable / spacious layout rhythm
+- **Accent palette:** user-selectable accent tokens (web: gold/turquoise/violet/rose)
+
+Web applies customization through CSS variables and root classes
+(`density-*`, `accent-*`) so chat, settings, calls, and auth screens update
+without per-component overrides. Native clients persist equivalent settings
+(`app_theme`, `app_font_scale`, `app_density`) and apply them at app-shell
+theme composition time.
 
 ```
 signal_msg = DoubleRatchet.encrypt({

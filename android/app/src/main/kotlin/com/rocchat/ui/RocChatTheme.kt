@@ -4,10 +4,13 @@ import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
+
+enum class AppThemePreference { SYSTEM, LIGHT, DARK }
 
 private val LightColorScheme = lightColorScheme(
     primary = RocColors.RocGold,
@@ -50,22 +53,47 @@ private val RocTypography = Typography(
 
 @Composable
 fun RocChatTheme(
+    appTheme: AppThemePreference = AppThemePreference.SYSTEM,
     darkTheme: Boolean = isSystemInDarkTheme(),
-    dynamicColor: Boolean = true,
+    dynamicColor: Boolean = false,
+    fontScale: Float = 1f,
     content: @Composable () -> Unit
 ) {
+    val resolvedDarkTheme = when (appTheme) {
+        AppThemePreference.SYSTEM -> darkTheme
+        AppThemePreference.DARK -> true
+        AppThemePreference.LIGHT -> false
+    }
     val colorScheme = when {
         dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
             val ctx = LocalContext.current
-            if (darkTheme) dynamicDarkColorScheme(ctx) else dynamicLightColorScheme(ctx)
+            if (resolvedDarkTheme) dynamicDarkColorScheme(ctx) else dynamicLightColorScheme(ctx)
         }
-        darkTheme -> DarkColorScheme
+        resolvedDarkTheme -> DarkColorScheme
         else -> LightColorScheme
+    }
+    val scaledTypography = remember(fontScale) {
+        RocTypography.run {
+            copy(
+                headlineLarge = headlineLarge.copy(fontSize = (28f * fontScale).sp),
+                headlineMedium = headlineMedium.copy(fontSize = (24f * fontScale).sp),
+                headlineSmall = headlineSmall.copy(fontSize = (20f * fontScale).sp),
+                titleLarge = titleLarge.copy(fontSize = (22f * fontScale).sp),
+                titleMedium = titleMedium.copy(fontSize = (17f * fontScale).sp),
+                titleSmall = titleSmall.copy(fontSize = (15f * fontScale).sp),
+                bodyLarge = bodyLarge.copy(fontSize = (15f * fontScale).sp),
+                bodyMedium = bodyMedium.copy(fontSize = (14f * fontScale).sp),
+                bodySmall = bodySmall.copy(fontSize = (12f * fontScale).sp),
+                labelLarge = labelLarge.copy(fontSize = (14f * fontScale).sp),
+                labelMedium = labelMedium.copy(fontSize = (12f * fontScale).sp),
+                labelSmall = labelSmall.copy(fontSize = (11f * fontScale).sp),
+            )
+        }
     }
 
     MaterialTheme(
         colorScheme = colorScheme,
-        typography = RocTypography,
+        typography = scaledTypography,
         content = content
     )
 }

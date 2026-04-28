@@ -120,16 +120,18 @@ object CallManager {
 
     fun startCall(
         conversationId: String, remoteUserId: String, remoteName: String,
-        callType: String, ws: NativeWebSocket
+        callType: String, ws: NativeWebSocket?, context: Context? = null
     ) {
         if (callStatus != "idle") return
+        if (context != null) appContext = context.applicationContext
+        val signalWs = ws ?: InboxWebSocket.task
         this.callId = UUID.randomUUID().toString()
         this.conversationId = conversationId
         this.remoteUserId = remoteUserId
         this.remoteName = remoteName
         this.callType = callType
         this.callStatus = "outgoing"
-        this.ws = ws
+        this.ws = signalWs
 
         startP2P(isInitiator = true)
         sendEncryptedSignal("call_offer", mapOf(
@@ -145,8 +147,10 @@ object CallManager {
         }
     }
 
-    fun handleIncomingOffer(payload: JSONObject, conversationId: String, ws: NativeWebSocket?) {
-        if (callStatus != "idle" || ws == null) {
+    fun handleIncomingOffer(payload: JSONObject, conversationId: String, ws: NativeWebSocket?, context: Context? = null) {
+        if (context != null) appContext = context.applicationContext
+        val signalWs = ws ?: InboxWebSocket.task
+        if (callStatus != "idle" || signalWs == null) {
             val callId = payload.optString("callId")
             val from = payload.optString("fromUserId")
             if (callId.isNotEmpty() && from.isNotEmpty()) {
@@ -161,7 +165,7 @@ object CallManager {
         this.remoteName = this.remoteUserId.take(8)
         this.callType = decrypted.optString("callType", "voice")
         this.callStatus = "incoming"
-        this.ws = ws
+        this.ws = signalWs
         this.pendingSdp = decrypted.optString("sdp").ifEmpty { payload.optString("sdp") }
 
         timeoutJob = CoroutineScope(Dispatchers.Main).launch {
@@ -358,7 +362,9 @@ object CallManager {
             .put("seq", videoSeq)
             .put("frame", b64)
         val msg = JSONObject().put("type", "call_video").put("payload", payload)
-        ws?.send(msg.toString())
+        if (!InboxWebSocket.send(msg)) {
+            ws?.send(msg.toString())
+        }
     }
 
     private fun sendVideoPing() {
@@ -366,7 +372,10 @@ object CallManager {
         val ts = System.currentTimeMillis()
         pingTs = ts
         val payload = JSONObject().put("callId", cid).put("targetUserId", remoteUserId).put("seq", 0).put("frame", "roc-ping:$ts")
-        ws?.send(JSONObject().put("type", "call_video").put("payload", payload).toString())
+        val msg = JSONObject().put("type", "call_video").put("payload", payload)
+        if (!InboxWebSocket.send(msg)) {
+            ws?.send(msg.toString())
+        }
     }
 
     private fun adaptVideoQuality() {
@@ -647,7 +656,9 @@ object CallManager {
             .put("seq", audioSeq)
             .put("frame", b64)
         val msg = JSONObject().put("type", "call_audio").put("payload", json)
-        ws?.send(msg.toString())
+        if (!InboxWebSocket.send(msg)) {
+            ws?.send(msg.toString())
+        }
     }
 
     /** Decode μ-law (0x01) or PCM16 (0x00 / legacy) payload back into raw PCM16 bytes. */
@@ -785,13 +796,14 @@ object CallManager {
 
     // MARK: - Group Calls (Mesh)
 
-    fun startGroupCall(conversationId: String, callType: String, ws: NativeWebSocket, members: List<String>) {
+    fun startGroupCall(conversationId: String, callType: String, ws: NativeWebSocket?, members: List<String>) {
         if (callStatus != "idle") return
+        val signalWs = ws ?: InboxWebSocket.task ?: return
         this.callId = UUID.randomUUID().toString()
         this.conversationId = conversationId
         this.callType = callType
         this.callStatus = "connected"
-        this.ws = ws
+        this.ws = signalWs
         this.isGroupCall = true
         this.groupPeers.clear()
         this.startTime = System.currentTimeMillis()
@@ -808,7 +820,8 @@ object CallManager {
     }
 
     fun handleGroupCallStart(payload: JSONObject, conversationId: String, ws: NativeWebSocket?) {
-        if (callStatus != "idle" || ws == null) return
+        val signalWs = ws ?: InboxWebSocket.task
+        if (callStatus != "idle" || signalWs == null) return
         val decrypted = decryptSignaling(payload, conversationId)
         val fromUserId = payload.optString("fromUserId")
 
@@ -816,7 +829,7 @@ object CallManager {
         this.conversationId = conversationId
         this.callType = decrypted.optString("callType", "voice")
         this.callStatus = "connected"
-        this.ws = ws
+        this.ws = signalWs
         this.isGroupCall = true
         this.groupPeers.clear()
         this.startTime = System.currentTimeMillis()

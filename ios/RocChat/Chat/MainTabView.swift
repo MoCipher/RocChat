@@ -3147,6 +3147,8 @@ struct SettingsView: View {
     @State private var selectedPhoto: PhotosPickerItem?
     @State private var isUploadingAvatar = false
     @AppStorage("app_theme") private var appTheme = "system"
+    @AppStorage("app_font_scale") private var appFontScale = "1.0"
+    @AppStorage("app_density") private var appDensity = "comfortable"
 
     // Invite link
     @State private var inviteLink: String?
@@ -3707,17 +3709,18 @@ struct SettingsView: View {
                         Text("Light").tag("light")
                     }
                     .pickerStyle(.segmented)
-                    .onChange(of: appTheme) { _, newValue in
-                        let style: UIUserInterfaceStyle = switch newValue {
-                        case "dark": .dark
-                        case "light": .light
-                        default: .unspecified
-                        }
-                        UIApplication.shared.connectedScenes
-                            .compactMap { $0 as? UIWindowScene }
-                            .flatMap { $0.windows }
-                            .forEach { $0.overrideUserInterfaceStyle = style }
+                    Picker("Font Scale", selection: $appFontScale) {
+                        Text("Compact").tag("0.9")
+                        Text("Default").tag("1.0")
+                        Text("Large").tag("1.1")
                     }
+                    .pickerStyle(.segmented)
+                    Picker("Density", selection: $appDensity) {
+                        Text("Compact").tag("compact")
+                        Text("Comfortable").tag("comfortable")
+                        Text("Spacious").tag("spacious")
+                    }
+                    .pickerStyle(.segmented)
                 }
 
                 Section("Quiet Hours") {

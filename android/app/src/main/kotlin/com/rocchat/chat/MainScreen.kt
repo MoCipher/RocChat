@@ -1226,7 +1226,7 @@ fun ConversationScreen(conversationId: String, conversationName: String, recipie
                             }
                             "call_offer" -> {
                                 val payload = data.getJSONObject("payload")
-                                CallManager.handleIncomingOffer(payload, conversationId, ws)
+                                CallManager.handleIncomingOffer(payload, conversationId, ws, context)
                             }
                             "call_answer" -> CallManager.handleCallAnswer(data.getJSONObject("payload"))
                             "call_ice" -> CallManager.handleIceCandidate(data.getJSONObject("payload"))
@@ -1382,16 +1382,14 @@ fun ConversationScreen(conversationId: String, conversationName: String, recipie
                     if (recipientUserId.isEmpty()) {
                         // Group conversation — group call button
                         IconButton(onClick = {
-                            ws?.let { w ->
-                                scope.launch {
-                                    try {
-                                        val convData = APIClient.get("/messages/conversations/$conversationId")
-                                        val membersArr = convData.optJSONArray("members")
-                                        val memberIds = if (membersArr != null) (0 until membersArr.length()).map { membersArr.getJSONObject(it).getString("user_id") } else emptyList()
-                                        CallManager.startGroupCall(conversationId, "voice", w, memberIds)
-                                    } catch (_: Exception) {
-                                        CallManager.startGroupCall(conversationId, "voice", w, emptyList())
-                                    }
+                            scope.launch {
+                                try {
+                                    val convData = APIClient.get("/messages/conversations/$conversationId")
+                                    val membersArr = convData.optJSONArray("members")
+                                    val memberIds = if (membersArr != null) (0 until membersArr.length()).map { membersArr.getJSONObject(it).getString("user_id") } else emptyList()
+                                    CallManager.startGroupCall(conversationId, "voice", ws, memberIds)
+                                } catch (_: Exception) {
+                                    CallManager.startGroupCall(conversationId, "voice", ws, emptyList())
                                 }
                             }
                         }) {
@@ -1399,12 +1397,12 @@ fun ConversationScreen(conversationId: String, conversationName: String, recipie
                         }
                     } else {
                         IconButton(onClick = {
-                            ws?.let { CallManager.startCall(conversationId, userId, conversationName, "voice", it) }
+                            CallManager.startCall(conversationId, userId, conversationName, "voice", ws, context)
                         }) {
                             Icon(Icons.Default.Phone, contentDescription = "Call", tint = RocColors.RocGold)
                         }
                         IconButton(onClick = {
-                            ws?.let { CallManager.startCall(conversationId, userId, conversationName, "video", it) }
+                            CallManager.startCall(conversationId, userId, conversationName, "video", ws, context)
                         }) {
                             Icon(Icons.Default.Videocam, contentDescription = "Video", tint = RocColors.RocGold)
                         }
@@ -2827,7 +2825,10 @@ fun SettingsTab(onLogout: () -> Unit) {
     var showNicknameDialog by remember { mutableStateOf(false) }
     var editNicknameContactId by remember { mutableStateOf("") }
     var editNicknameText by remember { mutableStateOf("") }
-    var appTheme by remember { mutableStateOf(context.getSharedPreferences("rocchat", Context.MODE_PRIVATE).getString("app_theme", "system") ?: "system") }
+    val uiPrefs = context.getSharedPreferences("rocchat", Context.MODE_PRIVATE)
+    var appTheme by remember { mutableStateOf(uiPrefs.getString("app_theme", "system") ?: "system") }
+    var appFontScale by remember { mutableStateOf(uiPrefs.getString("app_font_scale", "1.0") ?: "1.0") }
+    var appDensity by remember { mutableStateOf(uiPrefs.getString("app_density", "comfortable") ?: "comfortable") }
 
     val importFileLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.GetContent()
@@ -3734,7 +3735,36 @@ fun SettingsTab(onLogout: () -> Unit) {
                     selected = appTheme == key,
                     onClick = {
                         appTheme = key
-                        context.getSharedPreferences("rocchat", Context.MODE_PRIVATE).edit().putString("app_theme", key).apply()
+                        uiPrefs.edit().putString("app_theme", key).apply()
+                        showToast("Theme applied. Reopen app for full shell refresh.")
+                    },
+                    label = { Text(label) },
+                )
+            }
+        }
+        Text("Font scale", modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp), fontSize = 12.sp, color = RocColors.TextSecondary)
+        Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf("0.9" to "Compact", "1.0" to "Default", "1.1" to "Large").forEach { (value, label) ->
+                FilterChip(
+                    selected = appFontScale == value,
+                    onClick = {
+                        appFontScale = value
+                        uiPrefs.edit().putString("app_font_scale", value).apply()
+                        showToast("Font scale saved. Reopen app to apply globally.")
+                    },
+                    label = { Text(label) },
+                )
+            }
+        }
+        Text("Layout density", modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp), fontSize = 12.sp, color = RocColors.TextSecondary)
+        Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf("compact" to "Compact", "comfortable" to "Comfortable", "spacious" to "Spacious").forEach { (value, label) ->
+                FilterChip(
+                    selected = appDensity == value,
+                    onClick = {
+                        appDensity = value
+                        uiPrefs.edit().putString("app_density", value).apply()
+                        showToast("Density saved. Reopen app to apply globally.")
                     },
                     label = { Text(label) },
                 )

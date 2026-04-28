@@ -37,6 +37,10 @@ export function renderAuth(container: HTMLElement, onSuccess: () => void) {
             <img src="/favicon.svg" width="64" height="64" alt="RocChat" />
             <h1>RocChat</h1>
             <p>End-to-end encrypted messaging</p>
+            <div class="auth-pill-row">
+              <span class="auth-pill">Private by default</span>
+              <span class="auth-pill">Zero-knowledge login</span>
+            </div>
           </div>
 
           <div id="auth-error" class="alert-error hidden"></div>

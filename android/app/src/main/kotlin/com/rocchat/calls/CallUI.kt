@@ -19,6 +19,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -39,6 +40,10 @@ fun CallOverlay() {
     val status = CallManager.callStatus
     if (status == "idle") return
 
+    // Ensure CallManager has a Context for encryption, video capture, P2P, etc.
+    val context = LocalContext.current
+    LaunchedEffect(Unit) { CallManager.setContext(context) }
+
     // Dismiss soft keyboard when entering an active call
     val keyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
     val focus = androidx.compose.ui.platform.LocalFocusManager.current
@@ -50,7 +55,11 @@ fun CallOverlay() {
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color.Black.copy(alpha = 0.9f)),
+            .background(
+                Brush.linearGradient(
+                    colors = listOf(Color.Black.copy(alpha = 0.94f), RocColors.MidnightAzure.copy(alpha = 0.9f))
+                )
+            ),
         contentAlignment = Alignment.Center
     ) {
         // Video preview layer — show local camera when video call and camera on

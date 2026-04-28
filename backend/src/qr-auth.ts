@@ -13,6 +13,7 @@ import type { Env } from './index.js';
 import { jsonResponse, errorResponse, logEvent } from './middleware.js';
 
 const QR_TTL = 300; // 5 minutes
+const qrPollRl = new Map<string, number[]>();
 
 export async function handleQrAuth(
   request: Request,
@@ -49,12 +50,14 @@ async function poll(request: Request, env: Env, url: URL): Promise<Response> {
   const token = url.pathname.split('/api/auth/qr/poll/')[1];
   if (!token) return errorResponse('Missing token', 400);
 
-  // Soft rate-limit polls by IP: max 60 polls/min per IP
+  // Soft rate-limit polls by IP: max 60 polls/min per IP (in-memory)
   const pollIp = request.headers.get('CF-Connecting-IP') ?? 'unknown';
-  const pollKey = `qr_poll_rl:${pollIp}`;
-  const pollHits = parseInt(await env.KV.get(pollKey) ?? '0', 10);
-  if (pollHits > 60) return errorResponse('Too many poll requests', 429);
-  await env.KV.put(pollKey, String(pollHits + 1), { expirationTtl: 60 });
+  const now = Date.now();
+  const hits = qrPollRl.get(pollIp) ?? [];
+  const recent = hits.filter(t => now - t < 60_000);
+  if (recent.length > 60) return errorResponse('Too many poll requests', 429);
+  recent.push(now);
+  qrPollRl.set(pollIp, recent);
 
   const raw = await env.KV.get(`qr:${token}`);
   if (!raw) return jsonResponse({ status: 'expired' });

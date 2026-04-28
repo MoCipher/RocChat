@@ -131,7 +131,17 @@
   --fs-lg: var(--text-lg);
   --fs-xl: var(--text-xl);
   --fs-2xl: var(--text-2xl);
+  --density-multiplier: 1;
 }
+
+:root.density-compact { --density-multiplier: 0.9; }
+:root.density-comfortable { --density-multiplier: 1; }
+:root.density-spacious { --density-multiplier: 1.12; }
+
+:root.accent-gold { --primary: #D4AF37; --primary-hover: #C9A230; --primary-light: #E8CC6E; --primary-bg: rgba(212, 175, 55, 0.08); }
+:root.accent-turquoise { --primary: #40E0D0; --primary-hover: #2ec8b8; --primary-light: #7ee9de; --primary-bg: rgba(64, 224, 208, 0.12); }
+:root.accent-violet { --primary: #9b87f5; --primary-hover: #866cf0; --primary-light: #b6a6fa; --primary-bg: rgba(155, 135, 245, 0.14); }
+:root.accent-rose { --primary: #f472b6; --primary-hover: #ec5ca9; --primary-light: #f9a8d4; --primary-bg: rgba(244, 114, 182, 0.12); }
 
 /* ── Light Theme (opt-in only: add .light class on <html>) ── */
 :root.light {
@@ -432,7 +442,7 @@ a:hover { text-decoration: underline; }
 
 /* ── Sidebar ── */
 .sidebar {
-  width: 64px;
+  width: 84px;
   background: var(--sidebar-bg);
   display: flex;
   flex-direction: column;
@@ -453,16 +463,25 @@ a:hover { text-decoration: underline; }
 
 .sidebar-btn {
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  width: 40px; height: 40px;
-  border-radius: var(--radius-md);
+  width: 68px; height: 54px;
+  border-radius: var(--radius-lg);
   border: none;
   background: transparent;
   color: var(--text-secondary);
   cursor: pointer;
   transition: all var(--duration-fast) var(--ease-out);
   position: relative;
+}
+
+.sidebar-btn-label {
+  font-size: 10px;
+  line-height: 1.2;
+  margin-top: 2px;
+  opacity: 0.85;
+  letter-spacing: 0.02em;
 }
 
 .sidebar-btn:hover {
@@ -520,7 +539,7 @@ a:hover { text-decoration: underline; }
 }
 
 .panel-header {
-  padding: var(--sp-4) var(--sp-4) var(--sp-3);
+  padding: calc(var(--sp-4) * var(--density-multiplier)) calc(var(--sp-4) * var(--density-multiplier)) calc(var(--sp-3) * var(--density-multiplier));
   border-bottom: 1px solid var(--border-weak);
 }
 
@@ -639,7 +658,7 @@ a:hover { text-decoration: underline; }
   display: flex;
   align-items: center;
   gap: var(--sp-3);
-  padding: var(--sp-3) var(--sp-3);
+  padding: calc(var(--sp-3) * var(--density-multiplier)) calc(var(--sp-3) * var(--density-multiplier));
   border-radius: var(--radius-lg);
   cursor: pointer;
   transition: all var(--duration-fast) var(--ease-out);
@@ -744,7 +763,7 @@ a:hover { text-decoration: underline; }
   display: flex;
   align-items: center;
   gap: var(--sp-3);
-  padding: var(--sp-3) var(--sp-4);
+  padding: calc(var(--sp-3) * var(--density-multiplier)) calc(var(--sp-4) * var(--density-multiplier));
   padding-top: max(var(--sp-3), env(safe-area-inset-top));
   border-bottom: 1px solid var(--border-weak);
   background: var(--bg-elevated);
@@ -856,7 +875,7 @@ a:hover { text-decoration: underline; }
 .messages-area {
   flex: 1;
   overflow-y: auto;
-  padding: var(--sp-4) var(--sp-6);
+  padding: calc(var(--sp-4) * var(--density-multiplier)) calc(var(--sp-6) * var(--density-multiplier));
   display: flex;
   flex-direction: column;
   gap: var(--sp-1);
@@ -1048,7 +1067,7 @@ a:hover { text-decoration: underline; }
   display: flex;
   align-items: flex-end;
   gap: var(--sp-2);
-  padding: var(--sp-3) var(--sp-4);
+  padding: calc(var(--sp-3) * var(--density-multiplier)) calc(var(--sp-4) * var(--density-multiplier));
   padding-bottom: max(var(--sp-3), env(safe-area-inset-bottom));
   border-top: 1px solid var(--border-weak);
   background: var(--bg-elevated);
@@ -1350,10 +1369,11 @@ a:hover { text-decoration: underline; }
 .auth-card {
   width: 100%;
   max-width: 400px;
-  background: var(--bg-card);
-  border-radius: var(--radius-xl);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--bg-card) 88%, transparent), var(--bg-card));
+  border-radius: var(--radius-2xl);
   padding: var(--sp-8);
   box-shadow: var(--shadow-modal);
+  border: 1px solid var(--border-norm);
 }
 
 .auth-logo {
@@ -1376,6 +1396,23 @@ a:hover { text-decoration: underline; }
   color: var(--text-tertiary);
   font-family: var(--font-mono);
   margin-top: var(--sp-1);
+}
+
+.auth-pill-row {
+  margin-top: var(--sp-3);
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--sp-2);
+}
+
+.auth-pill {
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-weak);
+  background: var(--bg-input);
+  border-radius: var(--radius-full);
+  padding: 4px 10px;
 }
 
 .form-group {
@@ -1537,7 +1574,7 @@ a:hover { text-decoration: underline; }
   margin-bottom: var(--sp-6);
   background: var(--bg-card);
   border-radius: var(--radius-xl);
-  padding: var(--sp-4);
+  padding: calc(var(--sp-4) * var(--density-multiplier));
   border: 1px solid var(--border-weak);
 }
 
@@ -1769,6 +1806,8 @@ a:hover { text-decoration: underline; }
   .app-layout.has-conversation .sidebar { display: none; }
   .app-layout:not(.has-conversation) .chat-view { display: none; }
   .sidebar { width: 56px; }
+  .sidebar-btn { width: 44px; height: 44px; border-radius: var(--radius-md); }
+  .sidebar-btn-label { display: none; }
   .mobile-back-btn { display: flex; }
   .chat-header-actions { gap: var(--sp-1); }
 
@@ -1960,10 +1999,12 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
   backdrop-filter: blur(8px);
 }
 .call-card {
-  background: var(--bg-elevated); border-radius: var(--radius-xl);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--bg-elevated) 85%, transparent), var(--bg-elevated));
+  border-radius: var(--radius-2xl);
   padding: var(--sp-8); text-align: center; position: relative;
   min-width: 320px; max-width: 480px; width: 90%;
   box-shadow: 0 24px 48px rgba(0,0,0,0.4);
+  border: 1px solid var(--border-norm);
 }
 .call-card-video {
   width: 90vw; max-width: 720px; height: 70vh;
@@ -1990,6 +2031,9 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
   cursor: pointer; transition: all 0.15s;
 }
 .call-control-btn:hover { background: var(--bg-elevated); }
+.call-control-btn:focus-visible {
+  box-shadow: var(--shadow-focus);
+}
 .call-control-btn.active {
   background: var(--danger); color: white; border-color: var(--danger);
 }

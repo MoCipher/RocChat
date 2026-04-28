@@ -30,9 +30,44 @@ object InboxWebSocket {
     private val listeners = mutableListOf<(String, JSONObject) -> Unit>()
     private var lastUserId: String? = null
     private var lastToken: String? = null
+    private var lastContext: Context? = null
+
+    /** One-shot default routing for call frames — avoids duplicate handlers when auth recomposes. */
+    private var defaultCallRoutingAttached = false
+    private val defaultCallRoutingListener: (String, JSONObject) -> Unit = { type, payload ->
+        when (type) {
+            "call_offer" -> CallManager.handleIncomingOffer(
+                payload,
+                payload.optString("conversationId"),
+                task,
+                lastContext,
+            )
+            "call_answer" -> CallManager.handleCallAnswer(payload)
+            "call_ice" -> CallManager.handleIceCandidate(payload)
+            "call_end" -> CallManager.handleCallEnd(payload)
+            "call_audio" -> CallManager.handleCallAudio(payload)
+            "call_video" -> CallManager.handleCallVideo(payload)
+            "call_p2p_candidate" -> CallManager.handleP2PCandidate(payload)
+        }
+    }
 
     fun addListener(listener: (String, JSONObject) -> Unit) {
         synchronized(listeners) { listeners.add(listener) }
+    }
+
+    fun removeListener(listener: (String, JSONObject) -> Unit) {
+        synchronized(listeners) { listeners.remove(listener) }
+    }
+
+    /** Registers inbox call signaling once per login; idempotent. */
+    fun ensureDefaultCallRouting(context: Context) {
+        synchronized(listeners) {
+            if (!defaultCallRoutingAttached) {
+                listeners.add(defaultCallRoutingListener)
+                defaultCallRoutingAttached = true
+            }
+        }
+        connect(context)
     }
 
     /** Open the inbox WebSocket. Idempotent. */
@@ -48,6 +83,7 @@ object InboxWebSocket {
         manuallyClosed = false
         lastUserId = userId
         lastToken = token
+        lastContext = context.applicationContext
 
         val url = "wss://rocchat-api.spoass.workers.dev/api/ws/user/$userId" +
             "?userId=$userId&deviceId=android&token=$token"
@@ -108,5 +144,11 @@ object InboxWebSocket {
         try { task?.close(1000, "logout") } catch (_: Exception) {}
         task = null
         reconnectAttempt = 0
+        synchronized(listeners) {
+            if (defaultCallRoutingAttached) {
+                listeners.remove(defaultCallRoutingListener)
+                defaultCallRoutingAttached = false
+            }
+        }
     }
 }

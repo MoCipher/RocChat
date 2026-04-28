@@ -32,7 +32,7 @@ const lazyRenderChannels = () => import('./channels/channels.js').then(m => m.re
 const lazyRenderSettings = () => import('./components/settings.js').then(m => m.renderSettings);
 
 // Eagerly loaded for app-lock and theme (needed before tab render)
-import { applyTheme, checkAppLock, showAppLockScreen } from './components/settings.js';
+import { applyAppearancePreferences, applyTheme, checkAppLock, showAppLockScreen } from './components/settings.js';
 import { getToken, getPreKeyCount, uploadPreKeys, getMe, registerPushToken, getTransparencyReports, getSupportersWall } from './api.js';
 import { migrateLegacySecrets, pruneOldDrafts } from './crypto/secure-store.js';
 import { installCommandPaletteHotkey, registerPaletteCommand } from './components/cmdk.js';
@@ -128,6 +128,7 @@ async function init() {
     // Apply saved font scale
     const savedFontScale = parseFloat(localStorage.getItem('rocchat_font_scale') || '1');
     if (!isNaN(savedFontScale)) document.documentElement.style.setProperty('--roc-font-scale', String(savedFontScale));
+    applyAppearancePreferences();
 
     // App Lock — check before showing any UI
     if (!(await checkAppLock())) {

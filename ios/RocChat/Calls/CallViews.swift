@@ -15,7 +15,12 @@ struct CallOverlay: View {
     var body: some View {
         if callManager.callStatus != .idle {
             ZStack {
-                Color.black.opacity(0.85).ignoresSafeArea()
+                LinearGradient(
+                    colors: [Color.black.opacity(0.92), Color.midnightAzure.opacity(0.88)],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+                .ignoresSafeArea()
 
                 VStack(spacing: 24) {
                     Spacer()
@@ -67,6 +72,7 @@ struct CallOverlay: View {
                     Text(callManager.remoteName)
                         .font(.title2.bold())
                         .foregroundColor(.white)
+                        .lineLimit(1)
 
                     // Status text
                     statusText
@@ -85,6 +91,10 @@ struct CallOverlay: View {
                             .font(.caption2.monospaced())
                     }
                     .foregroundColor(.turquoise)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(Color.white.opacity(0.08))
+                    .clipShape(Capsule())
                     .padding(.bottom, 20)
                 }
                 .padding()

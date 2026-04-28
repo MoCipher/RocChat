@@ -477,6 +477,36 @@ Additional plaintext leaks and cross-platform inconsistencies eliminated:
   incoming-offer handling now tolerates missing conversation WS by reusing
   inbox socket state.
 
+### Android call parity (inbox + listener hygiene)
+- `CallManager` now mirrors iOS: nullable conversation WebSocket at call start
+  and `handleIncomingOffer` / `handleGroupCallStart` fall back to
+  `InboxWebSocket.task` when the conversation socket is absent.
+- Chat toolbar call and group-call actions no longer no-op solely because the
+  conversation WS is still connecting; they delegate the same fallback as iOS.
+- Inbox call routing moved to `InboxWebSocket.ensureDefaultCallRouting` with a
+  single registered listener per authenticated session; `disconnect()` on
+  logout removes it so `LaunchedEffect(isAuthenticated)` cannot accumulate
+  duplicate handlers that race and answer `call_busy`.
+
+### iOS AppIcon asset
+- `AppIcon.appiconset` referenced `AppIcon.png` but the file was missing from
+  the catalog, producing **No image named 'AppIcon'** at runtime. A 1024×1024
+  PNG asset was added so Xcode and TestFlight builds resolve the icon set.
+
+### UI theme plumbing hardening (web + iOS + Android)
+- Appearance preferences are now applied at app-shell boot, not only inside
+  settings screens. This avoids stale visual state where users changed theme
+  but major screens kept previous values until manual refresh/reopen.
+- Web now enforces persisted appearance classes (`density-*`, `accent-*`) from
+  startup and re-applies them after theme switches so overlays and calls UI
+  cannot drift from selected accessibility/style preferences.
+- iOS app-level theme selection now routes through root `preferredColorScheme`,
+  reducing per-window override drift and ensuring security overlays/lock views
+  share one consistent appearance policy.
+- Android app theme/font preferences are now read by the root Compose theme
+  wrapper, avoiding settings/UI mismatch where values were stored but not
+  reflected by Material color/typography at shell level.
+
 ### Business feature removal
 - Removed Business-tier backend/API entrypoints and client surfaces from active
   app code. No `/api/business/*` routes remain in runtime code paths.

@@ -56,6 +56,14 @@ struct AuthView: View {
                         .font(.custom("JetBrains Mono", size: 12))
                         .foregroundColor(.turquoise)
                         .tracking(1)
+
+                    HStack(spacing: 8) {
+                        Text("Private by default")
+                        Text("Zero-knowledge login")
+                    }
+                    .font(.caption2)
+                    .foregroundColor(.textSecondary)
+                    .padding(.top, 4)
                 }
                 
                 VStack(spacing: 16) {
@@ -118,7 +126,7 @@ struct AuthView: View {
                 }
                 .padding(32)
                 .background(Color.bgCard)
-                .cornerRadius(16)
+                .cornerRadius(24)
                 .shadow(color: .black.opacity(0.3), radius: 24, y: 8)
             }
             .padding(24)

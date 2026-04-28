@@ -51,8 +51,9 @@ fun AuthScreen(onSuccess: () -> Unit) {
             modifier = Modifier
                 .widthIn(max = 400.dp)
                 .padding(24.dp),
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(containerColor = RocColors.BgCard)
+            shape = RoundedCornerShape(24.dp),
+            colors = CardDefaults.cardColors(containerColor = RocColors.BgCard),
+            elevation = CardDefaults.cardElevation(defaultElevation = 10.dp)
         ) {
             Column(
                 modifier = Modifier.padding(32.dp),

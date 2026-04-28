@@ -43,15 +43,28 @@ function leadingZeroBitsFromHex(hex: string): number {
 }
 
 /** Read PoW difficulty from KV (runtime-updatable), fall back to env, clamp to sane range. */
+let cachedDifficulty: { value: number; at: number } | null = null;
+const DIFFICULTY_CACHE_TTL = 300_000; // 5 minutes
+
 export async function getPowDifficulty(env: Env): Promise<number> {
+  const now = Date.now();
+  if (cachedDifficulty && now - cachedDifficulty.at < DIFFICULTY_CACHE_TTL) {
+    return cachedDifficulty.value;
+  }
   try {
     const kv = await env.KV.get('pow:difficulty');
     if (kv) {
       const n = parseInt(kv, 10);
-      if (!isNaN(n)) return Math.min(Math.max(n, 12), 28);
+      if (!isNaN(n)) {
+        const clamped = Math.min(Math.max(n, 12), 28);
+        cachedDifficulty = { value: clamped, at: now };
+        return clamped;
+      }
     }
   } catch { /* KV unavailable */ }
-  return Math.min(Math.max(parseInt(env.POW_DIFFICULTY || '18', 10) || 18, 12), 28);
+  const fallback = Math.min(Math.max(parseInt(env.POW_DIFFICULTY || '18', 10) || 18, 12), 28);
+  cachedDifficulty = { value: fallback, at: now };
+  return fallback;
 }
 
 export async function createPowChallenge(env: Env, difficulty: number, ip: string): Promise<PowChallenge> {

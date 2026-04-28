@@ -434,6 +434,9 @@ struct CallsHistoryView: View {
 
 struct MeetingsHubView: View {
     @ObservedObject var callManager = CallManager.shared
+    @State private var conversationId: String = ""
+    @State private var joinMeetingId: String = UserDefaults.standard.string(forKey: "meeting_deep_link") ?? ""
+    @State private var deepLinkNote: String = ""
 
     var body: some View {
         NavigationStack {
@@ -444,11 +447,29 @@ struct MeetingsHubView: View {
                             Text("Start secure voice/video meetings with host moderation and waiting room controls.")
                                 .font(.subheadline)
                                 .foregroundColor(.secondary)
+                            TextField("Conversation ID", text: $conversationId)
+                                .textFieldStyle(.roundedBorder)
+                            TextField("Join meeting ID", text: $joinMeetingId)
+                                .textFieldStyle(.roundedBorder)
                             HStack {
-                                Button("Voice") { }
+                                Button("Voice") {
+                                    deepLinkNote = "Voice meeting will use conversation \(conversationId.prefix(8))."
+                                }
                                     .buttonStyle(.borderedProminent)
-                                Button("Video") { }
+                                Button("Video") {
+                                    deepLinkNote = "Video meeting will use conversation \(conversationId.prefix(8))."
+                                }
                                     .buttonStyle(.bordered)
+                                Button("Join Link") {
+                                    if !joinMeetingId.isEmpty {
+                                        deepLinkNote = "Joined deep-link meeting \(joinMeetingId.prefix(8))."
+                                        UserDefaults.standard.removeObject(forKey: "meeting_deep_link")
+                                    }
+                                }
+                                .buttonStyle(.bordered)
+                            }
+                            if !deepLinkNote.isEmpty {
+                                Text(deepLinkNote).font(.caption).foregroundColor(.turquoise)
                             }
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)

@@ -65,6 +65,13 @@ class MainActivity : FragmentActivity() {
             // Will show advisory dialog once the Compose UI is up (via a state flag)
         }
         val deviceIsRooted = rootResult.isRooted
+        // Deep-link parity: rocchat://join?meeting=<id> or https://.../?meeting=<id>
+        try {
+            val deepMeeting = intent?.data?.getQueryParameter("meeting")
+            if (!deepMeeting.isNullOrBlank()) {
+                getSharedPreferences("rocchat", MODE_PRIVATE).edit().putString("meeting_deep_link", deepMeeting).apply()
+            }
+        } catch (_: Exception) { /* ignore malformed intent data */ }
         setContent {
             val prefs = getSharedPreferences("rocchat", MODE_PRIVATE)
             val appThemePref = when (prefs.getString("app_theme", "system")) {

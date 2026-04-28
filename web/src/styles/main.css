@@ -2037,6 +2037,33 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
   padding: 10px;
 }
 
+.draggable-panel {
+  position: fixed;
+  z-index: 180;
+  overflow: auto;
+  box-shadow: var(--shadow-lg);
+}
+
+.meeting-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: move;
+  user-select: none;
+  margin-bottom: 8px;
+}
+
+.meeting-panel-resize {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  width: 14px;
+  height: 14px;
+  cursor: nwse-resize;
+  border-right: 2px solid var(--text-tertiary);
+  border-bottom: 2px solid var(--text-tertiary);
+}
+
 .meeting-panel h3 {
   color: var(--text-primary);
   font-size: var(--text-sm);

@@ -76,6 +76,14 @@ struct RocChatApp: App {
                     }
                 }
             }
+            .onOpenURL { url in
+                // Deep-link parity: rocchat://join?meeting=<id> or https://.../?meeting=<id>
+                if let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+                   let meeting = components.queryItems?.first(where: { $0.name == "meeting" })?.value,
+                   !meeting.isEmpty {
+                    UserDefaults.standard.set(meeting, forKey: "meeting_deep_link")
+                }
+            }
             .preferredColorScheme(preferredColorScheme)
             .tint(.rocGold)
             .environment(\.dynamicTypeSize, dynamicTypeSize)

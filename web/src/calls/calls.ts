@@ -16,7 +16,7 @@ import { randomId } from '@rocchat/shared';
 import { encryptMessage, decryptMessage } from '../crypto/session-manager.js';
 import { groupEncrypt, groupDecrypt } from '../crypto/group-session-manager.js';
 import { getSecretString, putSecretString } from '../crypto/secure-store.js';
-import { createMeeting, sendMeetingEvent, getMeetingState, listMeetings } from '../api.js';
+import { createMeeting, sendMeetingEvent, getMeetingState, listMeetings, joinMeeting } from '../api.js';
 import { VoiceWS } from './voice-ws.js';
 import { VideoWS } from './video-ws.js';
 
@@ -244,7 +244,7 @@ async function addCallRecord(record: CallRecord): Promise<void> {
 // ── Render ──
 
 export async function renderCalls(container: HTMLElement) {
-  const history = await getCallHistory();
+  const callHistory = await getCallHistory();
   let meetingRows = '';
   try {
     const rsp = await listMeetings();
@@ -257,17 +257,25 @@ export async function renderCalls(container: HTMLElement) {
       <div class="panel-header"><h2>Calls</h2></div>
       <div class="settings-section" style="margin-bottom:var(--sp-3)">
         <h3>Meetings</h3>
+        <div style="display:flex;gap:8px;margin-bottom:8px">
+          <input id="meeting-conv-id" placeholder="Conversation ID" style="flex:1;padding:8px;border-radius:8px;border:1px solid var(--border-weak);background:var(--bg-input);color:var(--text-primary)" />
+          <button class="btn-secondary" id="meeting-schedule-btn">Schedule</button>
+        </div>
+        <div style="display:flex;gap:8px;margin-bottom:8px">
+          <input id="meeting-join-id" placeholder="Meeting ID / deep link" style="flex:1;padding:8px;border-radius:8px;border:1px solid var(--border-weak);background:var(--bg-input);color:var(--text-primary)" />
+          <button class="btn-secondary" id="meeting-join-btn">Join</button>
+        </div>
         <div class="meeting-list">${meetingRows || '<div style="color:var(--text-tertiary)">No scheduled meetings yet.</div>'}</div>
       </div>
       <div class="calls-list" id="calls-list">
-        ${history.length === 0 ? `
+        ${callHistory.length === 0 ? `
           <div class="empty-state" style="padding:var(--sp-8)">
             <i data-lucide="phone-off" style="width:48px;height:48px;color:var(--text-tertiary);opacity:0.3"></i>
             <h3 style="font-size:var(--text-base);color:var(--text-secondary);margin-top:var(--sp-4)">No recent calls</h3>
             <p style="font-size:var(--text-sm);color:var(--text-tertiary)">Start a call from any chat.</p>
             <p style="font-family:var(--font-mono);font-size:var(--text-xs);color:var(--turquoise);margin-top:var(--sp-2)">🔒 All calls are end-to-end encrypted</p>
           </div>
-        ` : history.map((c) => `
+        ` : callHistory.map((c) => `
           <div class="conversation-item">
             <div class="avatar" style="width:36px;height:36px;font-size:var(--text-xs)">
               ${c.remoteName.split(' ').map((w: string) => w[0]).join('').slice(0, 2).toUpperCase()}
@@ -300,6 +308,46 @@ export async function renderCalls(container: HTMLElement) {
       showGroupNotice(`Meeting ${id.slice(0, 8)} entry opened from Calls.`);
     });
   });
+  container.querySelector('#meeting-schedule-btn')?.addEventListener('click', async () => {
+    const convId = (container.querySelector('#meeting-conv-id') as HTMLInputElement | null)?.value?.trim();
+    if (!convId) return;
+    const rsp = await createMeeting(convId, 'Scheduled Meeting', 'sfu').catch(() => null);
+    if (!rsp?.ok) return;
+    const id = rsp.data.meeting_id;
+    const deep = `${location.origin}?meeting=${encodeURIComponent(id)}`;
+    navigator.clipboard?.writeText(deep).catch(() => {});
+    showGroupNotice(`Meeting scheduled. Link copied: ${deep}`);
+  });
+  container.querySelector('#meeting-join-btn')?.addEventListener('click', async () => {
+    const raw = (container.querySelector('#meeting-join-id') as HTMLInputElement | null)?.value?.trim();
+    if (!raw) return;
+    let parsed = raw;
+    if (raw.includes('meeting=')) {
+      try {
+        parsed = new URL(raw).searchParams.get('meeting') || '';
+      } catch {
+        const m = raw.match(/[?&]meeting=([^&]+)/);
+        parsed = m ? decodeURIComponent(m[1]) : '';
+      }
+    }
+    if (!parsed) return;
+    const rsp = await joinMeeting(parsed).catch(() => null);
+    if (!rsp?.ok) {
+      showGroupNotice('Could not join meeting link');
+      return;
+    }
+    showGroupNotice(`Joined meeting ${parsed.slice(0, 8)}. Open chat and start media.`);
+  });
+  try {
+    const deepMeeting = new URL(location.href).searchParams.get('meeting');
+    if (deepMeeting) {
+      (container.querySelector('#meeting-join-id') as HTMLInputElement | null)!.value = deepMeeting;
+      container.querySelector('#meeting-join-btn')?.dispatchEvent(new MouseEvent('click'));
+      const clean = new URL(location.href);
+      clean.searchParams.delete('meeting');
+      window.history.replaceState({}, '', clean.toString());
+    }
+  } catch { /* ignore deep-link parse errors */ }
 }
 
 // ── Outgoing Call ──
@@ -811,6 +859,9 @@ interface GroupPeer {
   name: string;
   pc: RTCPeerConnection;
   remoteStream: MediaStream | null;
+  analyser?: AnalyserNode | null;
+  audioCtx?: AudioContext | null;
+  levelData?: Uint8Array | null;
 }
 
 interface GroupCallState {
@@ -835,13 +886,17 @@ interface GroupCallState {
   raisedQueue: string[];
   activeSpeakerUserId: string | null;
   roles: Map<string, 'host' | 'moderator' | 'participant' | 'viewer'>;
+  panelX: number;
+  panelY: number;
+  panelW: number;
+  panelH: number;
 }
 
 const groupState: GroupCallState = {
   callId: null, conversationId: null, callType: 'voice', status: 'idle',
   mode: 'mesh',
   peers: new Map(), localStream: null, ws: null, startTime: null,
-  muted: false, cameraOff: false, timerInterval: null, meetingId: null, hostUserId: null, locked: false, handRaised: false, panel: 'none', lobbyQueue: [], raisedQueue: [], activeSpeakerUserId: null, roles: new Map(),
+  muted: false, cameraOff: false, timerInterval: null, meetingId: null, hostUserId: null, locked: false, handRaised: false, panel: 'none', lobbyQueue: [], raisedQueue: [], activeSpeakerUserId: null, roles: new Map(), panelX: 32, panelY: 120, panelW: 320, panelH: 280,
 };
 
 const MAX_MESH_PEERS = 5; // 6 total including self
@@ -853,7 +908,7 @@ function resetGroupState() {
     callId: null, conversationId: null, status: 'idle',
     mode: 'mesh',
     peers: new Map(), localStream: null, ws: null, startTime: null,
-    muted: false, cameraOff: false, timerInterval: null, meetingId: null, hostUserId: null, locked: false, handRaised: false, panel: 'none', lobbyQueue: [], raisedQueue: [], activeSpeakerUserId: null, roles: new Map(),
+    muted: false, cameraOff: false, timerInterval: null, meetingId: null, hostUserId: null, locked: false, handRaised: false, panel: 'none', lobbyQueue: [], raisedQueue: [], activeSpeakerUserId: null, roles: new Map(), panelX: 32, panelY: 120, panelW: 320, panelH: 280,
   });
 }
 
@@ -1039,7 +1094,7 @@ export function handleGroupCallLeave(payload: Record<string, unknown>) {
 async function createGroupPeer(userId: string, name: string, createOffer: boolean): Promise<GroupPeer> {
   const iceServers = await getIceServers();
   const pc = new RTCPeerConnection({ iceServers });
-  const peer: GroupPeer = { userId, name, pc, remoteStream: null };
+  const peer: GroupPeer = { userId, name, pc, remoteStream: null, analyser: null, audioCtx: null, levelData: null };
   groupState.peers.set(userId, peer);
 
   groupState.localStream?.getTracks().forEach((t) => pc.addTrack(t, groupState.localStream!));
@@ -1057,12 +1112,19 @@ async function createGroupPeer(userId: string, name: string, createOffer: boolea
 
   pc.ontrack = (e) => {
     peer.remoteStream = e.streams[0] || new MediaStream([e.track]);
-    if (e.track.kind === 'audio') {
-      groupState.activeSpeakerUserId = userId;
-      setTimeout(() => {
-        if (groupState.activeSpeakerUserId === userId) groupState.activeSpeakerUserId = null;
-        updateGroupOverlay();
-      }, 2200);
+    if (e.track.kind === 'audio' && peer.remoteStream) {
+      try {
+        const ctx = new AudioContext();
+        const src = ctx.createMediaStreamSource(peer.remoteStream);
+        const analyser = ctx.createAnalyser();
+        analyser.fftSize = 256;
+        src.connect(analyser);
+        peer.audioCtx = ctx;
+        peer.analyser = analyser;
+        peer.levelData = new Uint8Array(new ArrayBuffer(analyser.frequencyBinCount));
+      } catch {
+        // Ignore analyser setup errors and keep call flow intact.
+      }
     }
     updateGroupOverlay();
   };
@@ -1162,9 +1224,9 @@ function groupOverlayHTML(): string {
   const raisedQueue = groupState.raisedQueue.map((uid, idx) => `<div>#${idx + 1} ${uid.slice(0, 8)}</div>`).join('');
   const lobby = groupState.lobbyQueue.map((uid) => `<div style="display:flex;justify-content:space-between;gap:8px"><span>${uid.slice(0, 8)}</span><span><button class="btn-secondary" data-admit="${uid}">Admit</button><button class="btn-secondary" data-deny="${uid}">Deny</button></span></div>`).join('');
   const panel = groupState.panel === 'participants'
-    ? `<div class="meeting-panel"><h3>Participants</h3><div class="meeting-list"><div>You ${isHost ? '· host' : ''}</div>${roster}</div></div>`
+    ? `<div class="meeting-panel draggable-panel" id="meeting-panel" style="left:${groupState.panelX}px;top:${groupState.panelY}px;width:${groupState.panelW}px;height:${groupState.panelH}px"><div class="meeting-panel-head" id="meeting-panel-head"><h3>Participants</h3></div><div class="meeting-list"><div>You ${isHost ? '· host' : ''}</div>${roster}</div><div class="meeting-panel-resize" id="meeting-panel-resize"></div></div>`
     : groupState.panel === 'host'
-      ? `<div class="meeting-panel"><h3>Host moderation</h3><div class="meeting-list"><button class="btn-secondary" id="gcall-admit-all">Admit all lobby users</button><button class="btn-secondary" id="gcall-remove-last">Remove last participant</button><div style="margin-top:8px"><strong>Raised hand queue</strong>${raisedQueue || '<div>None</div>'}</div><div style="margin-top:8px"><strong>Lobby waiting room</strong>${lobby || '<div>No one waiting</div>'}</div></div></div>`
+      ? `<div class="meeting-panel draggable-panel" id="meeting-panel" style="left:${groupState.panelX}px;top:${groupState.panelY}px;width:${groupState.panelW}px;height:${groupState.panelH}px"><div class="meeting-panel-head" id="meeting-panel-head"><h3>Host moderation</h3></div><div class="meeting-list"><button class="btn-secondary" id="gcall-admit-all">Admit all lobby users</button><button class="btn-secondary" id="gcall-remove-last">Remove last participant</button><div style="margin-top:8px"><strong>Raised hand queue</strong>${raisedQueue || '<div>None</div>'}</div><div style="margin-top:8px"><strong>Lobby waiting room</strong>${lobby || '<div>No one waiting</div>'}</div></div><div class="meeting-panel-resize" id="meeting-panel-resize"></div></div>`
       : '';
   return `
     <div class="call-card" style="min-width:360px;max-width:800px;width:90%;">
@@ -1288,6 +1350,56 @@ function bindGroupEvents() {
       updateGroupOverlay();
     });
   });
+  const panelHead = document.getElementById('meeting-panel-head');
+  const panelResize = document.getElementById('meeting-panel-resize');
+  if (panelHead) {
+    panelHead.addEventListener('mousedown', (ev) => {
+      ev.preventDefault();
+      const sx = ev.clientX;
+      const sy = ev.clientY;
+      const startX = groupState.panelX;
+      const startY = groupState.panelY;
+      const move = (e: MouseEvent) => {
+        groupState.panelX = Math.max(8, startX + (e.clientX - sx));
+        groupState.panelY = Math.max(60, startY + (e.clientY - sy));
+        const panel = document.getElementById('meeting-panel');
+        if (panel) {
+          panel.style.left = `${groupState.panelX}px`;
+          panel.style.top = `${groupState.panelY}px`;
+        }
+      };
+      const up = () => {
+        window.removeEventListener('mousemove', move);
+        window.removeEventListener('mouseup', up);
+      };
+      window.addEventListener('mousemove', move);
+      window.addEventListener('mouseup', up);
+    });
+  }
+  if (panelResize) {
+    panelResize.addEventListener('mousedown', (ev) => {
+      ev.preventDefault();
+      const sx = ev.clientX;
+      const sy = ev.clientY;
+      const startW = groupState.panelW;
+      const startH = groupState.panelH;
+      const move = (e: MouseEvent) => {
+        groupState.panelW = Math.max(260, startW + (e.clientX - sx));
+        groupState.panelH = Math.max(200, startH + (e.clientY - sy));
+        const panel = document.getElementById('meeting-panel');
+        if (panel) {
+          panel.style.width = `${groupState.panelW}px`;
+          panel.style.height = `${groupState.panelH}px`;
+        }
+      };
+      const up = () => {
+        window.removeEventListener('mousemove', move);
+        window.removeEventListener('mouseup', up);
+      };
+      window.addEventListener('mousemove', move);
+      window.addEventListener('mouseup', up);
+    });
+  }
 }
 
 function startGroupTimer() {
@@ -1298,6 +1410,28 @@ function startGroupTimer() {
     if (el) el.textContent = fmtDur(Math.floor((Date.now() - groupState.startTime) / 1000));
   }, 1000);
 }
+
+setInterval(() => {
+  if (groupState.status !== 'active') return;
+  let bestUser: string | null = null;
+  let bestLevel = 0;
+  groupState.peers.forEach((peer, uid) => {
+    if (!peer.analyser || !peer.levelData) return;
+    const levelData = peer.levelData;
+    peer.analyser.getByteFrequencyData(levelData as unknown as Uint8Array<ArrayBuffer>);
+    let sum = 0;
+    for (let i = 0; i < levelData.length; i++) sum += levelData[i];
+    const avg = sum / levelData.length;
+    if (avg > bestLevel && avg > 18) {
+      bestLevel = avg;
+      bestUser = uid;
+    }
+  });
+  if (groupState.activeSpeakerUserId !== bestUser) {
+    groupState.activeSpeakerUserId = bestUser;
+    if (document.getElementById('group-call-overlay')) updateGroupOverlay();
+  }
+}, 500);
 
 setInterval(() => {
   if (!groupState.meetingId || groupState.status !== 'active') return;

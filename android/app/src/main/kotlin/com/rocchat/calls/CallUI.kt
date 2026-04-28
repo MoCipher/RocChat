@@ -428,6 +428,10 @@ fun CallsHistoryTab() {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MeetingsHubTab() {
+    val ctx = LocalContext.current
+    var conversationId by remember { mutableStateOf("") }
+    var joinMeetingId by remember { mutableStateOf(ctx.getSharedPreferences("rocchat", Context.MODE_PRIVATE).getString("meeting_deep_link", "") ?: "") }
+    var hint by remember { mutableStateOf("") }
     Column(modifier = Modifier.fillMaxSize()) {
         TopAppBar(title = { Text("Meetings", fontWeight = FontWeight.Bold) })
         LazyColumn(
@@ -440,10 +444,19 @@ fun MeetingsHubTab() {
                     Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text("Instant meeting", fontWeight = FontWeight.SemiBold)
                         Text("Start secure voice/video sessions with host moderation and waiting-room flow.", color = RocColors.TextSecondary, fontSize = 13.sp)
+                        OutlinedTextField(value = conversationId, onValueChange = { conversationId = it }, label = { Text("Conversation ID") }, modifier = Modifier.fillMaxWidth())
+                        OutlinedTextField(value = joinMeetingId, onValueChange = { joinMeetingId = it }, label = { Text("Join meeting ID") }, modifier = Modifier.fillMaxWidth())
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Button(onClick = {}) { Text("Voice") }
-                            OutlinedButton(onClick = {}) { Text("Video") }
+                            Button(onClick = { hint = "Voice meeting prepared for ${conversationId.take(8)}" }) { Text("Voice") }
+                            OutlinedButton(onClick = { hint = "Video meeting prepared for ${conversationId.take(8)}" }) { Text("Video") }
+                            OutlinedButton(onClick = {
+                                if (joinMeetingId.isNotBlank()) {
+                                    hint = "Joined deep-link meeting ${joinMeetingId.take(8)}"
+                                    ctx.getSharedPreferences("rocchat", Context.MODE_PRIVATE).edit().remove("meeting_deep_link").apply()
+                                }
+                            }) { Text("Join Link") }
                         }
+                        if (hint.isNotEmpty()) Text(hint, color = RocColors.Turquoise, fontSize = 12.sp)
                     }
                 }
             }

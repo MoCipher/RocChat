@@ -73,6 +73,10 @@ class CallManager: ObservableObject {
     // Group call state
     @Published var isGroupCall: Bool = false
     @Published var groupPeers: [String: GroupPeer] = [:] // userId → peer
+    @Published var groupParticipants: [String] = []
+    @Published var groupHostUserId: String = ""
+    @Published var groupRoomLocked: Bool = false
+    @Published var groupMediaMode: String = "mesh"
     private let maxMeshPeers = 5 // 6 total including self
 
     private var callId: String?
@@ -742,6 +746,10 @@ class CallManager: ObservableObject {
         self.ws = ws
         self.isGroupCall = true
         self.groupPeers = [:]
+        self.groupParticipants = []
+        self.groupHostUserId = UserDefaults.standard.string(forKey: "user_id") ?? ""
+        self.groupRoomLocked = false
+        self.groupMediaMode = members.count > 2 ? "sfu" : "mesh"
         self.startTime = Date()
 
         configureAudioSession()
@@ -753,7 +761,7 @@ class CallManager: ObservableObject {
             "callId": callId ?? "",
             "callType": callType.rawValue,
             "conversationId": conversationId,
-            "mode": "mesh"
+            "mode": groupMediaMode
         ])
     }
 
@@ -769,6 +777,10 @@ class CallManager: ObservableObject {
         self.ws = ws
         self.isGroupCall = true
         self.groupPeers = [:]
+        self.groupParticipants = []
+        self.groupHostUserId = fromUserId
+        self.groupRoomLocked = false
+        self.groupMediaMode = (decrypted["mode"] as? String) ?? "mesh"
         self.startTime = Date()
 
         configureAudioSession()
@@ -790,6 +802,7 @@ class CallManager: ObservableObject {
         let userId = (payload["fromUserId"] as? String) ?? ""
         guard !userId.isEmpty, groupPeers[userId] == nil else { return }
         guard groupPeers.count < maxMeshPeers else { return }
+        groupParticipants.append(userId)
         addGroupPeer(userId: userId, isInitiator: shouldBeInitiator(remoteUserId: userId))
     }
 
@@ -798,6 +811,7 @@ class CallManager: ObservableObject {
         guard let peer = groupPeers[userId] else { return }
         peer.transport?.stop()
         groupPeers.removeValue(forKey: userId)
+        groupParticipants.removeAll { $0 == userId }
         if groupPeers.isEmpty {
             endGroupCall(notify: false)
         }
@@ -839,7 +853,26 @@ class CallManager: ObservableObject {
         }
         groupPeers = [:]
         isGroupCall = false
+        groupParticipants = []
+        groupHostUserId = ""
+        groupRoomLocked = false
+        groupMediaMode = "mesh"
         endCall(reason: "hangup", notify: false)
+    }
+
+    func hostMuteAll() {
+        guard !groupHostUserId.isEmpty else { return }
+        let myId = UserDefaults.standard.string(forKey: "user_id") ?? ""
+        guard myId == groupHostUserId else { return }
+        sendGroupSignal(type: "meeting_host_mute_all", extra: ["callId": callId ?? ""])
+    }
+
+    func toggleGroupRoomLock() {
+        guard !groupHostUserId.isEmpty else { return }
+        let myId = UserDefaults.standard.string(forKey: "user_id") ?? ""
+        guard myId == groupHostUserId else { return }
+        groupRoomLocked.toggle()
+        sendGroupSignal(type: groupRoomLocked ? "meeting_host_lock_room" : "meeting_host_unlock_room", extra: ["callId": callId ?? ""])
     }
 
     private func addGroupPeer(userId: String, isInitiator: Bool) {

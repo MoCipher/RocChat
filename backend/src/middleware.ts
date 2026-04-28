@@ -14,6 +14,12 @@ const sessionCache = new Map<string, { session: Session; expiresAt: number; cach
 const SESSION_CACHE_TTL = 120_000; // 2 minutes
 const SESSION_CACHE_MAX = 500;
 
+async function hashToken(token: string): Promise<string> {
+  const data = new TextEncoder().encode(token);
+  const digest = await crypto.subtle.digest('SHA-256', data);
+  return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
 export async function verifySession(request: Request, env: Env): Promise<Session | null> {
   const auth = request.headers.get('Authorization');
   if (!auth?.startsWith('Bearer ')) return null;
@@ -27,7 +33,9 @@ export async function verifySession(request: Request, env: Env): Promise<Session
     return cached.session;
   }
 
-  const sessionData = await env.KV.get(`session:${token}`, 'json');
+  const tokenHash = await hashToken(token);
+  const sessionData = await env.KV.get(`sessionh:${tokenHash}`, 'json')
+    || await env.KV.get(`session:${token}`, 'json');
   if (!sessionData) {
     sessionCache.delete(token);
     return null;
@@ -35,6 +43,7 @@ export async function verifySession(request: Request, env: Env): Promise<Session
   const session = sessionData as { userId: string; deviceId: string; expiresAt: number };
   if (Date.now() / 1000 > session.expiresAt) {
     sessionCache.delete(token);
+    await env.KV.delete(`sessionh:${tokenHash}`);
     await env.KV.delete(`session:${token}`);
     return null;
   }
@@ -79,7 +88,7 @@ const RATE_LIMIT_MAP_MAX = 2000;
 let lastRateLimitPrune = Date.now();
 
 export async function rateLimit(
-  _env: Env,
+  env: Env,
   userId: string,
   path: string,
 ): Promise<{ ok: boolean; retryAfter?: number }> {
@@ -107,6 +116,22 @@ export async function rateLimit(
   const key = `${userId}:${bucket}`;
   const now = Date.now();
   const windowMs = window * 1000;
+
+  // Distributed limiter via KV (shared across isolates/instances).
+  const kvKey = `rl2:${key}`;
+  try {
+    const existing = await env.KV.get(kvKey, 'json') as number[] | null;
+    const raw = Array.isArray(existing) ? existing : [];
+    const valid = raw.filter((ts) => now - ts < windowMs);
+    if (valid.length >= limit) {
+      return { ok: false, retryAfter: Math.ceil((valid[0] + windowMs - now) / 1000) };
+    }
+    valid.push(now);
+    await env.KV.put(kvKey, JSON.stringify(valid), { expirationTtl: Math.max(window + 5, 30) });
+    return { ok: true };
+  } catch {
+    // Fall back to in-isolate map if KV read/write fails.
+  }
 
   // Periodic prune to prevent unbounded growth
   if (now - lastRateLimitPrune > 30_000) {

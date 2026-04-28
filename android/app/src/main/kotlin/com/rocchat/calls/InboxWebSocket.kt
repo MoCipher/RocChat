@@ -1,6 +1,8 @@
 package com.rocchat.calls
 
 import android.content.Context
+import com.rocchat.crypto.SecureStorage
+import com.rocchat.network.APIClient
 import com.rocchat.network.NativeWebSocket
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -77,16 +79,15 @@ object InboxWebSocket {
 
         val prefs = context.getSharedPreferences("rocchat", Context.MODE_PRIVATE)
         val userId = prefs.getString("user_id", "") ?: ""
-        val token = prefs.getString("session_token", "") ?: ""
+        val token = SecureStorage.get(context, "session_token", "rocchat")
+            ?: prefs.getString("session_token", "") ?: ""
         if (userId.isEmpty() || token.isEmpty()) return
 
         manuallyClosed = false
         lastUserId = userId
         lastToken = token
         lastContext = context.applicationContext
-
-        val url = "wss://rocchat-api.spoass.workers.dev/api/ws/user/$userId" +
-            "?userId=$userId&deviceId=android&token=$token"
+        APIClient.sessionToken = token
 
         val listener = object : NativeWebSocket.Listener {
             override fun onOpen(ws: NativeWebSocket) {
@@ -110,10 +111,15 @@ object InboxWebSocket {
                 if (!manuallyClosed) scheduleReconnect(context)
             }
         }
-        try {
-            task = NativeWebSocket.connect(url, listener)
-        } catch (_: Exception) {
-            scheduleReconnect(context)
+        scope.launch {
+            try {
+                val ticket = APIClient.getWebSocketTicket()
+                val url = "wss://rocchat-api.spoass.workers.dev/api/ws/user/$userId" +
+                    "?userId=$userId&deviceId=android&ticket=$ticket"
+                task = NativeWebSocket.connect(url, listener)
+            } catch (_: Exception) {
+                scheduleReconnect(context)
+            }
         }
     }
 

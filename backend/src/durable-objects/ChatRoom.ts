@@ -64,6 +64,12 @@ export class ChatRoom implements DurableObject {
     this.env = env;
   }
 
+  private async hashToken(token: string): Promise<string> {
+    const data = new TextEncoder().encode(token);
+    const digest = await crypto.subtle.digest('SHA-256', data);
+    return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, '0')).join('');
+  }
+
   // ── Hibernation API helpers ──────────────────────────────────────
   // Each accepted WebSocket carries a serialized attachment
   // {userId, deviceId} so we can rebuild the ConnectedClient view
@@ -120,7 +126,9 @@ export class ChatRoom implements DurableObject {
       if (!sessionToken) {
         return new Response('Missing auth params', { status: 400 });
       }
-      const sessionData = await this.env.KV.get(`session:${sessionToken}`);
+      const tokenHash = await this.hashToken(sessionToken);
+      const sessionData = await this.env.KV.get(`sessionh:${tokenHash}`)
+        || await this.env.KV.get(`session:${sessionToken}`);
       if (!sessionData) {
         return new Response('Invalid session', { status: 401 });
       }

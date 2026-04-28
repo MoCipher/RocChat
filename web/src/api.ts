@@ -391,6 +391,54 @@ export function getWsTicket() {
   return req<{ ticket: string }>('/ws/ticket', { method: 'POST' });
 }
 
+// ── Meetings (SFU-first control plane) ──
+
+export interface MeetingRecord {
+  id: string;
+  conversation_id: string;
+  host_user_id: string;
+  title: string;
+  status: 'scheduled' | 'live' | 'ended';
+  media_mode: 'sfu' | 'mesh';
+  starts_at?: number;
+  ends_at?: number;
+  created_at: number;
+}
+
+export function createMeeting(conversationId: string, title: string, mediaMode: 'sfu' | 'mesh' = 'sfu', startAt?: number) {
+  return req<{ meeting_id: string; join_link: string; media_mode: string; status: string }>('/meetings', {
+    method: 'POST',
+    body: JSON.stringify({
+      conversation_id: conversationId,
+      title,
+      media_mode: mediaMode,
+      start_at: startAt,
+    }),
+  });
+}
+
+export function listMeetings() {
+  return req<{ meetings: MeetingRecord[] }>('/meetings');
+}
+
+export function joinMeeting(meetingId: string, role: 'host' | 'moderator' | 'participant' | 'viewer' = 'participant') {
+  return req<{ ok: boolean; meeting_id: string; role: string; lobby: boolean }>(`/meetings/${encodeURIComponent(meetingId)}/join`, {
+    method: 'POST',
+    body: JSON.stringify({ role }),
+  });
+}
+
+export function getMeetingState(meetingId: string) {
+  return req<{ ok: boolean; meeting: unknown }>(`/meetings/${encodeURIComponent(meetingId)}/state`);
+}
+
+export function sendMeetingEvent(meetingId: string, action: string, payload: Record<string, unknown> = {}) {
+  return req<{ ok: boolean; state: unknown }>(`/meetings/${encodeURIComponent(meetingId)}/event`, {
+    method: 'POST',
+    body: JSON.stringify({ action, ...payload }),
+  });
+}
+
 // ── Profile ──
 
 export function getMe() {

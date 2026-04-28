@@ -28,7 +28,9 @@ async function getVaultKeyBytes(): Promise<Uint8Array | null> {
 }
 
 async function deriveSubKey(ikm: Uint8Array, info: string): Promise<CryptoKey> {
-  const baseKey = await crypto.subtle.importKey('raw', ikm, 'HKDF', false, ['deriveKey']);
+  const normalizedIkm = new Uint8Array(ikm.byteLength);
+  normalizedIkm.set(ikm);
+  const baseKey = await crypto.subtle.importKey('raw', normalizedIkm, 'HKDF', false, ['deriveKey']);
   return crypto.subtle.deriveKey(
     { name: 'HKDF', hash: 'SHA-256', salt: new Uint8Array(0), info: new TextEncoder().encode(info) },
     baseKey,

@@ -37,7 +37,7 @@ async function getMetaKey(conversationId: string): Promise<CryptoKey> {
   const cached = metaKeyCache.get(conversationId);
   if (cached) return cached;
   let key: CryptoKey;
-  const { getSecretString } = await import('./crypto/secure-store.js');
+  const { getSecretString } = await import('../crypto/secure-store.js');
   const vkB64 = await getSecretString('rocchat_vault_key');
   if (vkB64) {
     const vkBin = atob(vkB64);
@@ -4103,6 +4103,7 @@ function updateReactionUI(msgId: string, userId: string, reaction: string | null
   // Aggregate chip per (group + emoji).
   let chip = row.querySelector(`[data-reaction-chip="${groupKey}"]`) as HTMLButtonElement | null;
   if (!chip) {
+    const isLocal = userId === myId;
     chip = document.createElement('button');
     chip.type = 'button';
     chip.className = 'reaction-chip';

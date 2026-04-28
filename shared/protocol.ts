@@ -23,6 +23,7 @@ export type MessageType =
   | 'call_answer'
   | 'call_ice'
   | 'call_end'
+  | 'meeting_event'
   | 'key_change'
   | 'disappear_config'
   | 'group_update';
@@ -121,6 +122,34 @@ export interface CallEndMessage {
   timestamp: number;
 }
 
+// ── Meeting Control Plane ──
+
+export type MeetingRole = 'host' | 'moderator' | 'participant' | 'viewer';
+export type MeetingStatus = 'scheduled' | 'live' | 'ended';
+export type MeetingMediaMode = 'mesh' | 'sfu';
+
+export interface MeetingEventMessage {
+  type: 'meeting_event';
+  meetingId: string;
+  action:
+    | 'join'
+    | 'leave'
+    | 'raise_hand'
+    | 'lower_hand'
+    | 'host_mute_all'
+    | 'host_lock_room'
+    | 'host_unlock_room'
+    | 'host_remove_participant'
+    | 'lobby_admit'
+    | 'lobby_deny';
+  actorUserId: string;
+  targetUserId?: string;
+  role?: MeetingRole;
+  mediaMode?: MeetingMediaMode;
+  timestamp: number;
+  metadata?: Record<string, unknown>;
+}
+
 // ── Group Management ──
 
 export interface DisappearConfigMessage {
@@ -152,6 +181,7 @@ export type PlaintextPayload =
   | CallAnswerMessage
   | CallIceMessage
   | CallEndMessage
+  | MeetingEventMessage
   | DisappearConfigMessage
   | GroupUpdateMessage;
 

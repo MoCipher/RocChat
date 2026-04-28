@@ -15,6 +15,21 @@ const MIN_KDF_ITERATIONS = 100_000;
 const SESSION_TTL_SECONDS = 24 * 3600;         // access token: 24 hours
 const REFRESH_TTL_SECONDS = 30 * 24 * 3600;    // refresh token: 30 days
 
+async function hashToken(token: string): Promise<string> {
+  const data = new TextEncoder().encode(token);
+  const digest = await crypto.subtle.digest('SHA-256', data);
+  return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+async function indexUserSession(env: Env, userId: string, sessionToken: string): Promise<void> {
+  try {
+    const idx = await env.KV.get(`user_sessions:${userId}`, 'json') as string[] | null;
+    const next = Array.isArray(idx) ? idx : [];
+    if (!next.includes(sessionToken)) next.push(sessionToken);
+    await env.KV.put(`user_sessions:${userId}`, JSON.stringify(next), { expirationTtl: REFRESH_TTL_SECONDS });
+  } catch { /* best-effort */ }
+}
+
 /**
  * Reject weak KDF parameters. The client sends `kdf_iterations` (preferred),
  * or we fall back to parsing from a PHC-style `auth_hash` prefix like
@@ -52,16 +67,19 @@ async function issueSession(
   const refreshToken = generateSessionToken();
   const sessionExpiresAt = now + SESSION_TTL_SECONDS;
   const refreshExpiresAt = now + REFRESH_TTL_SECONDS;
+  const sessionHash = await hashToken(sessionToken);
+  const refreshHash = await hashToken(refreshToken);
   await env.KV.put(
-    `session:${sessionToken}`,
+    `sessionh:${sessionHash}`,
     JSON.stringify({ userId, deviceId, expiresAt: sessionExpiresAt }),
     { expirationTtl: SESSION_TTL_SECONDS },
   );
   await env.KV.put(
-    `refresh:${refreshToken}`,
+    `refreshh:${refreshHash}`,
     JSON.stringify({ userId, deviceId, sessionToken, expiresAt: refreshExpiresAt }),
     { expirationTtl: REFRESH_TTL_SECONDS },
   );
+  await indexUserSession(env, userId, sessionToken);
   return { sessionToken, refreshToken, sessionExpiresAt, refreshExpiresAt };
 }
 
@@ -75,15 +93,17 @@ export async function handleRefresh(request: Request, env: Env): Promise<Respons
   const token = (raw.refresh_token ?? raw.refreshToken) as string | undefined;
   if (!token) return apiError('BAD_REQUEST', 'Missing refresh_token');
 
-  const stored = await env.KV.get(`refresh:${token}`, 'json') as
+  const refreshHash = await hashToken(token);
+  const stored = await env.KV.get(`refreshh:${refreshHash}`, 'json') as
     | { userId: string; deviceId: string; sessionToken: string; expiresAt: number }
     | null;
   if (!stored) return apiError('UNAUTHORIZED', 'Refresh token invalid or expired');
 
   // Single-use: delete old refresh immediately (and best-effort old access token).
-  await env.KV.delete(`refresh:${token}`);
+  await env.KV.delete(`refreshh:${refreshHash}`);
   if (stored.sessionToken) {
-    await env.KV.delete(`session:${stored.sessionToken}`);
+    const oldSessionHash = await hashToken(stored.sessionToken);
+    await env.KV.delete(`sessionh:${oldSessionHash}`);
   }
 
   const { sessionToken, refreshToken, sessionExpiresAt, refreshExpiresAt } = await issueSession(
@@ -532,7 +552,8 @@ export async function handleRecoveryComplete(request: Request, env: Env): Promis
     const idx = await env.KV.get(`user_sessions:${user.id}`, 'json') as string[] | null;
     if (Array.isArray(idx)) {
       for (const tok of idx) {
-        await env.KV.delete(`session:${tok}`);
+        const tokHash = await hashToken(tok);
+        await env.KV.delete(`sessionh:${tokHash}`);
       }
       await env.KV.delete(`user_sessions:${user.id}`);
     }

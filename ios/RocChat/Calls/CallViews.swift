@@ -111,7 +111,11 @@ struct CallOverlay: View {
         case .outgoing:
             Text("Calling...")
         case .connected:
-            Text(formatDuration(callManager.callDuration))
+            if callManager.isGroupCall {
+                Text("\(formatDuration(callManager.callDuration)) · \(callManager.groupMediaMode.uppercased()) · \(callManager.groupPeers.count + 1) participants")
+            } else {
+                Text(formatDuration(callManager.callDuration))
+            }
         default:
             Text("")
         }
@@ -154,7 +158,21 @@ struct CallOverlay: View {
     }
 
     private var activeControls: some View {
-        HStack(spacing: 28) {
+        VStack(spacing: 12) {
+            if callManager.isGroupCall {
+                HStack(spacing: 8) {
+                    ForEach(Array(callManager.groupPeers.keys.prefix(4)), id: \.self) { userId in
+                        Text(userId.prefix(6))
+                            .font(.caption2)
+                            .foregroundColor(.white.opacity(0.8))
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(Color.white.opacity(0.08))
+                            .clipShape(Capsule())
+                    }
+                }
+            }
+            HStack(spacing: 28) {
             // Mute
             Button(action: { callManager.toggleMute() }) {
                 ZStack {
@@ -205,6 +223,18 @@ struct CallOverlay: View {
                 }
                 .sheet(isPresented: $showDiagnostics) {
                     CallDiagnosticsView()
+                }
+            }
+            }
+            if callManager.isGroupCall &&
+                (UserDefaults.standard.string(forKey: "user_id") ?? "") == callManager.groupHostUserId {
+                HStack(spacing: 12) {
+                    Button("Mute all") { callManager.hostMuteAll() }
+                        .buttonStyle(.borderedProminent)
+                    Button(callManager.groupRoomLocked ? "Unlock room" : "Lock room") {
+                        callManager.toggleGroupRoomLock()
+                    }
+                    .buttonStyle(.bordered)
                 }
             }
         }

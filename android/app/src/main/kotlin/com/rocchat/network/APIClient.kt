@@ -257,6 +257,11 @@ object APIClient {
 
     suspend fun deleteConversation(conversationId: String): JSONObject = delete("/messages/conversations/$conversationId")
 
+    suspend fun getWebSocketTicket(): String {
+        val json = post("/ws/ticket", JSONObject())
+        return json.getString("ticket")
+    }
+
     suspend fun muteConversation(conversationId: String): Boolean {
         val json = post("/messages/conversations/$conversationId/mute", JSONObject())
         return json.optBoolean("muted", false)

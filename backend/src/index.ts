@@ -17,13 +17,15 @@ import { handleFeatures } from './features.js';
 import { handleLinkPreview } from './link-preview.js';
 import { handleGroups } from './groups.js';
 import { handleChannels } from './channels.js';
+import { handleMeetings } from './meetings.js';
 import { createPowChallenge, getPowDifficulty } from './pow.js';
 import { ChatRoom } from './durable-objects/ChatRoom.js';
 import { UserInbox } from './durable-objects/UserInbox.js';
+import { MeetingState } from './durable-objects/MeetingState.js';
 import { verifySession, rateLimit, jsonResponse, errorResponse, isOriginAllowed, apiError, logEvent } from './middleware.js';
 import type { Session } from './middleware.js';
 
-export { ChatRoom, UserInbox };
+export { ChatRoom, UserInbox, MeetingState };
 
 export interface Env {
   DB: D1Database;
@@ -31,6 +33,7 @@ export interface Env {
   KV: KVNamespace;
   CHAT_ROOM: DurableObjectNamespace;
   USER_INBOX: DurableObjectNamespace;
+  MEETING_STATE: DurableObjectNamespace;
   TURN_SECRET?: string;
   TURN_SERVER?: string;
   POW_DIFFICULTY?: string;
@@ -43,6 +46,12 @@ export interface Env {
   APNS_KEY_ID?: string;
   APNS_TEAM_ID?: string;
   APNS_TOPIC?: string;
+}
+
+async function hashToken(token: string): Promise<string> {
+  const data = new TextEncoder().encode(token);
+  const digest = await crypto.subtle.digest('SHA-256', data);
+  return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
 export default {
@@ -280,7 +289,10 @@ export default {
             await env.KV.delete(`ws-ticket:${wsTicket}`);
           }
         } else if (wsToken && wsUserId) {
-          const wsSession = await env.KV.get(`session:${wsToken}`, 'json') as {
+          const wsHash = await hashToken(wsToken);
+          const wsSession = await env.KV.get(`sessionh:${wsHash}`, 'json') as {
+            userId: string; deviceId: string; expiresAt: number;
+          } | null || await env.KV.get(`session:${wsToken}`, 'json') as {
             userId: string; deviceId: string; expiresAt: number;
           } | null;
           if (wsSession && wsSession.userId === wsUserId && Date.now() / 1000 <= wsSession.expiresAt) {
@@ -323,7 +335,10 @@ export default {
           }
         } else if (wsToken && wsUserId) {
           // Legacy fallback: session token in query string
-          const wsSession = await env.KV.get(`session:${wsToken}`, 'json') as {
+          const wsHash = await hashToken(wsToken);
+          const wsSession = await env.KV.get(`sessionh:${wsHash}`, 'json') as {
+            userId: string; deviceId: string; expiresAt: number;
+          } | null || await env.KV.get(`session:${wsToken}`, 'json') as {
             userId: string; deviceId: string; expiresAt: number;
           } | null;
           if (wsSession && wsSession.userId === wsUserId && Date.now() / 1000 <= wsSession.expiresAt) {
@@ -380,7 +395,11 @@ export default {
       // Logout (authenticated)
       if (path === '/api/auth/logout' && request.method === 'POST') {
         const token = request.headers.get('Authorization')?.replace('Bearer ', '');
-        if (token) await env.KV.delete(`session:${token}`);
+        if (token) {
+          const tokenHash = await hashToken(token);
+          await env.KV.delete(`sessionh:${tokenHash}`);
+          await env.KV.delete(`session:${token}`);
+        }
         return withCors(jsonResponse({ ok: true }));
       }
 
@@ -475,6 +494,11 @@ export default {
       if (path.startsWith('/api/channels') || path.startsWith('/api/communities')) {
         const channelRes = await handleChannels(request, env, session, url);
         if (channelRes) return withCors(channelRes);
+      }
+
+      // Meetings control plane (SFU-first roadmap)
+      if (path.startsWith('/api/meetings')) {
+        return withCors(await handleMeetings(request, env, session, url));
       }
 
       // Link-preview unfurler (Open Graph) — KV-cached for 24h.
@@ -850,7 +874,11 @@ export default {
         // Invalidate current session
         const authHeader = request.headers.get('Authorization') || '';
         const token = authHeader.replace('Bearer ', '');
-        if (token) await env.KV.delete(`session:${token}`);
+        if (token) {
+          const tokenHash = await hashToken(token);
+          await env.KV.delete(`sessionh:${tokenHash}`);
+          await env.KV.delete(`session:${token}`);
+        }
 
         return withCors(jsonResponse({ ok: true, deleted: true }));
       }

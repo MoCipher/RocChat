@@ -6,6 +6,21 @@ RocChat is part of the **Roc Family** (alongside RocMail and RocPass). It is a s
 
 ---
 
+## 14. 2026-04 SFU-First Meetings Upgrade
+
+- Added first-class meetings control-plane APIs:
+  - `POST /api/meetings`
+  - `GET /api/meetings`
+  - `POST /api/meetings/:id/join`
+  - `POST /api/meetings/:id/event`
+  - `GET /api/meetings/:id/state`
+- Added `MeetingState` Durable Object to keep meeting participant/lobby/lock state coherent across reconnects.
+- Added D1 schema for meetings (`meetings`, `meeting_participants`) in `0038_meetings_control_plane.sql`.
+- Extended shared protocol with `meeting_event` payloads, `MeetingRole`, `MeetingStatus`, and `MeetingMediaMode`.
+- Added cross-platform meeting UX scaffolding:
+  - Web roster + host actions (mute-all / lock-room placeholders), SFU mode preference path.
+  - iOS and Android host-control hooks and group participant state needed for lobby/moderation rollout.
+
 ## 🕊️ Roc Family Manifesto — The Voice of Freedom
 
 RocChat is built on uncompromising ethical foundations. We do not apologize for taking a stand.

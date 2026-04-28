@@ -68,6 +68,10 @@ object CallManager {
     // Group call state
     var isGroupCall by mutableStateOf(false)
     var groupPeers = mutableMapOf<String, GroupPeer>()
+    var groupParticipants by mutableStateOf(listOf<String>())
+    var groupHostUserId by mutableStateOf("")
+    var groupRoomLocked by mutableStateOf(false)
+    var groupMediaMode by mutableStateOf("mesh")
     private val maxMeshPeers = 5 // 6 total including self
 
     private var callId: String? = null
@@ -806,6 +810,10 @@ object CallManager {
         this.ws = signalWs
         this.isGroupCall = true
         this.groupPeers.clear()
+        this.groupParticipants = emptyList()
+        this.groupHostUserId = appContext?.getSharedPreferences("rocchat", Context.MODE_PRIVATE)?.getString("user_id", "") ?: ""
+        this.groupRoomLocked = false
+        this.groupMediaMode = if (members.size > 2) "sfu" else "mesh"
         this.startTime = System.currentTimeMillis()
 
         startDurationTimer()
@@ -815,7 +823,7 @@ object CallManager {
             "callId" to (callId ?: ""),
             "callType" to callType,
             "conversationId" to conversationId,
-            "mode" to "mesh"
+            "mode" to groupMediaMode
         ))
     }
 
@@ -832,6 +840,10 @@ object CallManager {
         this.ws = signalWs
         this.isGroupCall = true
         this.groupPeers.clear()
+        this.groupParticipants = emptyList()
+        this.groupHostUserId = fromUserId
+        this.groupRoomLocked = false
+        this.groupMediaMode = decrypted.optString("mode", "mesh")
         this.startTime = System.currentTimeMillis()
 
         startDurationTimer()
@@ -850,6 +862,7 @@ object CallManager {
         val userId = payload.optString("fromUserId")
         if (userId.isEmpty() || groupPeers.containsKey(userId)) return
         if (groupPeers.size >= maxMeshPeers) return
+        groupParticipants = groupParticipants + userId
         addGroupPeer(userId)
     }
 
@@ -857,6 +870,7 @@ object CallManager {
         val userId = payload.optString("fromUserId")
         val peer = groupPeers.remove(userId) ?: return
         peer.transport?.stop()
+        groupParticipants = groupParticipants.filterNot { it == userId }
         if (groupPeers.isEmpty()) endGroupCall(notify = false)
     }
 
@@ -880,7 +894,26 @@ object CallManager {
         groupPeers.values.forEach { it.transport?.stop() }
         groupPeers.clear()
         isGroupCall = false
+        groupParticipants = emptyList()
+        groupHostUserId = ""
+        groupRoomLocked = false
+        groupMediaMode = "mesh"
         endCall("hangup", notify = false)
+    }
+
+    fun hostMuteAll() {
+        val ctx = appContext ?: return
+        val myId = ctx.getSharedPreferences("rocchat", Context.MODE_PRIVATE).getString("user_id", "") ?: ""
+        if (groupHostUserId.isEmpty() || myId != groupHostUserId) return
+        sendGroupSignal("meeting_host_mute_all", mapOf("callId" to (callId ?: "")))
+    }
+
+    fun toggleGroupRoomLock() {
+        val ctx = appContext ?: return
+        val myId = ctx.getSharedPreferences("rocchat", Context.MODE_PRIVATE).getString("user_id", "") ?: ""
+        if (groupHostUserId.isEmpty() || myId != groupHostUserId) return
+        groupRoomLocked = !groupRoomLocked
+        sendGroupSignal(if (groupRoomLocked) "meeting_host_lock_room" else "meeting_host_unlock_room", mapOf("callId" to (callId ?: "")))
     }
 
     private fun addGroupPeer(userId: String) {

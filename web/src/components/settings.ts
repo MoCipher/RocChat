@@ -9,6 +9,7 @@ import { clearAllSecrets, deleteSecret, getSecretString, putSecretString } from 
 import { showToast } from './toast.js';
 import { encryptProfileField, decryptProfileField } from '../crypto/profile-crypto.js';
 import { renderRocClientToggle } from './roc-client.js';
+import { getLinkPreviewMode, setLinkPreviewMode } from '../chat/link-preview.js';
 
 const APP_LOCK_KEY = 'rocchat_app_lock_v1';
 const APP_LOCK_LEGACY_KEY = 'rocchat_app_lock_pin';
@@ -977,7 +978,6 @@ export function renderSettings(container: HTMLElement) {
   {
     const lpSelect = document.getElementById('link-preview-mode') as HTMLSelectElement | null;
     if (lpSelect) {
-      const { getLinkPreviewMode, setLinkPreviewMode } = await import('../chat/link-preview.js');
       lpSelect.value = getLinkPreviewMode();
       lpSelect.addEventListener('change', () => {
         setLinkPreviewMode(lpSelect.value as 'server' | 'client' | 'disabled');

@@ -16,6 +16,7 @@ import { randomId } from '@rocchat/shared';
 import { encryptMessage, decryptMessage } from '../crypto/session-manager.js';
 import { groupEncrypt, groupDecrypt } from '../crypto/group-session-manager.js';
 import { getSecretString, putSecretString } from '../crypto/secure-store.js';
+import { createMeeting, sendMeetingEvent } from '../api.js';
 import { VoiceWS } from './voice-ws.js';
 import { VideoWS } from './video-ws.js';
 
@@ -807,13 +808,16 @@ interface GroupCallState {
   muted: boolean;
   cameraOff: boolean;
   timerInterval: ReturnType<typeof setInterval> | null;
+  meetingId: string | null;
+  hostUserId: string | null;
+  locked: boolean;
 }
 
 const groupState: GroupCallState = {
   callId: null, conversationId: null, callType: 'voice', status: 'idle',
   mode: 'mesh',
   peers: new Map(), localStream: null, ws: null, startTime: null,
-  muted: false, cameraOff: false, timerInterval: null,
+  muted: false, cameraOff: false, timerInterval: null, meetingId: null, hostUserId: null, locked: false,
 };
 
 const MAX_MESH_PEERS = 5; // 6 total including self
@@ -825,8 +829,15 @@ function resetGroupState() {
     callId: null, conversationId: null, status: 'idle',
     mode: 'mesh',
     peers: new Map(), localStream: null, ws: null, startTime: null,
-    muted: false, cameraOff: false, timerInterval: null,
+    muted: false, cameraOff: false, timerInterval: null, meetingId: null, hostUserId: null, locked: false,
   });
+}
+
+function isSfuPreferred(expectedParticipants: number): boolean {
+  const stored = localStorage.getItem('rocchat_meeting_sfu');
+  if (stored === '0') return false;
+  if (stored === '1') return true;
+  return expectedParticipants > 2;
 }
 
 export async function startGroupCall(
@@ -834,10 +845,17 @@ export async function startGroupCall(
 ) {
   if (groupState.status !== 'idle' || callState.status !== 'idle') return;
   const expectedParticipants = members?.length || 0;
-  const mode: 'mesh' | 'sfu' = expectedParticipants > MAX_MESH_PEERS + 1 ? 'sfu' : 'mesh';
+  const mode: 'mesh' | 'sfu' = isSfuPreferred(expectedParticipants) ? 'sfu' : (expectedParticipants > MAX_MESH_PEERS + 1 ? 'sfu' : 'mesh');
+  const hostUserId = localStorage.getItem('rocchat_user_id') || null;
   Object.assign(groupState, {
-    callId: randomId(), conversationId, callType, mode, status: 'starting', ws,
+    callId: randomId(), conversationId, callType, mode, status: 'starting', ws, hostUserId,
   });
+  try {
+    const meeting = await createMeeting(conversationId, `Group ${callType} meeting`, mode);
+    groupState.meetingId = meeting.data.meeting_id;
+  } catch {
+    groupState.meetingId = null;
+  }
   try {
     groupState.localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: callType === 'video' });
   } catch (err) { handleMediaError(err); resetGroupState(); return; }
@@ -849,7 +867,7 @@ export async function startGroupCall(
   );
   ws.send(JSON.stringify({ type: 'group_call_start', payload: encPayload }));
   if (mode === 'sfu') {
-    showGroupNotice('Large group detected. Switching to SFU fallback mode.');
+    showGroupNotice('SFU meeting mode enabled.');
   }
   startGroupTimer();
 }
@@ -1047,6 +1065,11 @@ function groupOverlayHTML(): string {
   }).join('');
   const timer = groupState.startTime ? fmtDur(Math.floor((Date.now() - groupState.startTime) / 1000)) : '00:00';
   const modeLabel = groupState.mode === 'sfu' ? 'SFU fallback mode' : 'Mesh mode';
+  const myId = localStorage.getItem('rocchat_user_id') || '';
+  const isHost = !!groupState.hostUserId && groupState.hostUserId === myId;
+  const roster = Array.from(groupState.peers.values())
+    .map((p) => `<div style="font-size:12px;color:var(--text-secondary)">${esc(p.name)} ${p.userId === groupState.hostUserId ? '· host' : ''}</div>`)
+    .join('');
   return `
     <div class="call-card" style="min-width:360px;max-width:800px;width:90%;">
       <h2 style="color:var(--text-primary);margin-bottom:var(--sp-2)">Group ${groupState.callType} call</h2>
@@ -1056,6 +1079,18 @@ function groupOverlayHTML(): string {
         ${isV ? `<div class="group-tile" style="border:2px solid var(--gold)"><video id="group-local-video" autoplay playsinline muted style="width:100%;height:100%;object-fit:cover;border-radius:var(--radius-md);background:#000"></video><span class="group-tile-name">You</span></div>` : ''}
         ${tiles}
       </div>
+      <div style="margin-bottom:var(--sp-3);padding:10px;border:1px solid var(--border-weak);border-radius:10px;background:var(--bg-input)">
+        <div style="font-size:11px;color:var(--text-tertiary);margin-bottom:6px">Participants (${peerCount + 1})</div>
+        <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px">
+          <div style="font-size:12px;color:var(--text-secondary)">You ${isHost ? '· host' : ''}</div>
+          ${roster}
+        </div>
+      </div>
+      ${isHost ? `
+      <div style="display:flex;gap:8px;justify-content:center;margin-bottom:var(--sp-3)">
+        <button class="btn-secondary" id="gcall-mute-all">Mute all</button>
+        <button class="btn-secondary" id="gcall-lock">${groupState.locked ? 'Unlock room' : 'Lock room'}</button>
+      </div>` : ''}
       <div class="call-controls" style="display:flex;gap:var(--sp-4);justify-content:center">
         <button class="call-control-btn ${groupState.muted ? 'active' : ''}" id="gcall-mute"><i data-lucide="${groupState.muted ? 'mic-off' : 'mic'}" style="width:24px;height:24px"></i></button>
         ${isV ? `<button class="call-control-btn ${groupState.cameraOff ? 'active' : ''}" id="gcall-camera"><i data-lucide="${groupState.cameraOff ? 'video-off' : 'video'}" style="width:24px;height:24px"></i></button>` : ''}
@@ -1085,6 +1120,18 @@ function bindGroupEvents() {
   document.getElementById('gcall-camera')?.addEventListener('click', () => {
     groupState.cameraOff = !groupState.cameraOff;
     groupState.localStream?.getVideoTracks().forEach((t) => { t.enabled = !groupState.cameraOff; });
+    updateGroupOverlay();
+  });
+  document.getElementById('gcall-mute-all')?.addEventListener('click', async () => {
+    if (!groupState.meetingId) return;
+    await sendMeetingEvent(groupState.meetingId, 'host_mute_all').catch(() => {});
+    showGroupNotice('Host action sent: mute all');
+  });
+  document.getElementById('gcall-lock')?.addEventListener('click', async () => {
+    if (!groupState.meetingId) return;
+    const action = groupState.locked ? 'host_unlock_room' : 'host_lock_room';
+    await sendMeetingEvent(groupState.meetingId, action).catch(() => {});
+    groupState.locked = !groupState.locked;
     updateGroupOverlay();
   });
 }

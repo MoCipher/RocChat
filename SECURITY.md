@@ -507,6 +507,19 @@ Additional plaintext leaks and cross-platform inconsistencies eliminated:
   wrapper, avoiding settings/UI mismatch where values were stored but not
   reflected by Material color/typography at shell level.
 
+### SFU meetings control-plane + auth hardening
+- Added first-class meeting control-plane APIs and `MeetingState` Durable Object
+  so participant/lobby/lock state is server-authoritative and reconnect-safe.
+- Session and refresh persistence now store hashed token keys (`sessionh:*`,
+  `refreshh:*`) with compatibility fallback for legacy plain-token keys.
+- Session issue path now maintains authoritative `user_sessions:*` indexes so
+  global revoke/recovery paths can invalidate all active sessions reliably.
+- Router and DO websocket auth checks now prefer hashed-session lookup.
+- Android inbox websocket now uses short-lived `/api/ws/ticket` tickets instead
+  of putting long-lived session tokens in WebSocket query params.
+- Rate limiting moved to distributed KV-backed path (`rl2:*`) with graceful
+  fallback to in-memory windows if KV is transiently unavailable.
+
 ### Business feature removal
 - Removed Business-tier backend/API entrypoints and client surfaces from active
   app code. No `/api/business/*` routes remain in runtime code paths.
@@ -515,4 +528,4 @@ Additional plaintext leaks and cross-platform inconsistencies eliminated:
   `"business"` (cryptographic compatibility requirement).
 
 ---
-_Last updated: 2026-04-27_
+_Last updated: 2026-04-28_

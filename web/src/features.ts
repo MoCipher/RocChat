@@ -223,7 +223,7 @@ async function forwardTo(targetConversationId: string, plaintext: string, _origi
         message_type: 'text',
       });
     } else if (conv.type === 'group') {
-      const { groupEncrypt } = await import('./crypto/group-session.js');
+      const { groupEncrypt } = await import('./crypto/group-session-manager.js');
       const groupEnc = await groupEncrypt(targetConversationId, conv.members, body);
       await api.sendMessage({
         conversation_id: targetConversationId,

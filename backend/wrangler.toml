@@ -28,6 +28,10 @@ class_name = "ChatRoom"
 name = "USER_INBOX"
 class_name = "UserInbox"
 
+[[durable_objects.bindings]]
+name = "MEETING_STATE"
+class_name = "MeetingState"
+
 # ── Cron Triggers (scheduled worker) ──
 # Account cron quota is fully used by other production workers.
 # RocChat maintenance is invoked via GitHub Actions hitting:
@@ -43,6 +47,10 @@ new_sqlite_classes = ["ChatRoom"]
 [[migrations]]
 tag = "v2"
 new_sqlite_classes = ["UserInbox"]
+
+[[migrations]]
+tag = "v3"
+new_sqlite_classes = ["MeetingState"]
 
 # ── Environment Variables ──
 [vars]

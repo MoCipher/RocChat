@@ -156,7 +156,11 @@ fun CallOverlay() {
             when (status) {
                 "incoming" -> Text("Incoming ${CallManager.callType} call...", color = Color.White.copy(0.7f))
                 "outgoing" -> Text("Calling...", color = Color.White.copy(0.7f))
-                "connected" -> Text(formatDuration(CallManager.callDuration), color = Color.White.copy(0.7f))
+                "connected" -> {
+                    val mode = if (CallManager.isGroupCall) " · ${CallManager.groupMediaMode.uppercase()}" else ""
+                    val participants = if (CallManager.isGroupCall) " · ${CallManager.groupPeers.size + 1} participants" else ""
+                    Text("${formatDuration(CallManager.callDuration)}$mode$participants", color = Color.White.copy(0.7f))
+                }
             }
 
             Spacer(Modifier.weight(1f))
@@ -203,7 +207,19 @@ private fun IncomingControls() {
 @Composable
 private fun ActiveControls() {
     var showDiag by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+    val myId = context.getSharedPreferences("rocchat", Context.MODE_PRIVATE).getString("user_id", "") ?: ""
+    val isHost = CallManager.isGroupCall && CallManager.groupHostUserId.isNotEmpty() && myId == CallManager.groupHostUserId
 
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+    if (CallManager.isGroupCall) {
+        Text(
+            text = "Roster: you, " + CallManager.groupParticipants.take(3).joinToString(", ") { it.take(6) },
+            color = Color.White.copy(0.7f),
+            fontSize = 11.sp,
+            modifier = Modifier.padding(bottom = 8.dp)
+        )
+    }
     Row(horizontalArrangement = Arrangement.spacedBy(20.dp), verticalAlignment = Alignment.CenterVertically) {
         // Mute
         IconButton(
@@ -258,6 +274,18 @@ private fun ActiveControls() {
                 Icon(Icons.Default.Info, contentDescription = "Diagnostics", tint = Color.White, modifier = Modifier.size(24.dp))
             }
         }
+    }
+    if (isHost) {
+        Spacer(Modifier.height(12.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            OutlinedButton(onClick = { CallManager.hostMuteAll() }) {
+                Text("Mute all")
+            }
+            OutlinedButton(onClick = { CallManager.toggleGroupRoomLock() }) {
+                Text(if (CallManager.groupRoomLocked) "Unlock room" else "Lock room")
+            }
+        }
+    }
     }
 
     if (showDiag) {

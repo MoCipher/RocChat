@@ -93,7 +93,6 @@ class CallManager: ObservableObject {
     private var isCallInitiator: Bool = false
 
     // WebRTC (using AVFoundation for audio as baseline)
-    private var audioSession = AVAudioSession.sharedInstance()
     private var audioPlayer: AVAudioPlayer?
 
     // Voice-over-WebSocket audio engine (no third-party — pure AVFoundation)
@@ -401,11 +400,14 @@ class CallManager: ObservableObject {
     }
 
     private func configureAudioSession() {
+        // Lazily access AVAudioSession to avoid startup-time I/O during singleton init.
+        let audioSession = AVAudioSession.sharedInstance()
         try? audioSession.setCategory(.playAndRecord, mode: .voiceChat, options: [.defaultToSpeaker, .allowBluetoothA2DP])
         try? audioSession.setActive(true)
     }
 
     private func deactivateAudioSession() {
+        let audioSession = AVAudioSession.sharedInstance()
         try? audioSession.setActive(false, options: .notifyOthersOnDeactivation)
     }
 
@@ -1009,7 +1011,7 @@ extension CallManager: P2PTransportDelegate {
     }
 
     nonisolated func p2pDidReceiveAudio(_ pcm: Data) {
-        Task { @MainActor [weak self] in
+        DispatchQueue.main.async { [weak self] in
             guard let self = self, self.callStatus == .connected,
                   let player = self.playerNode else { return }
             self.trackInboundAudioTiming()

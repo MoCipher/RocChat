@@ -114,33 +114,37 @@ interface KeyMaterial {
 }
 
 let cachedKeyMaterial: KeyMaterial | null = null;
+const KEY_MATERIAL_SECRET = 'rocchat_key_material_v1';
 
 /**
  * Cache key material for X3DH responder. Called from auth after login/register.
  */
 export function setKeyMaterial(keys: KeyMaterial): void {
   cachedKeyMaterial = keys;
+  const serialized = JSON.stringify({
+    signedPreKeyPrivate: toBase64(keys.signedPreKeyPrivate),
+    signedPreKeyPublic: keys.signedPreKeyPublic ? toBase64(keys.signedPreKeyPublic) : undefined,
+    oneTimePreKeys: keys.oneTimePreKeys.map(k => ({
+      id: k.id,
+      privateKey: toBase64(k.privateKey),
+      publicKey: k.publicKey ? toBase64(k.publicKey) : undefined,
+    })),
+  });
   // Also persist to sessionStorage for page refresh survival
   try {
-    sessionStorage.setItem('rocchat_key_material', JSON.stringify({
-      signedPreKeyPrivate: toBase64(keys.signedPreKeyPrivate),
-      signedPreKeyPublic: keys.signedPreKeyPublic ? toBase64(keys.signedPreKeyPublic) : undefined,
-      oneTimePreKeys: keys.oneTimePreKeys.map(k => ({
-        id: k.id,
-        privateKey: toBase64(k.privateKey),
-        publicKey: k.publicKey ? toBase64(k.publicKey) : undefined,
-      })),
-    }));
+    sessionStorage.setItem('rocchat_key_material', serialized);
   } catch { /* sessionStorage unavailable */ }
+  // Persist in secure store so incoming X3DH messages can decrypt after app relaunch.
+  void putSecretString(KEY_MATERIAL_SECRET, serialized).catch(() => {});
 }
 
-function getKeyMaterial(): KeyMaterial | null {
+async function getKeyMaterial(): Promise<KeyMaterial | null> {
   if (cachedKeyMaterial) return cachedKeyMaterial;
-  try {
-    const stored = sessionStorage.getItem('rocchat_key_material');
-    if (stored) {
+
+  const deserialize = (stored: string): KeyMaterial | null => {
+    try {
       const parsed = JSON.parse(stored);
-      cachedKeyMaterial = {
+      return {
         signedPreKeyPrivate: fromBase64(parsed.signedPreKeyPrivate),
         signedPreKeyPublic: parsed.signedPreKeyPublic ? fromBase64(parsed.signedPreKeyPublic) : undefined,
         oneTimePreKeys: parsed.oneTimePreKeys.map((k: { id: number; privateKey: string; publicKey?: string }) => ({
@@ -149,9 +153,29 @@ function getKeyMaterial(): KeyMaterial | null {
           publicKey: k.publicKey ? fromBase64(k.publicKey) : undefined,
         })),
       };
-      return cachedKeyMaterial;
+    } catch {
+      return null;
+    }
+  };
+  try {
+    const stored = sessionStorage.getItem('rocchat_key_material');
+    if (stored) {
+      const parsed = deserialize(stored);
+      if (parsed) {
+        cachedKeyMaterial = parsed;
+        return cachedKeyMaterial;
+      }
     }
   } catch { /* */ }
+  const storedSecure = await getSecretString(KEY_MATERIAL_SECRET);
+  if (storedSecure) {
+    const parsed = deserialize(storedSecure);
+    if (parsed) {
+      cachedKeyMaterial = parsed;
+      try { sessionStorage.setItem('rocchat_key_material', storedSecure); } catch { /* */ }
+      return cachedKeyMaterial;
+    }
+  }
   return null;
 }
 
@@ -339,7 +363,18 @@ export async function decryptMessage(
     sessionCache.set(conversationId, state);
   }
 
-  const decrypted = await ratchetDecrypt(state, encrypted);
+  let decrypted: Uint8Array;
+  try {
+    decrypted = await ratchetDecrypt(state, encrypted);
+  } catch (err) {
+    // Session drift/corruption can happen across device restore/reload. If this
+    // frame carries fresh X3DH bootstrap material, rebuild receiver state once.
+    const x3dhHeader = encrypted.x3dh || extractX3DHFromRatchetHeader(encrypted);
+    if (!x3dhHeader) throw err;
+    state = await handleX3DHResponder(x3dhHeader);
+    sessionCache.set(conversationId, state);
+    decrypted = await ratchetDecrypt(state, encrypted);
+  }
 
   // Persist updated state
   await saveState(conversationId, state);
@@ -371,7 +406,7 @@ async function handleX3DHResponder(x3dhHeader: X3DHHeader): Promise<RatchetState
   const identityDHKeyPair = await getIdentityDHKeyPair();
 
   // Get our signed pre-key pair
-  const keyMaterial = getKeyMaterial();
+  const keyMaterial = await getKeyMaterial();
   const spkPubB64 = localStorage.getItem('rocchat_spk_pub');
 
   let signedPreKeyPair: { publicKey: Uint8Array; privateKey: Uint8Array };
